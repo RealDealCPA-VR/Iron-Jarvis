@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -342,15 +341,15 @@ def test_decline_is_final_for_that_task(desk):
 # --------------------------------------------------------------------------- #
 # Rehearse (06-a's rehearsal, when the owner presses it)
 # --------------------------------------------------------------------------- #
-async def _settled(desk, rid: str, seconds: float = 60.0) -> dict:
+async def _settled(desk, rid: str) -> dict:
+    """The report once the rehearsal's driver has finished (awaited: no
+    clock, no sleep)."""
     from iron_jarvis.tools import rehearsal_runs as RR
 
-    deadline = time.monotonic() + seconds  # polls a condition, never asserts a duration
-    while True:
-        view = await asyncio.to_thread(RR.report, desk.platform, rid)
-        if view["status"] != "running" or time.monotonic() > deadline:
-            return view
-        await asyncio.sleep(0.05)
+    driver = RR._DRIVERS.get(rid)
+    if driver is not None:
+        await asyncio.wait_for(asyncio.shield(driver), timeout=60)
+    return await asyncio.to_thread(RR.report, desk.platform, rid)
 
 
 def test_rehearse_runs_the_schedule_accept_would_make_and_changes_nothing(desk):
@@ -404,3 +403,148 @@ def test_chat_lists_the_offer_and_accepts_it_through_its_route(desk):
     done = asyncio.run(SuggestionAnswerTool(desk.platform).execute({"id": item["id"], "answer": "accept"}, ctx))
     assert done.ok, done.error
     assert len(_schedules(desk)) == 1
+
+
+# --------------------------------------------------------------------------- #
+# review fixes
+# --------------------------------------------------------------------------- #
+def _set_setup(desk, tid: str, setup: dict | None) -> None:
+    with session_scope(desk.engine) as db:
+        t = db.get(ChatThreadRecord, tid)
+        t.setup_json = json.dumps(setup) if setup else ""
+        db.add(t)
+        db.commit()
+
+
+def _accepted_local(desk) -> ScheduledTaskRecord:
+    _three(desk)
+    _night(desk)
+    (offer,) = _offers(desk)
+    assert call(desk, "POST", f"/schedules/offers/{offer.id}/accept").status_code == 200
+    (sched,) = _schedules(desk)
+    assert json.loads(sched.payload_json)["local_only"] is True
+    return sched
+
+
+def test_patch_cannot_take_local_only_off_a_schedule(desk):
+    sched = _accepted_local(desk)
+    res = call(desk, "PATCH", f"/schedules/{sched.name}", {"payload_unset": ["local_only"]})
+    assert res.status_code == 200, res.text
+    assert json.loads(desk.platform.scheduler.get(sched.name).payload_json)["local_only"] is True
+    res = call(desk, "PATCH", f"/schedules/{sched.name}", {"payload_set": {"local_only": False}})
+    assert json.loads(desk.platform.scheduler.get(sched.name).payload_json)["local_only"] is True
+
+
+def test_chat_schedule_update_cannot_take_local_only_off(desk):
+    from iron_jarvis.settings.records import ScheduleUpdateTool
+
+    sched = _accepted_local(desk)
+    out = asyncio.run(ScheduleUpdateTool(desk.platform).execute(
+        {"name": sched.name, "payload": {"task": WORDS, "provider": "claude-cli", "model": "claude-sonnet-4-6"}},
+        SimpleNamespace()))
+    assert out.ok, out.error
+    assert json.loads(desk.platform.scheduler.get(sched.name).payload_json)["local_only"] is True
+
+
+def test_chat_schedule_doors_run_the_same_add_time_check(desk):
+    from iron_jarvis.scheduling.tools import ScheduleCreateTool
+    from iron_jarvis.settings.records import ScheduleUpdateTool
+
+    made = asyncio.run(ScheduleCreateTool(desk.platform).execute(
+        {"name": "weekly", "cron": "0 9 * * mon", "task": WORDS, "payload": {"account": "acct_gone"}},
+        SimpleNamespace()))
+    assert not made.ok and desk.platform.scheduler.get("weekly") is None
+    desk.platform.scheduler.add_task("weekly", "0 9 * * mon", kind="task", payload={"task": WORDS})
+    upd = asyncio.run(ScheduleUpdateTool(desk.platform).execute(
+        {"name": "weekly", "payload": {"task": WORDS, "agent_type": "nobody-by-this-name"}}, SimpleNamespace()))
+    assert not upd.ok and "agent_type" in upd.error
+    assert json.loads(desk.platform.scheduler.get("weekly").payload_json) == {"task": WORDS}
+
+
+def test_a_chat_switched_local_only_after_the_offer_counts_at_accept_and_rehearse(desk):
+    tids = _three(desk, model=("claude-cli", "claude-sonnet-4-6"))
+    _night(desk)
+    (offer,) = _offers(desk)
+    assert offer.local_only is False
+    _set_setup(desk, tids[2], {"local_only": True})  # the OLDEST chat
+    res = call(desk, "POST", f"/schedules/offers/{offer.id}/accept")
+    assert res.status_code == 409, res.text
+    assert "Local only" in res.json()["detail"]
+    assert _schedules(desk) == [] and O.get(desk.engine, offer.id).status == O.WAITING
+    reh = call(desk, "POST", f"/schedules/offers/{offer.id}/rehearse")
+    assert reh.status_code == 409 and _rehearsals(desk) == []
+
+
+def test_no_offer_when_local_only_work_was_done_on_a_model_off_this_network(desk):
+    tids = _three(desk, model=("claude-cli", "claude-sonnet-4-6"))
+    _night(desk)
+    (offer,) = _offers(desk)
+    _set_setup(desk, tids[1], {"local_only": True})
+    with session_scope(desk.engine) as db:
+        db.delete(db.get(O.ScheduleOfferRecord, offer.id))
+        db.commit()
+    with session_scope(desk.engine) as db:
+        prop = db.exec(select(SkillProposalRecord)).one()
+        db.expunge(prop)
+    got, why = O.offer_for(desk.platform, prop)
+    assert got is None and "Local only" in why
+
+
+def test_the_skill_line_follows_the_draft(desk):
+    _three(desk)
+    _night(desk)
+    (prop,) = _items(desk, "skill")
+    assert call(desk, "POST", prop["decline"]["path"], prop["decline"]["body"]).status_code == 200
+    (item,) = _items(desk)
+    assert "It runs without a skill." in item["evidence"]
+    assert not any("waiting under Skill drafts" in line for line in item["evidence"])
+
+
+def test_a_declined_offer_keeps_no_words_and_stays_final_when_a_chat_is_deleted(desk):
+    tids = _three(desk)
+    _night(desk)
+    (offer,) = _offers(desk)
+    assert call(desk, "POST", f"/schedules/offers/{offer.id}/decline").status_code == 200
+    (row,) = _offers(desk)
+    assert row.words == "" and WORDS not in json.dumps(row.model_dump(), default=str)
+    assert call(desk, "DELETE", f"/chat/threads/{tids[1]}").status_code in (200, 204)
+    (row,) = _offers(desk)
+    assert row.status == O.DECLINED
+    assert O._declined_like(desk.engine, ALIKE)
+
+
+def test_the_hour_is_read_in_the_scheduler_s_zone(desk, monkeypatch):
+    from datetime import timezone as tzmod
+
+    seen = {}
+    real = O.make_offers
+
+    def spy(platform, *, tz=None):
+        seen["tz"] = tz
+        return real(platform, tz=tz)
+
+    monkeypatch.setattr(O, "make_offers", spy)
+    _three(desk)
+    _night(desk)
+    assert seen["tz"] is desk.platform.scheduler.scheduler.timezone
+
+
+def test_two_rehearse_presses_at_once_start_one_rehearsal(desk):
+    _three(desk)
+    _night(desk)
+    (offer,) = _offers(desk)
+    desk.platform.router.stream = _scripted([])
+
+    async def go():
+        a, b = await asyncio.gather(
+            _call(desk, "POST", f"/schedules/offers/{offer.id}/rehearse"),
+            _call(desk, "POST", f"/schedules/offers/{offer.id}/rehearse"),
+        )
+        for r in (a, b):
+            if r.status_code == 200:
+                await _settled(desk, r.json()["id"])
+        return a, b
+
+    a, b = asyncio.run(go())
+    assert sorted([a.status_code, b.status_code])[0] == 200
+    assert len(_rehearsals(desk)) == 1

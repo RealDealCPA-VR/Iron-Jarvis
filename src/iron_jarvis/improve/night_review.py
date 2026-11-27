@@ -830,7 +830,10 @@ async def _run_schedule_offer(platform: Any, job: dict[str, Any], night: str) ->
     nothing rehearsed."""
     from ..scheduling import offers as O
 
-    made = await asyncio.to_thread(O.make_offers, platform)
+    # The scheduler's own zone, so "10am" on the card is 10am on the schedule.
+    sched = getattr(platform, "scheduler", None)
+    tz = getattr(getattr(sched, "scheduler", None), "timezone", None)
+    made = await asyncio.to_thread(lambda: O.make_offers(platform, tz=tz))
     out = [{"kind": "schedule_offer", "ref": str(o.id), "why": OFFER_WHY} for o in made]
     return _entry(job, MADE if out else NOTHING), out
 

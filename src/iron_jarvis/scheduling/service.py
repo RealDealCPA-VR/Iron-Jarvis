@@ -390,6 +390,17 @@ class Scheduler:
             if kind is not None:
                 rec.kind = kind
             if payload is not None:
+                payload = dict(payload)
+                try:
+                    was = json.loads(rec.payload_json or "{}")
+                except (TypeError, ValueError):
+                    was = {}
+                if isinstance(was, dict) and was.get("local_only") is True:
+                    # Next leaps 19-b: Local only is only ever turned ON. Every
+                    # edit lands here (PATCH, chat's schedule_update, an
+                    # Undo), so none can send a Local only schedule's runs
+                    # off this network; remove the schedule to drop it.
+                    payload["local_only"] = True
                 rec.payload_json = json.dumps(payload, default=str)
             if enabled is not None:
                 rec.enabled = bool(enabled)

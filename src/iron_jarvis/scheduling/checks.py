@@ -1,8 +1,10 @@
 """The add-time rules of a schedule, ONE function for every door that saves
-one with the user's say-so: ``POST /schedules`` and ``PATCH /schedules/{name}``
-(``daemon/routes/system``) and Accept on a schedule Iron Jarvis offers
-(next leaps 19-b, ``daemon/routes/schedule_offers``). Moved here word for
-word from the routes' closure so a new door cannot keep a weaker copy.
+one: ``POST /schedules`` and ``PATCH /schedules/{name}`` (``daemon/routes/
+system``), Accept on a schedule Iron Jarvis offers (next leaps 19-b,
+``daemon/routes/schedule_offers``), and chat's ``schedule_create`` and
+``schedule_update`` (``from_user=False``: an agent-made payload may carry no
+pre-run script). Moved here word for word from the routes' closure so a new
+door cannot keep a weaker copy.
 
 :func:`check_payload` RAISES :class:`ScheduleRefused` with the HTTP status
 and the sentence the route answers with. BLOCKING when ``workspace_root`` is
@@ -26,7 +28,7 @@ class ScheduleRefused(Exception):
         self.detail = str(detail)
 
 
-def check_payload(platform: Any, name: str, kind: str, payload: dict) -> None:
+def check_payload(platform: Any, name: str, kind: str, payload: dict, *, from_user: bool = True) -> None:
     """The add-time rules, shared by POST and PATCH (v1.299.0) so an edit
     can never land a payload the add would have refused. Fail NOW, not at
     3am fire time: a task schedule needs its prompt, a typo'd destination
@@ -114,7 +116,7 @@ def check_payload(platform: Any, name: str, kind: str, payload: dict) -> None:
             kind=kind,
             scheduler=platform.scheduler,
             skills=getattr(platform, "skills", None),
-            from_user=True,
+            from_user=from_user,
         )
     except knobs.KnobError as exc:
         raise ScheduleRefused(status_code=exc.status, detail=exc.detail) from None

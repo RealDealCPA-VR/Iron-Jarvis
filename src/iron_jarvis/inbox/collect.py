@@ -351,9 +351,12 @@ def offer_item(view: dict[str, Any]) -> dict[str, Any]:
     lines = [repeats.times_line(evidence), repeats.tools_line(evidence)]
     if skill and view.get("skill_kept"):
         lines.append(f"It uses the skill “{skill}”.")
-    elif skill:
+    elif skill and view.get("draft_waiting"):
         lines.append(f"The skill draft “{skill}” is waiting under Skill drafts. A schedule made before you "
                      "approve it runs without it.")
+    else:
+        # 19-b review: the draft was declined, or the skill removed.
+        lines.append("It runs without a skill.")
     if not view.get("rehearsal_id"):
         lines.append(OFFER_NOT_REHEARSED)
     day = str(view.get("newest_day") or "")

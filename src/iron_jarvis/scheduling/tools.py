@@ -91,19 +91,18 @@ class ScheduleCreateTool(Tool):
         # is what keeps it the user's).
         if isinstance(payload, dict) and payload.get("script") not in (None, {}):
             return ToolResult(ok=False, error=_knobs.SCRIPT_FROM_AGENT_REFUSAL)
+        from .checks import ScheduleRefused, check_payload
+
         try:
-            # The same knob rules the routes apply (``from_user=False``); the
-            # folder probe inside is blocking, so off the loop.
+            # The add-time rules the routes apply (``scheduling/checks``: the
+            # agent, the account, the destinations, the knobs with
+            # ``from_user=False``); the folder probe inside is blocking, so
+            # off the loop.
             await asyncio.to_thread(
-                _knobs.validate_knobs,
-                payload,
-                name=str(args.get("name") or ""),
-                kind=str(kind),
-                scheduler=self.platform.scheduler,
-                skills=getattr(self.platform, "skills", None),
-                from_user=False,
+                lambda: check_payload(self.platform, str(args.get("name") or ""), str(kind),
+                                      payload if isinstance(payload, dict) else {}, from_user=False)
             )
-        except _knobs.KnobError as exc:
+        except ScheduleRefused as exc:
             return ToolResult(ok=False, error=exc.detail)
         from ..agents.chat_delivery import report_chat_for, stamp_when_linked
 

@@ -2418,15 +2418,16 @@ class ScheduleUpdateTool(_RecordTool):
                 return ToolResult(ok=False, error=why)
         try:
             if isinstance(payload, dict):
-                await asyncio.to_thread(
-                    _knobs.validate_knobs,
-                    payload,
-                    name=name,
-                    kind=before["kind"],
-                    scheduler=self.platform.scheduler,
-                    skills=getattr(self.platform, "skills", None),
-                    from_user=False,
-                )
+                # The add-time rules every schedule door applies
+                # (``scheduling/checks``; next leaps 19-b review).
+                from ..scheduling.checks import ScheduleRefused, check_payload
+
+                try:
+                    await asyncio.to_thread(
+                        lambda: check_payload(self.platform, name, before["kind"], payload, from_user=False)
+                    )
+                except ScheduleRefused as exc:
+                    return ToolResult(ok=False, error=exc.detail)
             await asyncio.to_thread(
                 self.platform.scheduler.update_task,
                 name,

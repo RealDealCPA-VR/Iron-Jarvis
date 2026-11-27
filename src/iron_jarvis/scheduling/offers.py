@@ -31,7 +31,11 @@ THE RULES (each pinned in ``tests/test_next_leaps_19b_offer.py``):
   ``_home_if_here``; unsure = home), the schedule's payload carries
   ``local_only`` and EVERY fire, and the rehearsal, runs Local only
   (``platform._dispatch_scheduled``), whatever becomes of the chat it
-  reports to (the newest of the chats, ``chat_thread_id``, idea 39).
+  reports to (the newest of the chats, ``chat_thread_id``, idea 39). It is
+  read again from the chats at Accept and at Rehearse (:func:`runs_home`),
+  and no edit can take it off (``Scheduler.update_task``). Local only work
+  whose newest model leaves this network is never offered, made or
+  rehearsed (:data:`LOCAL_ONLY_OFF_NETWORK`): it could never run.
 * A DELETED CHAT takes its offer with it (``drop_thread``), and an offer is
   made only from tasks still in their chats, read again (``repeats.reread``):
   19-a's draft keeps none of the owner's words.
@@ -105,7 +109,12 @@ class ScheduleOfferRecord(SQLModel, table=True):
     #: The newest of the chats: the schedule reports there (idea 39).
     chat_thread_id: str = ""
     kind: str = KIND_TASK
-    #: The newest rehearsal of this offer ("" = never rehearsed).
+    #: 19-b review: a DECLINED offer keeps no words, only the request's
+    #: word tokens (sorted, space-joined) to match a like request (Decline
+    #: is final for that task, also after one of its chats is deleted).
+    match_tokens: str = ""
+    #: The newest rehearsal of this offer ("" = never rehearsed; "claim:..."
+    #: while one press is starting one).
     rehearsal_id: str = ""
     #: The schedule Accept made.
     schedule_name: str = ""
@@ -211,9 +220,9 @@ def _declined_like(engine: Any, words: str) -> bool:
     mine = task_tokens(words)
     with session_scope(engine) as db:
         said = [str(w or "") for w in db.exec(
-            select(ScheduleOfferRecord.words).where(ScheduleOfferRecord.status == DECLINED)
+            select(ScheduleOfferRecord.match_tokens).where(ScheduleOfferRecord.status == DECLINED)
         )]
-    return any(similarity(mine, task_tokens(w)) >= SAME_TASK for w in said)
+    return any(similarity(mine, frozenset(w.split())) >= SAME_TASK for w in said if w)
 
 
 def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOfferRecord | None, str]":
@@ -251,6 +260,8 @@ def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOff
     # A task in a Local only chat, or one a model on the owner's own PC or
     # network answered, keeps the schedule's runs home (19-a's rule).
     local_only = any(R._home_if_here(platform, u).local_only for u in units)
+    if local_only and not _model_stays_home(platform, provider, model):
+        return None, LOCAL_ONLY_OFF_NETWORK
     if _scheduled_already(engine, words):
         return None, "a schedule already does this"
     if _declined_like(engine, words):
@@ -307,23 +318,20 @@ def make_offers(platform: Any, *, tz: Any = None) -> list[ScheduleOfferRecord]:
 def drop_thread(db: Any, thread_id: str) -> int:
     """A chat was DELETED (``routes/chat.delete_thread``, inside its own
     transaction, beside 19-a's ``repeats.drop_thread``): an offer still
-    waiting that was made from it goes, its words with it; a declined one
-    keeps no words (its draft still gets no new offer). A schedule already
-    made is the owner's and stays. How many offers changed. RAISES."""
+    waiting that was made from it goes, its words with it. A declined one
+    already keeps no words, only the tokens that keep Decline final, and
+    stays. A schedule already made is the owner's and stays. How many offers
+    changed. RAISES."""
     from ..learning.repeats import load_evidence
 
     tid = str(thread_id or "")
     changed = 0
-    for row in list(db.exec(select(ScheduleOfferRecord).where(ScheduleOfferRecord.status != ACCEPTED))):
+    for row in list(db.exec(select(ScheduleOfferRecord).where(ScheduleOfferRecord.status == WAITING))):
         threads = {str(u.get("thread") or "") for u in load_evidence(row.evidence_json).get("units") or []
                    if isinstance(u, dict)}
         if tid not in threads and row.chat_thread_id != tid:
             continue
-        if row.status == WAITING:
-            db.delete(row)
-        else:
-            row.words = ""
-            db.add(row)
+        db.delete(row)
         changed += 1
     return changed
 
@@ -331,6 +339,39 @@ def drop_thread(db: Any, thread_id: str) -> int:
 # --------------------------------------------------------------------------- #
 # what Accept and Rehearse run
 # --------------------------------------------------------------------------- #
+#: 19-b review: Local only work whose newest chat ran on a model that leaves
+#: this network: such a schedule could never run (every fire would be
+#: refused), so it is not offered, nor made, nor rehearsed.
+LOCAL_ONLY_OFF_NETWORK = (
+    "Some of this work was Local only, and the model your newest chat used is not on this PC or your "
+    "network, so a schedule of it could never run. Nothing was made."
+)
+
+
+def _model_stays_home(platform: Any, provider: str, model: str) -> bool:
+    try:
+        from ..providers.egress import stays_on_this_network
+
+        return bool(stays_on_this_network(provider, getattr(platform, "providers", None),
+                                          getattr(platform, "config", None), model))
+    except Exception:  # noqa: BLE001 - unsure: it does not stay home
+        return False
+
+
+def runs_home(platform: Any, row: ScheduleOfferRecord) -> bool:
+    """Must this offer's schedule run Local only NOW? Its record said so, or
+    one of its tasks, read AGAIN from its chat, is in a Local only chat or
+    was answered on the owner's PC or network (19-a's ``_home_if_here``).
+    Chats that cannot be read count as Local only (fail closed)."""
+    if row.local_only:
+        return True
+    from ..learning import repeats as R
+
+    found = R.reread(platform.engine, evidence(row))
+    if found is None:
+        return True
+    return any(R._home_if_here(platform, u).local_only for u, _lines in found)
+
 def _skill_kept(platform: Any, name: str) -> bool:
     skills = getattr(platform, "skills", None)
     if skills is None or not name:
@@ -343,7 +384,8 @@ def _skill_kept(platform: Any, name: str) -> bool:
 
 def payload_of(platform: Any, row: ScheduleOfferRecord) -> dict[str, Any]:
     """The schedule's payload: the owner's words, the chats' provider, model
-    and account, the skill once it is one, the chats' folder."""
+    and account, the skill once it is one, the chats' folder, and Local only
+    as the chats say NOW (:func:`runs_home`)."""
     payload: dict[str, Any] = {"task": row.words, "provider": row.provider, "model": row.model}
     if row.account:
         payload["account"] = row.account
@@ -351,7 +393,7 @@ def payload_of(platform: Any, row: ScheduleOfferRecord) -> dict[str, Any]:
         payload["skills"] = [row.skill_name]
     if row.folder:
         payload["workspace_root"] = row.folder
-    if row.local_only:
+    if runs_home(platform, row):
         # Every fire runs Local only (``platform._dispatch_scheduled``),
         # whatever becomes of the chat it reports to.
         payload["local_only"] = True
@@ -387,10 +429,15 @@ def task_of(platform: Any, row: ScheduleOfferRecord) -> Any:
 
 
 def check(platform: Any, row: ScheduleOfferRecord, name: str, payload: dict[str, Any]) -> None:
-    """The add-time rules every door that saves a schedule applies. RAISES
+    """The add-time rules every door that saves a schedule applies, and a
+    Local only schedule's model must stay on this network. RAISES
     :class:`OfferRefused` in words."""
     from .checks import ScheduleRefused, check_payload
 
+    if payload.get("local_only") is True and not _model_stays_home(
+        platform, str(payload.get("provider") or ""), str(payload.get("model") or "")
+    ):
+        raise OfferRefused(LOCAL_ONLY_OFF_NETWORK, 409)
     try:
         check_payload(platform, name, "task", payload)
     except ScheduleRefused as exc:
@@ -476,9 +523,22 @@ def _reopen(engine: Any, offer_id: str) -> None:
 
 
 def decline(engine: Any, offer_id: str) -> dict[str, Any]:
-    """Decline: final for this task (no offer for it again)."""
-    _waiting(engine, offer_id)
-    if not _claim(engine, offer_id, DECLINED):
+    """Decline: final for this task (no offer for it again). The offer keeps
+    no words from now on, only their tokens to match a like request."""
+    from sqlalchemy import update
+
+    from ..templates import task_tokens
+
+    row = _waiting(engine, offer_id)
+    with session_scope(engine) as db:
+        res = db.exec(
+            update(ScheduleOfferRecord)  # type: ignore[call-overload]
+            .where(ScheduleOfferRecord.id == offer_id, ScheduleOfferRecord.status == WAITING)
+            .values(status=DECLINED, decided_at=utcnow(), words="",
+                    match_tokens=" ".join(sorted(task_tokens(row.words))))
+        )
+        db.commit()
+    if not getattr(res, "rowcount", 0):
         raise OfferRefused("This offer was already answered.", 409)
     return {"ok": True, "note": DECLINED_NOTE}
 
@@ -504,13 +564,42 @@ def offer_view(platform: Any, row: ScheduleOfferRecord) -> dict[str, Any]:
     return {
         "id": row.id, "title": row.title, "words": row.words, "skill_name": row.skill_name,
         "skill_kept": _skill_kept(platform, row.skill_name),
+        "draft_waiting": _draft_waiting(platform.engine, row.proposal_id),
         "when": rh.words if rh is not None else "",
         "why": (f"The {len(units)} times you asked for this in chat were each {rh.on_days_words}."
                 if rh is not None and units else ""),
         "evidence": evidence(row), "newest_day": newest_day(row), "account": row.account,
         "reports_to_chat": chat_exists(platform.engine, row.chat_thread_id),
-        "rehearsal_id": row.rehearsal_id, "created_at": row.created_at, "local_only": row.local_only,
+        "rehearsal_id": "" if row.rehearsal_id.startswith("claim:") else row.rehearsal_id, "created_at": row.created_at, "local_only": row.local_only,
     }
+
+
+def _draft_waiting(engine: Any, proposal_id: str) -> bool:
+    """Is the skill draft this offer sits beside still waiting for an answer?"""
+    from ..skills.learning_models import SkillProposalRecord as P
+
+    if not proposal_id:
+        return False
+    with session_scope(engine) as db:
+        got = db.get(P, proposal_id)
+        return got is not None and got.status == "pending"
+
+
+def claim_rehearsal(engine: Any, offer_id: str, seen: str) -> str:
+    """One press of Rehearse at a time: ``rehearsal_id`` goes from ``seen``
+    to a claim, only when no other press changed it first. The claim, or ""
+    when another press won."""
+    from sqlalchemy import update
+
+    claim = f"claim:{new_id('c')}"
+    with session_scope(engine) as db:
+        res = db.exec(
+            update(ScheduleOfferRecord)  # type: ignore[call-overload]
+            .where(ScheduleOfferRecord.id == offer_id, ScheduleOfferRecord.rehearsal_id == seen)
+            .values(rehearsal_id=claim)
+        )
+        db.commit()
+    return claim if getattr(res, "rowcount", 0) else ""
 
 
 def set_rehearsal(engine: Any, offer_id: str, rehearsal_id: str) -> None:
@@ -525,6 +614,7 @@ def set_rehearsal(engine: Any, offer_id: str, rehearsal_id: str) -> None:
 __all__ = [
     "ACCEPTED", "DECLINED", "DECLINED_NOTE", "KIND_TASK", "OFFERS_MAX", "OfferRefused", "ScheduleOfferRecord",
     "WAITING", "accept", "accepted_note", "check", "decline", "drop_thread", "evidence", "get",
-    "make_offers", "newest_day", "offer_for", "payload_of", "rhythm_of", "schedule_name", "set_rehearsal",
+    "LOCAL_ONLY_OFF_NETWORK", "claim_rehearsal", "make_offers", "newest_day", "offer_for", "payload_of",
+    "rhythm_of", "runs_home", "schedule_name", "set_rehearsal",
     "task_of",
 ]

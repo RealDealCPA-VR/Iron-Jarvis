@@ -213,9 +213,11 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
     task_of``, not saved) runs through the schedule's own door
     (``platform.rehearse_scheduled``) exactly as a kept schedule's rehearsal
     does, with the same side doors, after the same add-time rules Accept
-    applies (an account gone or off, a chat no longer Local only: refused in
-    words, nothing run). One rehearsal of an offer runs at a time: a second
-    press while one runs answers that one. The offer keeps the newest
+    applies (an account gone or off; Local only work, read again from its
+    chats, whose model leaves this network: refused in words, nothing run).
+    One rehearsal of an offer runs at a time: a press while one runs, or
+    while another press is starting one, gets that one (a conditional write
+    claims the offer first). The offer keeps the newest
     rehearsal's id; its report is ``GET /rehearsals/{id}``."""
     from ..scheduling import offers as O
 
@@ -229,6 +231,8 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
         raise RehearsalRefused("There is no such offer.", status=404)
     if row.status != O.WAITING:
         raise RehearsalRefused("This offer was already answered, so it is not rehearsed.", status=409)
+    if row.rehearsal_id.startswith("claim:"):
+        raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
     if row.rehearsal_id:
         before = await asyncio.to_thread(_store(platform).get, row.rehearsal_id)
         if before is not None and before.status == "running":
@@ -242,10 +246,23 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
         await asyncio.to_thread(O.check, platform, row, task.name, payload)
     except O.OfferRefused as exc:
         raise RehearsalRefused(exc.words, status=exc.status) from None
+    # One press at a time (review): the offer's rehearsal is claimed with a
+    # conditional write; a press that loses answers the winner's report.
+    claim = await asyncio.to_thread(O.claim_rehearsal, platform.engine, row.id, row.rehearsal_id)
+    if not claim:
+        now = await asyncio.to_thread(O.get, platform.engine, row.id)
+        rid = getattr(now, "rehearsal_id", "") or ""
+        if rid and not rid.startswith("claim:"):
+            return await asyncio.to_thread(report, platform, rid)
+        raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
     store = _store(platform)
-    rec = await asyncio.to_thread(
-        lambda: store.create(kind="offer", subject_id=row.id, name=task.name, sample={})
-    )
+    try:
+        rec = await asyncio.to_thread(
+            lambda: store.create(kind="offer", subject_id=row.id, name=task.name, sample={})
+        )
+    except BaseException:
+        await asyncio.to_thread(O.set_rehearsal, platform.engine, row.id, row.rehearsal_id)
+        raise
     await asyncio.to_thread(O.set_rehearsal, platform.engine, row.id, rec.id)
     where = _destinations_words(platform, payload)
     if where:
