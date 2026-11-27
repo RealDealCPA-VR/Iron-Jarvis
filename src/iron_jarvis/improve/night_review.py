@@ -461,7 +461,8 @@ def _repeat_jobs(platform: Any, end: datetime, night: str = "") -> list[dict[str
     chats of the 35 days before ``end``, no model; it adds a chat candidate
     per new repeat and never raises), then one job per waiting chat
     candidate, at most :data:`REPEAT_DRAFTS`, each pinned to the model of
-    its NEWEST chat task and Local only when any of its chats was. The
+    its NEWEST chat task (provider, model AND account) and Local only
+    when any of its chats was. The
     budget's refusals are handled as :func:`_skill_jobs` does."""
     if getattr(platform, "skill_learning", None) is None:
         return []
@@ -482,7 +483,10 @@ def _repeat_jobs(platform: Any, end: datetime, night: str = "") -> list[dict[str
         out.append({
             "key": f"repeat:{cand.id}", "proposer": "repeat", "target": cand.id,
             "provider": str(newest.get("provider") or ""), "model": str(newest.get("model") or ""),
-            "account": "",
+            # The account the newest chat ran on (never the vendor's Default
+            # in its place): ``_arm_account`` pins it, and an account that is
+            # gone or turned off refuses the night's draft; no other login.
+            "account": str(newest.get("account") or ""),
             # Fail closed: a unit that does not say is Local only.
             "local_only": (not units) or any(bool(u.get("local_only", True)) for u in units),
             "why": repeat_why(len(units)),

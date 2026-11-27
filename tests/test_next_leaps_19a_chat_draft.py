@@ -41,6 +41,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.improve import budget as B
 from iron_jarvis.improve import night_review as NR
 from iron_jarvis.improve.models import NightReviewRecord
+from iron_jarvis.iron_proxy.pin import current as current_pin
 from iron_jarvis.learning import repeats as R
 from iron_jarvis.providers import background_call, egress
 from iron_jarvis.skills.learning_models import SkillCandidateRecord, SkillProposalRecord
@@ -78,6 +79,7 @@ class Router:
             "provider": provider, "model": model, "pin": pin, "system": system,
             "prompt": messages[0].content if messages else "",
             "local_only": egress.current_scope().on, "background": background_call.what(),
+            "account": getattr(current_pin(), "profile_id", None),
         })
         return SimpleNamespace(response=SimpleNamespace(text=self.text), provider=provider, model=model)
 
@@ -312,3 +314,74 @@ def test_the_owner_s_words_are_kept_masked(desk):
     assert R.detect(desk.platform, now=datetime.now().astimezone()) == 1
     (cand,) = _cands(desk)
     assert WORD not in cand.task and WORD not in cand.evidence_json
+
+
+class FakeProxy:
+    """Iron-Proxy with two Claude accounts: "Main" is the Default (order 0),
+    "Side" the one the chats chose. ``off`` turns "Side" off; ``gone``
+    removes it."""
+
+    enabled = True
+
+    def __init__(self, *, off: bool = False, gone: bool = False) -> None:
+        self.off, self.gone = off, gone
+
+    def cached_accounts(self):
+        rows = [{"id": "acc_main", "title": "Main", "provider": "anthropic", "lane": "cli", "order": 0}]
+        state = {"acc_main": {"status": "ready", "windows": [{"usedPercent": 5, "windowMins": 300}]}}
+        if not self.gone:
+            rows.append({"id": "acc_side", "title": "Side", "provider": "anthropic", "lane": "cli", "order": 1,
+                         **({"enabled": False} if self.off else {})})
+            state["acc_side"] = {"status": "ready", "windows": [{"usedPercent": 5, "windowMins": 300}]}
+        return rows, state
+
+
+def _on_account(desk, tids, account="acc_side"):
+    """Each chat's reply says it ran on ``account`` (the route's receipt)."""
+    with session_scope(desk.engine) as db:
+        for tid in tids:
+            row = db.get(ChatThreadRecord, tid)
+            lines = json.loads(row.messages_json)
+            lines[1]["route"] = {"provider": "claude-cli", "account": {"id": account, "name": "Side"}}
+            row.messages_json = json.dumps(lines)
+            db.add(row)
+        db.commit()
+
+
+def test_the_draft_runs_on_the_account_the_chats_used(desk):
+    desk.platform.iron_proxy = FakeProxy()
+    _on_account(desk, _three(desk))
+    _pass(desk)
+    (call,) = desk.router.calls
+    assert call["account"] == "acc_side"  # never the Default "Main"
+    assert len(_proposals(desk)) == 1
+
+
+def test_a_chat_with_no_account_runs_as_the_chat_did(desk):
+    """No account chosen: the chat ran on Iron-Proxy's own pick, unpinned;
+    the draft does the same, never a guessed account."""
+    desk.platform.iron_proxy = FakeProxy()
+    _three(desk)
+    _pass(desk)
+    (call,) = desk.router.calls
+    assert call["account"] is None
+
+
+def test_the_chat_s_chosen_account_is_read_from_its_setup_when_the_reply_says_none(desk):
+    desk.platform.iron_proxy = FakeProxy()
+    _three(desk, setups=({"account": "acc_side", "provider": "claude-cli"},) * 3)
+    _pass(desk)
+    (call,) = desk.router.calls
+    assert call["account"] == "acc_side"
+
+
+@pytest.mark.parametrize("how", ["gone", "off"])
+def test_an_account_that_is_gone_or_off_drafts_nothing_that_night(desk, how):
+    desk.platform.iron_proxy = FakeProxy(**{how: True})
+    _on_account(desk, _three(desk))
+    out = _pass(desk)
+    assert desk.router.calls == [] and _proposals(desk) == [] and out["made"] == 0
+    (entry,) = [r for r in _ran(desk) if r["proposer"] == "repeat"]
+    assert entry["result"] == NR.REFUSED and entry["reason"], entry
+    assert B.requests_tonight(desk.platform.config.home, NIGHT) == 0
+    assert [c.status for c in _cands(desk)] == ["pending"]  # tried again another night, never elsewhere

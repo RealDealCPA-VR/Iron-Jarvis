@@ -95,6 +95,9 @@ class Unit:
     kinds_out: frozenset[str] = frozenset()
     provider: str = ""
     model: str = ""
+    #: The Iron-Proxy account the task ran on ("" = none chosen: the chat ran
+    #: on Iron-Proxy's own pick, unpinned). See :func:`_account_of`.
+    account: str = ""
     local_only: bool = False
     low_trust: bool = False
     remote: bool = False
@@ -219,7 +222,7 @@ def evidence_of(group: Group) -> dict[str, Any]:
         "units": [
             {"thread": u.ref, "start": u.start, "end": u.end if math.isfinite(u.end) else None,
              "at": _iso(u.start), "words": _masked(u.words)[:2000], "provider": u.provider, "model": u.model,
-             "local_only": bool(u.local_only)}
+             "account": u.account, "local_only": bool(u.local_only)}
             for u in group.units
         ],
         "tools": list(group.tools),
@@ -328,6 +331,28 @@ def _line_local(m: Any) -> bool:
     if isinstance(route, dict) and route.get("local_only") is True:
         return True
     return str(m.get("errorKind") or "") == "local_only"
+
+
+def _account_of(lines: list[dict], setup_json: str) -> str:
+    """The account a task ran on, as the chat recorded it: the newest reply
+    that carries a route says it (``route.account.id``; a route with no
+    account = the turn ran unpinned, ""). A reply saved before routes were
+    kept falls back to the account chosen for the chat (``setup.account``,
+    the one the chat lane would pin). Never a guess: "" means unpinned."""
+    for m in reversed(lines):
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        route = m.get("route")
+        if isinstance(route, dict):
+            acct = route.get("account")
+            got = acct.get("id") if isinstance(acct, dict) else acct
+            return " ".join(str(got or "").split())
+    try:
+        setup = json.loads(setup_json or "{}")
+    except (TypeError, ValueError):
+        return ""
+    got = setup.get("account") if isinstance(setup, dict) else ""
+    return " ".join(str(got or "").split()) if isinstance(got, str) else ""
 
 
 def _line_low(m: Any) -> bool:
@@ -504,6 +529,7 @@ def chat_units(messages: list, *, ref: str, fallback_at: "float | None", since: 
             words=" ".join(task.request.split()), tools=tools,
             kinds_in=frozenset(kinds_in), kinds_out=frozenset(kinds_out),
             provider=newest[2] if newest else "", model=newest[3] if newest else "",
+            account=_account_of(lines, setup_json),
             local_only=chat_local or any(_line_local(m) for m in lines),
             low_trust=any(_line_low(m) for m in lines), remote=remote, owner=owner,
         ), paths, lines))
