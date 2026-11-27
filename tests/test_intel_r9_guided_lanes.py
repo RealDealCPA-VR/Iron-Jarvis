@@ -117,3 +117,13 @@ def test_a_cloud_model_is_never_recorded_or_guided(tmp_path):
     for _ in range(STUMBLE_RUN):
         pm.note_reply_form("openai", "gpt-x", "native", False)
     assert pm.reply_guided("openai", "gpt-x") is False
+
+
+def test_the_model_servers_card_hears_it_is_being_guided(tmp_path):
+    app = _app(tmp_path, _OwnModel())
+    client = TestClient(app)
+    before = client.get(f"/envelope/ollama/{MODEL}").json()
+    assert before["guided"] is False
+    _stumble(app)
+    after = client.get(f"/envelope/ollama/{MODEL}").json()
+    assert after["guided"] is True and after["trusted"] is False

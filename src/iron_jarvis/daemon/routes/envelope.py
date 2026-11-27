@@ -238,6 +238,87 @@ async def run_trial(d, base: CapabilityProfile, adapter: Any, provider: str, mod
     )
 
 
+#: Model names a model proxy passes on to a cloud service under their maker's
+#: name. A server we could not read the routing of is still never tried with
+#: one of these (release 9). Lower-case prefixes; ``gpt-oss`` (an open model
+#: people run at home) is deliberately not one.
+_CLOUD_NAME_PREFIXES: tuple[str, ...] = (
+    "openai/", "anthropic/", "google/", "gemini/", "x-ai/", "xai/", "openrouter/",
+    "azure/", "bedrock/", "vertex_ai/", "groq/", "together_ai/", "mistral/", "cohere/",
+    "deepseek/", "fireworks_ai/", "perplexity/",
+    "gpt-3", "gpt-4", "gpt-5", "chatgpt", "o1", "o3", "o4", "claude", "gemini", "grok",
+)
+
+#: What the idle trial says when it leaves a model alone (kept in trials.json).
+NEVER_CLOUD = "a cloud model"
+NEVER_FORWARDED = "its model server passes it on to a cloud service"
+NEVER_NO_ADDRESS = "no model server address is saved for it"
+
+
+def trial_refusal(d, provider: str, model: str) -> str:
+    """May the IDLE trial try ``model`` on ``provider`` (release 9)? ``""``
+    yes; :data:`~...envelope.autotrial.WAIT` not known yet (ask again later);
+    anything else is the reason it never will. BLOCKING (a fleet read).
+
+    A model is tried unasked only when it is CERTAIN that it stays on this
+    network:
+
+    * a trusted provider (every cloud API and subscription tool) — never;
+    * an Ollama cloud model (``…:cloud`` / ``…-cloud``) — never;
+    * the address must pass ``egress.stays_on_this_network`` (private address
+      AND, when its routing table was read, not sent to a cloud service);
+    * and the routing must be KNOWN: the model proxy's own table says this
+      name stays here (``upstream_place == "local"``), or the sampler read
+      that the server answers itself (``FleetRegistry.answers_itself``). A
+      server nobody has read yet WAITS;
+    * a name in the maker's own spelling (``openai/…``, ``claude-…``) is
+      never tried even then: a proxy we cannot read (not LiteLLM) may pass it
+      on.
+    Measure stays the user's own button and is not gated by this."""
+    from ...envelope.autotrial import WAIT
+    from ...fleet.library import is_cloud_name
+    from ...providers import egress
+
+    platform = d.platform
+    pm = platform.providers
+    if pm.is_trusted_provider(provider):
+        return NEVER_CLOUD
+    name = (model or "").strip()
+    low = name.lower()
+    if is_cloud_name(name) or any(low.startswith(p) for p in _CLOUD_NAME_PREFIXES):
+        return NEVER_CLOUD
+    if not _endpoint_base_url(d, provider):
+        return NEVER_NO_ADDRESS
+    if not egress.stays_on_this_network(provider, pm, platform.config, name):
+        return NEVER_FORWARDED
+    place = pm.upstream_place(provider, name)
+    if place == "cloud":
+        return NEVER_FORWARDED
+    if place == "local":
+        return ""
+    fleet = getattr(d, "fleet", None) or getattr(platform, "fleet", None)
+    ask = getattr(fleet, "answers_itself", None)
+    if callable(ask) and ask(provider):
+        return ""
+    return WAIT
+
+
+def _busy_now(d) -> bool:
+    """A chat reply is being written, or a run, a workflow or a coding task
+    is working (``routes/system.activity_snapshot``'s ``working``, the sleep
+    blocker's own reading). BLOCKING; a reading that fails is busy."""
+    try:
+        from ...core.turns import CHAT_INFLIGHT
+
+        if CHAT_INFLIGHT.count() > 0:
+            return True
+        from .system import activity_snapshot
+
+        return bool(activity_snapshot(d).get("working"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -257,6 +338,8 @@ def register(app: FastAPI, d) -> None:
         base_url: str,
         home: Path,
         stored: CapabilityProfile | None,
+        *,
+        auto: bool = False,
     ) -> None:
         """The background body: seed if nothing is stored, run the battery
         against the pinned adapter, publish the honest outcome. The battery
@@ -291,12 +374,65 @@ def register(app: FastAPI, d) -> None:
         # the key is free, so "wait for the event, probe again" cannot 409.
         inflight.discard(key)
         payload: dict[str, Any] = {"provider": provider, "model": model, "source": source}
+        if auto:
+            # Release 9: the idle trial's own run (no started event, no notice;
+            # the card refetches on this one).
+            payload["auto"] = True
         if error:
             payload["error"] = error
         try:
             await d.platform.event_bus.publish(PROBE_COMPLETED, payload)
         except Exception:  # noqa: BLE001 — a bus fault must not kill the task
             pass
+
+    # ------------------------------------------------------------------ #
+    # THE IDLE TRIAL (the intelligence plan, release 9): the same battery,
+    # unasked, one model at a time, only while the PC is idle. It shares the
+    # 409 gate above, so Measure and the trial never measure one model twice.
+    # The worker is started by the lifespan (``d.auto_trials.run_forever``).
+    # ------------------------------------------------------------------ #
+    async def _auto_run(provider: str, model: str) -> None:
+        key = (provider, model)
+        if key in inflight:
+            return  # Measure is measuring it right now
+        base_url = _endpoint_base_url(d, provider)
+        if not base_url:
+            return
+        inflight.add(key)
+        try:
+            home = Path(d.platform.config.home)
+            stored = await asyncio.to_thread(load_profile, home, provider, model)
+        except BaseException:
+            inflight.discard(key)
+            raise
+        await _run_probe(key, provider, model, base_url, home, stored, auto=True)
+
+    def _measured(provider: str, model: str) -> bool:
+        profile = load_profile(Path(d.platform.config.home), provider, model)
+        return profile is not None and profile.is_measured()
+
+    def _stopped() -> bool:
+        from ...agents.orchestrator import emergency_stop_on
+
+        return emergency_stop_on(d.platform.config)
+
+    from ...envelope import autotrial as _autotrial
+    from ...envelope.idle import input_idle_seconds
+
+    trials = _autotrial.AutoTrials(
+        home=Path(d.platform.config.home),
+        is_trusted=d.platform.providers.is_trusted_provider,
+        measured=_measured,
+        refusal=lambda provider, model: trial_refusal(d, provider, model),
+        run=_auto_run,
+        idle_seconds=input_idle_seconds,
+        busy=lambda: _busy_now(d),
+        stopped=_stopped,
+    )
+    d.auto_trials = trials
+    _autotrial.install(trials)
+    # Chat's "Measure my model" presses the same button (settings/records_models).
+    d.start_measure = lambda provider, model: _start_measure(provider, model)
 
     @app.get("/envelope/{provider}/{model:path}")
     async def envelope_get(provider: str, model: str) -> dict[str, Any]:
@@ -342,6 +478,10 @@ def register(app: FastAPI, d) -> None:
         profile = stored if stored is not None else CapabilityProfile(
             model_id=model, provider=provider
         )
+        # Release 9: is it being guided step by step right now (it kept
+        # stumbling with tools)? The manager's own reading (one stat a file).
+        ask = getattr(d.platform.providers, "reply_guided", None)
+        guided = await asyncio.to_thread(ask, provider, model) if callable(ask) else False
         return {
             "provider": provider,
             "model": model,
@@ -349,12 +489,18 @@ def register(app: FastAPI, d) -> None:
             "stored": stored is not None,
             "profile": profile.to_dict(),
             "effective_window": effective_window,
+            "guided": bool(guided),
         }
 
     @app.post("/envelope/{provider}/{model:path}/probe")
     async def envelope_probe(provider: str, model: str) -> dict[str, Any]:
         """Start the quick battery in the background. Refusals are honest and
         specific — see the module docstring for the three shapes."""
+        return await _start_measure(provider, model)
+
+    async def _start_measure(provider: str, model: str) -> dict[str, Any]:
+        """THE Measure press (the route above, and chat's ``model_measure``,
+        release 9): the same refusals, the same 409 gate, the same events."""
         model = model.strip()
         if not model:
             raise HTTPException(status_code=400, detail="model id required after the provider")

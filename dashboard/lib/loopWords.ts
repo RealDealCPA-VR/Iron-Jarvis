@@ -160,6 +160,12 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Search by meaning isn't reading your memory again with its search model",
     href: "/settings?focus=meaning_search",
   },
+  // The intelligence plan, release 9: your own models tried while the PC is idle.
+  model_trials: {
+    label: "Trying your own models",
+    problem: "Your own models aren't being tried while the PC is idle",
+    href: "/fleet",
+  },
   // v1.499.0: the pass that notices names in your folder names that may be clients.
   work_clients: {
     label: "Clients in your folders",

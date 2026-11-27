@@ -923,6 +923,18 @@ def _note_call(adapter: Any, response: Any) -> None:
         )
     except Exception:  # noqa: BLE001 — accounting must never break a request
         pass
+    # The intelligence plan, release 9: the first time a user's own model
+    # answers, it waits for an idle moment to be tried (envelope/autotrial;
+    # a dict look-up after the first time, never raises).
+    try:
+        from ..envelope.autotrial import note_used
+
+        note_used(
+            str(getattr(adapter, "provider", "") or ""),
+            str(getattr(adapter, "model", "") or ""),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _note_final(adapter: Any, frame: Any) -> None:

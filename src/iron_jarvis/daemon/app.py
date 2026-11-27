@@ -2487,6 +2487,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _meaning_loop(_app.state.d, lambda ok, exc: _tick("meaning_search", ok, exc))
         )
 
+        # YOUR OWN MODELS SET THEMSELVES UP (the intelligence plan, release 9):
+        # a model of the user's own used for the first time is tried while the
+        # PC is idle — one at a time, made-up text only, cut the moment the
+        # user types (envelope/autotrial, built in routes/envelope.register).
+        # A look every 30 s reads three small things off the loop. Each look
+        # reports on loop_health["model_trials"].
+        _trials = getattr(_app.state.d, "auto_trials", None)
+        if _trials is not None:
+            bg_tasks["model_trials"] = asyncio.create_task(
+                _trials.run_forever(lambda ok, exc: _tick("model_trials", ok, exc))
+            )
+
         # CLIENTS IN YOUR FOLDERS (v1.499.0, vision plan leap 3, Phase 3):
         # names in the work record's own folder names that look like clients
         # wait for ONE answer each (workmap/clients/detect). No model call, no

@@ -29,7 +29,7 @@ from ..core.logging import get_logger
 from .adapter import FleetAdapter, adapter_for  # noqa: F401 — FleetAdapter re-exported
 from .models import NODE_PROTOCOLS, FleetNode
 from .probes import normalize_root
-from .upstreams import PLACE_CLOUD, UNREAD, RouteTable
+from .upstreams import NOT_A_PROXY, PLACE_CLOUD, UNREAD, RouteTable
 
 log = get_logger("fleet.registry")
 
@@ -94,6 +94,11 @@ class FleetRegistry:
         #: the routing path (``route_place``), so writes swap whole entries
         #: under ``_routes_lock`` and a read is one dict lookup.
         self._routes: dict[str, tuple[str, RouteTable]] = {}
+        #: The intelligence plan, release 9: node id -> the address root at
+        #: which the sampler last read "this server answers itself, it is not
+        #: a model proxy" (``upstreams.NOT_A_PROXY``). In memory only: after a
+        #: restart nothing is known until the sampler reads again.
+        self._plain: dict[str, str] = {}
         self._routes_lock = threading.Lock()
         self._routes_path = self._routes_file()
         self._load_routes()
@@ -448,6 +453,10 @@ class FleetRegistry:
         node = self._top_level().get(node_id)
         changed = False
         with self._routes_lock:
+            if result == NOT_A_PROXY and node is not None:
+                self._plain[node_id] = normalize_root(node.base_url)
+            else:
+                self._plain.pop(node_id, None)
             old = self._routes.get(node_id)
             if node is None or not isinstance(result, RouteTable):
                 if old is not None:
@@ -474,6 +483,23 @@ class FleetRegistry:
             return None
         root, table = held
         return table if root == normalize_root(node.base_url) else None
+
+    def answers_itself(self, provider: str) -> bool:
+        """Release 9: did the sampler read, at this node's CURRENT address,
+        that the server is not a model proxy (it answers itself, so no name
+        it serves is passed on)? False when nothing was read, when it is a
+        proxy (its table speaks instead), or when the address changed. Never
+        a network call; never raises."""
+        try:
+            node_id = self._node_id_for(provider)
+            node = self._top_level().get(node_id) if node_id else None
+            if node is None or not node.enabled:
+                return False
+            with self._routes_lock:
+                held = self._plain.get(node_id)
+            return held is not None and held == normalize_root(node.base_url)
+        except Exception:  # noqa: BLE001
+            return False
 
     @staticmethod
     def _node_id_for(provider: str) -> str:
