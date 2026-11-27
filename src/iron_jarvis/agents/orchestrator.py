@@ -3374,6 +3374,12 @@ class Orchestrator:
                 except Exception:  # noqa: BLE001 - best-effort; never block the delete
                     pass
             db.commit()
+        # Release 8 of the intelligence plan: the long results kept whole for
+        # this run are REMOVED with it, never moved to the trash (they are
+        # copies of text the run read, kept only so its model could read on).
+        from ..tools.kept_results import drop_owners as _drop_kept
+
+        _drop_kept(self.p.engine, (session_id,))
         # MOVE a plain (non-git) workspace dir to the trash, unless another
         # session (e.g. a continuation) still reuses it. Git worktrees were
         # already moved above. v1.504.0 (north-star plan 4.2): this was an

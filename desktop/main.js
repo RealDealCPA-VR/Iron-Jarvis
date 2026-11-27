@@ -4632,6 +4632,7 @@ const TOOL_WORDS_BUILTIN = {
   image_resize: "make a file",
   integration_list: "list your web services",
   integration_test: "test a web service",
+  kept_result_read: "read more of a long result",
   lesson_add: "add a lesson to your preferences",
   list_agents: "list the agents",
   list_files: "look in a folder",

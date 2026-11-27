@@ -153,6 +153,12 @@ def create_backup(
     # copied from the installed app at every start (mcpserver/apps.ensure_bridge):
     # a program, not the user's state, and held open while an app runs it.
     bridge_dir = (home / "bridge").resolve()
+    # The intelligence plan, release 8: the long results Iron Jarvis kept
+    # whole so a model could read them to the end (tools/kept_results.py).
+    # Text from the user's own files and commands, held 30 days at most: it
+    # stays OUT of every backup (the files and chats it came from are not
+    # here; a backup would keep it long after its end date).
+    kept_results_dir = (home / "kept-results").resolve()
     # v1.424.0 (D4): Iron Jarvis's plugin folder for the owner's Claude Code
     # setup on other accounts, in a dev or test home: COPIES of the owner's own
     # skills/commands/agents (v1.424.0 review: never junctions), remade at the
@@ -213,6 +219,7 @@ def create_backup(
                     or packages_dir in rp.parents
                     or excel_live_dir in rp.parents
                     or bridge_dir in rp.parents
+                    or kept_results_dir in rp.parents
                 ):
                     continue  # skip regenerable media library (dwarfs the real state)
                 if snapshot is not None and rp == snapshot.resolve():

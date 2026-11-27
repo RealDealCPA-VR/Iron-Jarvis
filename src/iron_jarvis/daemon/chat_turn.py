@@ -5196,7 +5196,7 @@ _READS_ONLY_TOOLS: frozenset[str] = frozenset({
     "find_capability", "config_list", "schedule_list", "workflow_list", "goal_list", "night_task_list",
     "start_list",
     "list_agents", "changes_list", "history_search", "work_history", "skill_search", "brain_read",
-    "brain_search", "chat_fullness",
+    "brain_search", "chat_fullness", "kept_result_read",
     "blackboard_read", "mcp_list_resources", "mcp_read_resource", "integration_list", "tool_list",
     "secret_list", "downloads_list", "pixio_models", "pixio_params", "worklist_status", "calculate",
     "browser_read_page", "browser_screenshot", "browser_get_elements", "browser_list_tabs",
@@ -9145,6 +9145,33 @@ def tool_message_text(content: Any, cap: "int | None") -> str:
     head = keep * 2 // 3
     tail = keep - head
     return text[:head] + note + (text[-tail:] if tail else "")
+
+
+def kept_tool_message(ctx: Any, content: Any, cap: "int | None") -> str:
+    """:func:`tool_message_text`, and a result over the cap is put by for
+    :func:`settle_kept_results` (the intelligence plan, release 8:
+    ``tools/kept_results`` holds the rules). What comes back is exactly
+    :func:`tool_message_text`'s answer. MIRROR NOTE (lock-step): both lanes
+    build a tool message's text through this."""
+    from ..tools import kept_results as _kept
+
+    return _kept.hold(ctx, content, TOOL_MESSAGE_CHARS if cap is None else cap, cut=tool_message_text)
+
+
+async def settle_kept_results(d: Any, msgs: list, ctx: Any, **lists: Any) -> int:
+    """The end of a tool round: each result :func:`kept_tool_message` put by
+    is kept whole for this chat, ``kept_result_read`` joins the turn (IN
+    PLACE: ``lists`` are the lane's own ``armed`` / ``auto_armed`` /
+    ``tool_specs`` / ``overrides`` / ``armed_grant`` and its ceilings), and
+    the tool message then shows the start, the end and the one line that says
+    how to read the rest. Anything that cannot be kept stays the old cut.
+    Returns how many were kept. MIRROR NOTE (lock-step): both lanes call it
+    at the end of a tool round, before the round's offers. Never raises."""
+    from ..tools import kept_results as _kept
+
+    return await _kept.settle(
+        d.platform, ctx, msgs, lambda: _kept.arm_chat(d, max_tools=_MAX_ARMED_TOOLS, **lists),
+    )
 
 
 def turn_session_id(session_id: "str | None") -> str:
@@ -15910,7 +15937,8 @@ async def run_chat_turn(
                                            name=(_harness.called_as(tc) if _harness is not None else tc.name),
                                            # Part 3, Phase 3: a harness turn's own cap,
                                            # and a cut is said (lock-step: routes/chat.py).
-                                           content=tool_message_text(
+                                           content=kept_tool_message(
+                                               ctx,
                                                content, getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
                                            ),
                                            # v1.371.0: a picture the tool handed
@@ -15919,6 +15947,12 @@ async def run_chat_turn(
                                            images=tool_result_images(result, ran)))
                     if msgs[-1].images:
                         trim_tool_images(msgs)
+            # A RESULT OVER THE LIMIT IS KEPT WHOLE (release 8 of the
+            # intelligence plan). MIRROR NOTE (lock-step): routes/chat.py.
+            await settle_kept_results(
+                d, msgs, ctx, armed=armed, auto_armed=auto_armed, tool_specs=tool_specs,
+                overrides=overrides, armed_grant=armed_grant, ceiling=_arm_ceiling, harness=_harness,
+            )
             # THE SCRIPT TOOL, OFFERED BY WHAT THE MODEL IS DOING (v1.473.0):
             # after the fourth successful call of one reading tool it joins
             # the turn for the next round. Plain chat only (a coding session

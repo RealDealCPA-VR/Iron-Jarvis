@@ -456,6 +456,10 @@
       "ok": "tested a web service",
       "failed": "tried a web service test and it failed"
     },
+    "kept_result_read": {
+      "ok": "read more of a long result",
+      "failed": "tried a read of a long result and it failed"
+    },
     "lesson_add": {
       "ok": "added a lesson",
       "failed": "tried a lesson and it failed"

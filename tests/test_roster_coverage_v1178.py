@@ -276,6 +276,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # (agents.runtime._CHAT_ONLY_AUTO) and inside a run it says so. Pinned by
     # tests/test_intel_06_chat_fullness.py.
     "chat_fullness",
+    # The intelligence plan, release 8: it reads a part of a long result that
+    # was kept for the chat, run or coding session it is asked in. No roster
+    # lists it and no words arm it: a lane puts it on a turn only when that
+    # turn's own result was kept (tools/kept_results.arm_chat / arm_run).
+    # Pinned by tests/test_intel_08_kept_results_lanes.py.
+    "kept_result_read",
     # Next leaps 12-a: coding work from the phone — the card goes to the
     # sender the phone door proved, so only the phone's own chat turn arms it
     # (records_build.build_tools_for, phone_code.door_open); an agent run has

@@ -126,6 +126,7 @@
     "image_resize",
     "integration_list",
     "integration_test",
+    "kept_result_read",
     "lesson_add",
     "list_agents",
     "list_files",
@@ -390,6 +391,7 @@
     "image_resize": "make a file",
     "integration_list": "list your web services",
     "integration_test": "test a web service",
+    "kept_result_read": "read more of a long result",
     "lesson_add": "add a lesson to your preferences",
     "list_agents": "list the agents",
     "list_files": "look in a folder",
@@ -916,6 +918,10 @@
     "integration_test": [
       "Tested a web service",
       "Testing a web service"
+    ],
+    "kept_result_read": [
+      "Read more of a long result",
+      "Reading more of a long result"
     ],
     "lesson_add": [
       "Added a lesson",
@@ -1484,6 +1490,7 @@
     "image_resize": "make",
     "integration_list": "",
     "integration_test": "",
+    "kept_result_read": "",
     "lesson_add": "",
     "list_agents": "",
     "list_files": "folder",

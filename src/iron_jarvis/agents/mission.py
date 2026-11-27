@@ -505,6 +505,9 @@ _RUN_TOOL_WORDS: dict[str, tuple[str, str]] = {
     "work_history": ("looked up earlier work", "work lookup"),
     # The intelligence plan, release 6. Twin: lib/runWords.ts AGENT_TOOLS.
     "chat_fullness": ("looked up what is filling this chat", "fullness lookup"),
+    # The intelligence plan, release 8 (tools/kept_results.py). Twin:
+    # lib/runWords.ts AGENT_TOOLS.
+    "kept_result_read": ("read more of a long result", "read of a long result"),
     "message_agent": ("messaged a teammate", "message to a teammate"),
     "blackboard_post": ("posted a note for the team", "team note"),
     "blackboard_read": ("read the team's notes", "team notes read"),

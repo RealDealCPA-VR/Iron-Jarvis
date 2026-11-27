@@ -50,6 +50,7 @@ from ..envelope.profile import CapabilityProfile
 from ..providers.adapters.base import LLMMessage
 from ..sandbox.native import host_os_line
 from ..tools.base import SpendCheck, ToolContext, spend_checks_for, spend_words_for
+from ..tools import kept_results as _kept_results
 from ..tools.builtins import is_own_source
 from ..tools.permissions import SAFE_HEADLESS_TOOLS, asks_each_use, runs_unasked
 from ..tools.rehearsal import holds as _rehearsal_holds
@@ -1134,6 +1135,17 @@ def note_told(engine, session, parts: Iterable[str]) -> None:
 #: DB transcript). Without it, a large read/shell/grep result is re-sent on every
 #: subsequent step of the loop — O(n^2) token growth at full input price.
 _MAX_TOOL_CONTEXT_CHARS = 16000
+
+
+def _cut_tool_context(content: Any, cap: int = _MAX_TOOL_CONTEXT_CHARS) -> str:
+    """One tool result as an agent run's model reads it when it could not be
+    kept whole (``tools/kept_results``): its head, and a line that says how
+    much is missing. A result under the cap is unchanged."""
+    content = str(content)
+    if len(content) <= cap:
+        return content
+    head = content[:_MAX_TOOL_CONTEXT_CHARS][:cap]
+    return head + f"\n[... cut here: {len(content) - len(head):,} more characters are not shown]"
 #: Per-step STREAMED-OUTPUT ceiling (v1.228.0, RT6). A looping local model
 #: can stream forever (measured ~400k frames/s on a mock), and nothing ended
 #: the step but Cancel. Past this many characters the stream is closed and
@@ -5175,6 +5187,18 @@ class AgentRuntime:
         else:
             self._waiting_depth[run.id] = depth
 
+    def _arm_kept_reader(self, session: Session, agent_def: AgentDefinition, tool_specs: list) -> bool:
+        """`kept_result_read` joins this run's tool list, in place (release 8
+        of the intelligence plan, ``tools/kept_results``). Never over a rule
+        of the run (``_trust_overrides``): a run another computer's task
+        started is denied every tool off its keep list, the reader with them,
+        so its long results are cut as before."""
+        try:
+            return _kept_results.arm_run(
+                self.p, tool_specs, self._trust_overrides(session, agent_def))
+        except Exception:  # noqa: BLE001 — not armed: the old cut
+            return False
+
     def _offer_script_tool(self, session: Session, tool_specs: list, state: dict, messages: list) -> bool:
         """Add `tool_script` to a run that keeps making the same read
         (v1.473.0). Returns whether it was added. Never raises."""
@@ -5362,6 +5386,11 @@ class AgentRuntime:
         # them (serialised once — they do not change between its steps), so
         # the budget planner can price them against a KNOWN window.
         _tools_blob: str | None = None
+        # Release 8 of the intelligence plan: a session that already holds a
+        # kept result (this run was picked up after a restart, or is a later
+        # piece of the same task) has the reader from its first step.
+        if await _kept_results.held(self.p, session.id):
+            self._arm_kept_reader(session, agent_def, tool_specs)
         for _ in range(max_steps):
             # STOP ON ONE TEAMMATE (v1.309.0): a delegated run has no task of
             # its own to cancel, so the user's Stop is the row — read at every
@@ -6157,12 +6186,13 @@ class AgentRuntime:
                             if inj["flagged"]
                             else content
                         )
-                if len(content) > _MAX_TOOL_CONTEXT_CHARS:
-                    dropped = len(content) - _MAX_TOOL_CONTEXT_CHARS
-                    content = (
-                        content[:_MAX_TOOL_CONTEXT_CHARS]
-                        + f"\n[... truncated {dropped} chars — full output in the transcript]"
-                    )
+                # Release 8 of the intelligence plan: a result over the cap is
+                # put by here (what comes back now is the cut, as always) and
+                # kept whole once the step's results are in (`settle` below).
+                content = _kept_results.hold(
+                    ctx, content, _MAX_TOOL_CONTEXT_CHARS,
+                    cut=_cut_tool_context, tail=False,
+                )
 
                 # THE BREAKER (contract 2). Bookkeeping runs AFTER the truncation
                 # above so its note can never be the thing that gets cut — the
@@ -6254,6 +6284,12 @@ class AgentRuntime:
             # fourth successful call of one reading tool it joins the run for
             # the next step, and the step's last result says so. In place:
             # the caller's list is the one every later step reads.
+            # (First, release 8: what this step's results held over the cap
+            # is kept whole for the run, and its reader joins the same list.)
+            await _kept_results.settle(
+                self.p, ctx, messages,
+                lambda: self._arm_kept_reader(session, agent_def, tool_specs),
+            )
             self._offer_script_tool(session, tool_specs, _bstate, messages)
             await asyncio.to_thread(self._save, run)  # v1.226.0: off the loop
             if transcript:

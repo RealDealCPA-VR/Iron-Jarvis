@@ -70,6 +70,10 @@ NOT_FOR_CHAT = frozenset({
     # own chat turn by its door (``harness/phone_code.door_open``); anywhere
     # else it refuses, so a lookup never offers it.
     "code_start",
+    # The intelligence plan, release 8: it reads a long result kept for the
+    # chat by a handle only that turn was given (``tools/kept_results``). A
+    # lane arms it when a result is kept; nobody asks for it in words.
+    "kept_result_read",
 })
 
 #: Tools that read and change nothing although they do not declare themselves
