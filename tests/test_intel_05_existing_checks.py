@@ -1060,7 +1060,7 @@ def test_a_required_file_that_does_not_open_is_said_in_plain_words(tmp_path):
     assert got["summary.xlsx"] == (R.LOOK, "it is on disk (32 bytes), and the check of required files did not pass it")
     assert got["odd.docx"] == (R.LOOK, "it is on disk (2 KB), and the check of required files did not pass it")
     assert got["late.pdf"] == (R.NOT_CHECKED, "not checked (the check ran out of time)")
-    assert got["x.bin"] == (R.LOOK, "the check of required files could not read it")
+    assert got["x.bin"] == (R.LOOK, "the check of required files did not pass it")
     # A text file of blank space is "unreadable" to the older check as well, and it DID open that one: the row
     # says only that it did not pass.
     blank = tmp_path / "notes.md"

@@ -1688,8 +1688,58 @@ def test_a_workbook_is_opened_by_the_apps_own_reader_never_judged_by_the_names_o
     got = content.check_files([str(other)])
     assert [(c.check, c.result, c.detail) for c in got] == [
         (FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, PASSED, "no error cells"), (SHEET_TOTALS, PASSED, "1 total adds up")]
-    # ... and whether it asks to be worked out again is read from its workbook part, whatever it is called.
+    # ... and whether it asks to be worked out again is read from its workbook part, whatever it is called
+    # and wherever it sits: the package's own relationships say which part that is.
     assert content._recalculates(other) is True
+    with zipfile.ZipFile(other) as z:
+        assert content._workbook_part(z) == "xl/workbook2.xml"
+    with zipfile.ZipFile(plain) as z:
+        assert content._workbook_part(z) == "xl/workbook.xml"
+    deep = tmp_path / "deep.xlsx"
+    with zipfile.ZipFile(plain) as zin, zipfile.ZipFile(deep, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "_rels/.rels":
+                data = data.replace(b"xl/workbook.xml", b"/book/main.xml")
+            zout.writestr({"xl/workbook.xml": "book/main.xml"}.get(item.filename, item.filename), data)
+    with zipfile.ZipFile(deep) as z:
+        assert content._workbook_part(z) == "book/main.xml" and not [n for n in z.namelist() if n.startswith("xl/workbook")]
+    assert content._recalculates(deep) is True, "a workbook part outside xl/ was not read for its setting"
+    stands = tmp_path / "deep-stands.xlsx"
+    with zipfile.ZipFile(deep) as zin, zipfile.ZipFile(stands, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            zout.writestr(item.filename, data.replace(_FULL_CALC, b"") if item.filename == "book/main.xml" else data)
+    assert content._recalculates(stands) is False
+    # A package that names no office document, or whose list of relationships cannot be read: in doubt, True
+    # (though a part called xl/workbook.xml is there, and stands by its results).
+    kept = _stands_by(plain, tmp_path / "kept.xlsx")
+    assert content._recalculates(kept) is False
+
+    def with_rels(name: str, rels: "bytes | None") -> Path:
+        odd = tmp_path / name
+        with zipfile.ZipFile(kept) as zin, zipfile.ZipFile(odd, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename == "_rels/.rels":
+                    if rels is not None:
+                        zout.writestr(item.filename, rels)
+                    continue
+                zout.writestr(item.filename, zin.read(item.filename))
+        return odd
+
+    for name, rels in (("none.xlsx", b"<Relationships xmlns='x'/>"), ("junk.xlsx", b"<not xml"), ("norels.xlsx", None)):
+        assert content._recalculates(with_rels(name, rels)) is True, name
+    # The office document is told by the KIND of its relationship, wherever it stands in the list and
+    # however its attributes are written (another relationship first, single quotes, the Strict kind).
+    listed = with_rels("listed.xlsx", (
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/'
+        b'core-properties" Target="docProps/core.xml"/>'
+        b"<Relationship Target='/xl/workbook.xml' Id='rId1' "
+        b"Type='http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument'/></Relationships>"))
+    with zipfile.ZipFile(listed) as z:
+        assert content._workbook_part(z) == "xl/workbook.xml"
+    assert content._recalculates(listed) is False
 
 
 def test_a_workbook_whose_cells_the_reader_does_not_see_is_not_called_empty(tmp_path):

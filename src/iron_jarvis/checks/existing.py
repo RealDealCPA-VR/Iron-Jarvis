@@ -169,7 +169,7 @@ def required_file_checks(states: Iterable[Any]) -> list[Check]:
                 # space here too: only what is true of each is kept (it did
                 # not pass that check).
                 said = (f"{on_disk}, and the check of required files did not pass it" if size
-                        else "the check of required files could not read it")
+                        else "the check of required files did not pass it")
             else:
                 said = plain_words(str(getattr(s, "detail", "") or ""))
             out.append(Check(REQUIRED_FILE, result, said, file=str(getattr(s, "rel", "") or "")))

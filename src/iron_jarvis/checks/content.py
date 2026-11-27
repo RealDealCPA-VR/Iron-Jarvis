@@ -545,20 +545,35 @@ def _older_container(path: Path) -> str:
 #: opened (``<calcPr fullCalcOnLoad="1">``). A writer that cannot work
 #: formulas out says so this way and saves a placeholder (0) as each result.
 _FULL_CALC_RX = re.compile(rb"<(?:\w+:)?calcPr\b[^>]*\bfullCalcOnLoad\s*=\s*[\"'](?:1|true)[\"']", re.IGNORECASE)
-_TOP_PART_RX = re.compile(r"xl/[^/]+\.xml", re.IGNORECASE)
+
+
+_REL_RX = re.compile(rb"<(?:[\w.-]+:)?Relationship\b([^>]*)>")
+_REL_TYPE_RX = re.compile(rb"\bType\s*=\s*[\"']([^\"']*)[\"']")
+_REL_TARGET_RX = re.compile(rb"\bTarget\s*=\s*[\"']([^\"']*)[\"']")
+
+
+def _workbook_part(zf: Any) -> str:
+    """The package's own workbook part: the one its relationships name as
+    the office document (``xl/workbook.xml`` in most files; any name, in
+    any folder, in others). Read as text (no XML parser is handed a file
+    somebody else may have shaped). Raises when the package names none."""
+    for rel in _REL_RX.finditer(zf.read("_rels/.rels")):
+        kind, target = _REL_TYPE_RX.search(rel.group(1)), _REL_TARGET_RX.search(rel.group(1))
+        if kind is not None and target is not None and kind.group(1).endswith(b"/officeDocument"):
+            return target.group(1).decode("utf-8").lstrip("/")
+    raise KeyError("the package names no office document")
 
 
 def _recalculates(path: Path) -> bool:
     """Does the workbook say its saved results are NOT to be trusted (it
-    asks for a full recalculation on load)? Read from the file's own
-    workbook part, whatever it is called. True in any doubt: a saved result
-    is then never read as "saved", and the formula is worked out here."""
+    asks for a full recalculation on load)? Read from the package's own
+    workbook part, found the way a reader finds it (:func:`_workbook_part`:
+    never by a name or a folder). True in any doubt (no such part, a
+    package that cannot be read): a saved result is then never read as
+    "saved", and the formula is worked out here."""
     try:
         with zipfile.ZipFile(path) as zf:
-            for name in zf.namelist():
-                if _TOP_PART_RX.fullmatch(name) and _FULL_CALC_RX.search(zf.read(name)):
-                    return True
-        return False
+            return _FULL_CALC_RX.search(zf.read(_workbook_part(zf))) is not None
     except Exception:  # noqa: BLE001 — in doubt, the saved results are not trusted
         log.debug("a workbook's calculation setting could not be read", exc_info=True)
         return True
