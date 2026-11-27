@@ -3805,25 +3805,29 @@ def register(app: FastAPI, d) -> None:
                     hold_local_only(d.platform.engine, tid, app_id)
 
             await asyncio.shield(asyncio.to_thread(_hold_all))
-        # The intelligence plan, release 5: what Iron Jarvis checked on the
-        # new chat's first reply belongs to the chat now named (never raises).
-        # AFTER the link is readable (`link_turn_holds` above: a reply still
-        # writing its rows reads it, `checks/turn._chat_of`), so no row lands
-        # between this homing and the link and is left with no chat. And
-        # AFTER the Local-only holds are written: `link_turn_holds` hands the
-        # turn's pending holds over ONCE, so nothing may be awaited between
-        # taking them and writing them (a request cancelled at this homing
-        # would otherwise lose a hold: a privacy setting, for a line of text).
-        from ...checks import record as _checks
-
-        await asyncio.to_thread(_checks.home_turn, d.platform.engine, turn_id, tid)
         # v1.435.0 (D3): a new chat's first turn that switched Local only on
         # or off from chat (`chat_local_only`) applies it to the chat now named.
         from ...providers.egress import set_thread_local_only, take_pending_local_only
 
         _pending_lo = take_pending_local_only(turn_id)
         if _pending_lo is not None:
-            await asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+            # Taken off the waiting list once, so written in a step the
+            # request's cancel cannot interrupt (as the holds above are).
+            await asyncio.shield(
+                asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+            )
+        # The intelligence plan, release 5: what Iron Jarvis checked on the
+        # new chat's first reply belongs to the chat now named (never raises).
+        # AFTER the link is readable (`link_turn_holds` above: a reply still
+        # writing its rows reads it, `checks/turn._chat_of`), so no row lands
+        # between this homing and the link and is left with no chat. And
+        # AFTER the Local only holds and the chat's own Local only switch
+        # are written: both are taken off a waiting list ONCE, so a request
+        # cancelled at this homing must find them already on the chat (a
+        # privacy setting is never lost for a line of text).
+        from ...checks import record as _checks
+
+        await asyncio.to_thread(_checks.home_turn, d.platform.engine, turn_id, tid)
         # Idea 39 (39-a, review): a schedule, watcher, workflow run or night
         # task a new chat's first turn set up before this link reports to the
         # chat now named.

@@ -538,6 +538,52 @@ async def test_a_link_cancelled_while_the_rows_are_homed_has_already_kept_its_lo
     assert egress.pending_holds_of(turn) == [], "the hold was taken and (had it been lost) could not be taken again"
 
 
+async def test_a_link_cancelled_while_the_rows_are_homed_has_already_switched_the_chat_to_local_only(
+        tmp_path, monkeypatch):
+    """PRIVACY, the chat's OWN switch. A new chat's first turn that turned
+    Local only on from chat leaves the choice waiting until the chat is
+    linked; it is taken ONCE. The homing of the checks is awaited only after
+    that choice is on the chat, so a request cancelled at the homing cannot
+    lose it."""
+    import asyncio
+    import threading
+
+    from iron_jarvis.core.models import ChatThreadRecord
+    from iron_jarvis.providers import egress
+    from tests.test_chat_turn_stop_v1241 import _asgi_post
+
+    app = create_app(str(tmp_path / "home"))
+    engine = app.state.platform.engine
+    with session_scope(engine) as db:
+        db.add(ChatThreadRecord(id="thread_switch", title="t", messages_json="[]"))
+        db.commit()
+    turn = "turn_switch_cancel"
+    assert egress.note_pending_local_only(turn, True) == "", "the turn was already linked"
+    assert egress.thread_local_only(engine, "thread_switch") is False
+    reached, release = threading.Event(), threading.Event()
+    seen: dict = {}
+    real = R.home_turn
+
+    def slow_home(*a, **kw):
+        seen["local_only"] = egress.thread_local_only(engine, "thread_switch")
+        reached.set()
+        release.wait(20)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(R, "home_turn", slow_home)
+    request = asyncio.create_task(_asgi_post(app, f"/chat/turns/{turn}/thread", {"thread_id": "thread_switch"}))
+    try:
+        assert await asyncio.to_thread(reached.wait, 20), "the link never reached the homing of the checks"
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    finally:
+        release.set()
+    assert seen["local_only"] is True, "the checks were homed before the chat's own Local only switch was written"
+    assert egress.thread_local_only(engine, "thread_switch") is True, "a cancelled link lost the chat's Local only switch"
+    assert egress.take_pending_local_only(turn) is None
+
+
 # --------------------------------------------------------------------------- #
 # S6: a hand-off and a coding reply get no plain-chat line from this path
 # --------------------------------------------------------------------------- #
