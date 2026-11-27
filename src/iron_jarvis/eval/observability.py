@@ -98,6 +98,15 @@ class Observability:
         This is the evidence the self-tuning router (§6) consults: only once a
         local model has *demonstrably* met a quality bar for a class of work do we
         start preferring it for that class.
+
+        WHAT REALLY HAPPENED (the intelligence plan, release 9): the evaluation's
+        ``completion`` says only that the run ENDED as completed. A session whose
+        record says the job was NOT done (``Session.outcome``: completed with
+        failures, needs you, did nothing — ``agents/outcome``, read from the
+        ledger, never the model's words) scores 0.0 here whatever its
+        completion said; a rehearsal (nothing was changed) is not evidence and
+        is left out. A session with no outcome recorded (older rows) keeps its
+        completion as before.
         """
         def _agent_value(at: object) -> str:
             return getattr(at, "value", at) if at is not None else ""
@@ -125,14 +134,30 @@ class Observability:
                         )
                     )
                 )
+                outcomes: dict[str, str] = {}
+                for sid, outcome in db.exec(
+                    select(Session.id, Session.outcome).where(
+                        Session.id.in_(list(sess_types.keys()))  # type: ignore[attr-defined]
+                    )
+                ):
+                    if outcome:
+                        outcomes[str(sid)] = str(outcome)
         except Exception:  # pragma: no cover - degrade rather than crash
             return None
 
-        scores: list[float] = [
-            float(completion)
-            for sid, completion in eval_rows
-            if task_class is None or task_class in sess_types.get(sid, set())
-        ]
+        from ..agents.outcome import OUTCOME_COMPLETED, OUTCOME_REHEARSED
+
+        scores: list[float] = []
+        for sid, completion in eval_rows:
+            if task_class is not None and task_class not in sess_types.get(sid, set()):
+                continue
+            outcome = outcomes.get(str(sid), "")
+            if outcome == OUTCOME_REHEARSED:
+                continue  # nothing was changed: not evidence either way
+            if outcome and outcome != OUTCOME_COMPLETED:
+                scores.append(0.0)  # the record says the job was not done
+                continue
+            scores.append(float(completion))
 
         if len(scores) < max(1, int(min_samples)):
             return None
