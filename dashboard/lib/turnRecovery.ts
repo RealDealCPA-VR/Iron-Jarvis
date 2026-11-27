@@ -29,6 +29,9 @@ import { askPhrase } from "@/lib/approvalWords";
  *  turn's own earlier tool output was trimmed). */
 export interface TurnRefit {
   dropped: number;
+  /** What was attached or remembered for this message was left out so the
+   *  request fits (the person's own words were sent whole). Absent = it was not. */
+  found_left_out?: boolean;
 }
 
 /** One card the user allowed this turn. `decision` is the daemon's answer
@@ -52,7 +55,8 @@ export function decodeRefit(raw: unknown): TurnRefit | null {
   if (!raw || typeof raw !== "object") return null;
   const n = (raw as { dropped?: unknown }).dropped;
   if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return null;
-  return { dropped: Math.floor(n) };
+  const found = (raw as { found_left_out?: unknown }).found_left_out === true;
+  return { dropped: Math.floor(n), ...(found ? { found_left_out: true } : {}) };
 }
 
 /** The `approved` field's normal form: rows with a tool name and an
@@ -86,9 +90,17 @@ export function decodeApproved(raw: unknown): ApprovedCall[] {
 export function refitLine(refit: TurnRefit | null | undefined): string | null {
   const r = decodeRefit(refit);
   if (!r) return null;
+  if (r.found_left_out) {
+    const older = r.dropped > 0 ? `${r.dropped} older message${r.dropped === 1 ? "" : "s"} and ` : "";
+    return `Left out ${older}what was attached or remembered for this message to fit this model`;
+  }
   if (r.dropped === 0) return "Shortened earlier tool results to fit this model";
   return `Left out ${r.dropped} older message${r.dropped === 1 ? "" : "s"} to fit this model`;
 }
+
+/** The "why" when what was attached or remembered for the message was left out. */
+export const REFIT_FOUND_TITLE =
+  "This model was too small for everything, so Iron Jarvis left out what was attached or remembered for this message. Your own words were sent whole. The answer did not see what was left out.";
 
 /** Hover words for the refit part: why, and what it means for the answer. */
 export const REFIT_TITLE =
@@ -105,6 +117,7 @@ export const REFIT_TOOLS_TITLE =
 export function refitTitle(refit: TurnRefit | null | undefined): string | null {
   const r = decodeRefit(refit);
   if (!r) return null;
+  if (r.found_left_out) return REFIT_FOUND_TITLE;
   return r.dropped === 0 ? REFIT_TOOLS_TITLE : REFIT_TITLE;
 }
 

@@ -6144,6 +6144,7 @@ async def chat_stream(
         # v1.355.0 (G55): what a too-long refit left out this turn; lock-step
         # with chat_turn's `_refit_note`.
         _refit_note: dict[str, int] = {}
+        _stable.note_shed(_refit_note)  # release 7: the block gave way before the request was sent (lock-step)
         # v1.344.0 (M3): every labelled refusal — (tool, label) in call order
         # — for `refusal_footnotes`; lock-step with chat_turn.
         refused_tools: list[tuple[str, str]] = []

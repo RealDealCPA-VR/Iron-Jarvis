@@ -296,6 +296,8 @@ class StableTurn:
         self._built_last: "str | None" = None
         self._stayed: "frozenset[str]" = frozenset()
         self._asked: "frozenset[str]" = frozenset()
+        #: "found" / "all" when the block gave way so the request fits ("" = whole).
+        self.block_shed = ""
         self._order: list[str] = list(self.kept.tools)
 
     # -- the attachments seam ------------------------------------------------ #
@@ -570,7 +572,18 @@ class StableTurn:
             raise RuntimeError("the final plan lost the newest message's rider")
         # When the room is too small for the person's newest message AND the
         # whole block, the block gives first: what was found, then the rest.
+        # The reply says so to the person (``note_shed``), and the history is
+        # planned once more with the lighter block, so earlier messages that
+        # fit again are sent again.
         shed = self._shed_block(d, final, once, system, int(fixed or 0), provider, model)
+        if shed is not None:
+            self.block_shed = "found" if shed else "all"
+            once = shed
+            riders[newest] = once
+            final = _ct._plan_context(
+                d, body, system, provider, model, messages=items,
+                riders=riders, fixed_tokens=int(fixed or 0), step=CUT_STEP,
+            )
         if final.recap:
             # The recap quotes the start of each left-out message: neutralised
             # like every other text that is not the one real block.
@@ -592,8 +605,6 @@ class StableTurn:
         last_user = -1
         for i, m in enumerate(final.messages):
             rider = str(m.get("rider") or "")
-            if shed is not None and rider == once:
-                rider = shed
             # Everything that is not the one real block is neutralised of the
             # block's marker lines: an earlier message (a model that echoed
             # them cannot plant them in history) and the person's own words.
@@ -605,15 +616,23 @@ class StableTurn:
         if last_user >= 0:
             target = out[last_user]
             rider = str(final.messages[last_user].get("rider") or "")
-            if shed is not None and rider == once:
-                rider = shed
             # The person's own words are what the next reply sends again.
-            if once and rider and rider in (once, shed):
-                target.stable_chars = len(target.content) - len(rider)
+            if once and rider == once:
+                target.stable_chars = len(target.content) - len(once)
             if images:
                 target.images = images
         await asyncio.to_thread(self._save, [P.spec_name(s) for s in tool_specs or ()])
         return system, SentMessages(out), final
+
+    def note_shed(self, record: Any) -> None:
+        """Tell the reply's own record (the lanes' ``_refit_note``, which the
+        "to fit this model" note is written from) that what was attached or
+        remembered for this message was left out. Never raises."""
+        try:
+            if self.block_shed and isinstance(record, dict):
+                record["found_left_out"] = True
+        except Exception:  # noqa: BLE001 — a note never breaks a reply
+            pass
 
     def _shed_block(self, d: Any, final: Any, once: str, system: str, fixed: int, provider: str,
                     model: str) -> "str | None":

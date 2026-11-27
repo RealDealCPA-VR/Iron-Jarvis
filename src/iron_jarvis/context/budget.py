@@ -421,6 +421,12 @@ def plan_history(
     # The newest message's rider is held back first: it is always sent.
     newest_rider = beside[-1] if beside else ""
     budget -= _est(newest_rider) if newest_rider else 0
+    # What THIS release takes from the room (the definitions and the newest
+    # message's rider). Only that may give way to keep the person's newest
+    # message whole (below); the caller's reserve and the recap's are never
+    # spent on it, so a plan without riders or definitions is the one it
+    # always was (a task door's room is held to the token).
+    r7_room = max(0, int(fixed_tokens or 0)) + (_est(newest_rider) if newest_rider else 0)
 
     plan = HistoryPlan(window=win, history_budget=max(0, budget))
     # Raw demand, measured BEFORE any cap or trim: what this conversation would
@@ -479,7 +485,7 @@ def plan_history(
         # still leave room for it, it is kept whole (as before this release,
         # which counted neither), and the per-call fit sheds history and, if
         # it must, the found part of the block (``chat_turn._shrink_to_window``).
-        if win - system_tokens - reserve >= _est(last["content"]) + 4:
+        if budget + r7_room >= _est(last["content"]) + 4:
             keep = len(last["content"])
         plan.messages = [_with_rider({"role": last["role"], "content": last["content"][:keep]})]
         plan.clipped_last = len(last["content"]) > keep
@@ -515,11 +521,13 @@ def plan_history(
                 int(budget * effective_chars_per_token(cpt)),
             )
             # Release 7 (the same test as the "no room at all" branch above):
-            # the tool definitions, what rides beside the message and the
-            # recap reserve are counted now, and they are what gives first.
-            # While the system prompt and the reply reserve ALONE leave room
-            # for the person's newest message, it is kept whole.
-            if win - system_tokens - reserve >= _est(m["content"]) + 4:
+            # the tool definitions and what rides beside the message are
+            # counted now, and they are what gives first. While the room
+            # WITHOUT them (the reply reserve and the recap's still held)
+            # holds the person's newest message, it is kept whole. Never the
+            # recap reserve: a caller that prices its own left-out line by it
+            # (the task door) would overflow its room.
+            if budget + r7_room >= _est(m["content"]) + 4:
                 room_chars = len(m["content"])
             clipped = m["content"][:room_chars]
             kept.append(_with_rider({"role": m["role"], "content": clipped}))

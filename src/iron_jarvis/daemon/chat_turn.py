@@ -1091,6 +1091,23 @@ def _shrink_to_window(
     return sent, sent_system, keep_from
 
 
+def _found_was_left_out(before, after) -> bool:
+    """Did the refit leave out what was found for the question (the found
+    part of its block, or the whole block)? Read off the two requests."""
+    from ..context import prefix as _prefix
+
+    def said(msgs, mark: str) -> bool:
+        return any(mark in (getattr(m, "content", "") or "") for m in msgs or () if getattr(m, "role", "") == "user")
+
+    try:
+        # The found part, or the whole block (one with no found part, too:
+        # its memory and tools notes were left out all the same).
+        return any(said(before, mark) and not said(after, mark)
+                   for mark in (_prefix.FOUND_TOP, _prefix.ONCE_TOP))
+    except Exception:  # noqa: BLE001 — a note never breaks a reply
+        return False
+
+
 def _question_without_found(msgs, head: int):
     """*msgs* with the found part of the question's block left out
     (``context/prefix.without_found``), or None when there is none to leave
@@ -1164,6 +1181,8 @@ def _overflow_refit(
             sent2, system2, dropped = fitted
             if record is not None:
                 record["dropped"] = max(int(record.get("dropped", 0) or 0), int(dropped))
+                if _found_was_left_out(msgs, sent2):
+                    record["found_left_out"] = True
             log.info(
                 "chat: %s refused the request as too long; retrying once in %d tokens",
                 provider or "the default model", window,
@@ -1308,12 +1327,18 @@ def refit_receipt(record: "dict[str, int] | None") -> "dict[str, int] | None":
     both lanes (null, never absent), like ``adapted``. MIRROR NOTE
     (lock-step): chat_turn's POST response and routes/chat.py's done frame
     both carry it from here."""
-    if not record or "dropped" not in record:
+    if not record or ("dropped" not in record and not record.get("found_left_out")):
         return None
     try:
-        return {"dropped": max(0, int(record["dropped"]))}
+        out = {"dropped": max(0, int(record.get("dropped", 0) or 0))}
     except (TypeError, ValueError):
         return None
+    # Release 7: what was attached or remembered for the message was left
+    # out so the request fits (the person's own words were sent whole). The
+    # key is present only then.
+    if record.get("found_left_out"):
+        out["found_left_out"] = True
+    return out
 
 
 #: How many approvals one reply records (v1.355.0, G64). A turn answers a
@@ -15051,6 +15076,7 @@ async def run_chat_turn(
     # reply's receipt (`refit_receipt`). MIRROR NOTE (lock-step): the stream
     # lane keeps the same dict.
     _refit_note: dict[str, int] = {}
+    _stable.note_shed(_refit_note)  # release 7: the block gave way before the request was sent (lock-step)
     # USAGE LEDGER, EXACTLY ONE TERMINAL ROW (v1.510.0, second review L6) —
     # the lock-step copy of the stream lane's `_persist_once`. Every terminal
     # path below goes through it, so the cancellation guards can run

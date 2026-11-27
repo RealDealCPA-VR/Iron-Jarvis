@@ -837,6 +837,14 @@ def test_through_the_lanes_a_small_window_cuts_the_block_before_the_persons_word
     assert block == "" or (P.FOUND_LEFT_OUT in block and block.rstrip().endswith(P.ONCE_BOTTOM) and DATE_LINE in block)
     if block:
         assert call["stable_chars"][-1] == len(pasted)
+    # The PERSON is told on the reply, in the record its "to fit this model" note is written from.
+    import re as _re
+
+    assert _re.search(r'"found_left_out":\s*true', chat.replies[-1].text), "only the model was told"
+    # A reply where nothing gave way says nothing of the kind.
+    roomy = Chat(tmp_path / "roomy", lane)
+    roomy.say("hello there, good morning")
+    assert "found_left_out" not in roomy.replies[-1].text
 
 
 def test_the_refit_gives_up_the_rest_of_the_block_before_any_of_the_persons_words(tmp_path):
@@ -918,3 +926,64 @@ def test_a_kept_reader_the_lookup_finds_for_this_message_does_its_full_work(tmp_
     chat.say("I wonder what that picture holds", turn_id="turn-lk-2", **more)
     assert ["read_document"] in routes, f"control: the routing call picked it: {routes}"
     assert read == ["looked-up.png"], "found by the lookup in this turn, it still did no reading"
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_when_the_block_gives_way_earlier_messages_that_fit_again_are_sent(tmp_path, lane):
+    """The history is planned once more with the lighter block: the earlier
+    exchange, left out while the whole block was held back for, is sent."""
+    chat = Chat(tmp_path / "home", lane)
+    platform = chat.app.state.platform
+    chat.ledger.write_text("ZQXLEDGER a line of the ledger\n" * 400, encoding="utf-8")
+    chat.history += [{"role": "user", "content": "ZQXEARLIER what is the supplier's name?"},
+                     {"role": "assistant", "content": "ZQXEARLIER It is Hartley Flour."}]
+    platform.config.model_context_windows = {platform.config.default_provider: 7000}
+    question = ("Here is the note I wrote for the supplier, please tidy it up. " * 95)[:5873]
+    call = chat.say(question, attachments=["ledger.txt"])
+    newest = call["messages"][-1][1]
+    assert P.own_words(newest) == question and "ZQXLEDGER" not in newest and P.FOUND_LEFT_OUT in newest
+    assert [c for _r, c in call["messages"][:-1]] == ["ZQXEARLIER what is the supplier's name?",
+                                                      "ZQXEARLIER It is Hartley Flour."], call["messages"][:-1]
+
+
+def test_the_reply_says_when_what_was_found_was_left_out(tmp_path):
+    """The record the reply's note is written from: the key is there only
+    when what was found was left out, before the request (``note_shed``) or
+    by the refit after a "too long" refusal."""
+    from iron_jarvis.platform import build_platform
+
+    assert chat_turn.refit_receipt({}) is None and chat_turn.refit_receipt(None) is None
+    assert chat_turn.refit_receipt({"dropped": 3}) == {"dropped": 3}
+    assert chat_turn.refit_receipt({"found_left_out": True}) == {"dropped": 0, "found_left_out": True}
+    assert chat_turn.refit_receipt({"dropped": 2, "found_left_out": True}) == {"dropped": 2, "found_left_out": True}
+    whole, shed = CP.StableTurn(active=True), CP.StableTurn(active=True)
+    shed.block_shed = "found"
+    record: dict = {}
+    whole.note_shed(record)
+    assert record == {}
+    shed.note_shed(record)
+    assert record == {"found_left_out": True}
+    # The refit: the request does not fit with what was found, it fits without it.
+    d = SimpleNamespace(platform=build_platform(str(tmp_path / "home")))
+    question = "what does the attached ledger say about March?"
+    sent = question + P.once_block(P.own("\n\nA NOTE") + ("\n\n# Attachments\n" + "ZQXFOUND " * 4000), lead=DATE_LINE)
+    msgs = [LLMMessage(role="user", content=sent, stable_chars=len(question))]
+    noted: dict = {}
+    refit = chat_turn._overflow_refit(d, msgs, "SYSTEM", "mock", "mock", head=1, record=noted, tools=[])
+    again = refit(RuntimeError("this model's maximum context length is 8000 tokens"), msgs, "SYSTEM")
+    assert again is not None and P.own_words(again[0][0].content) == question and "ZQXFOUND" not in again[0][0].content
+    assert chat_turn.refit_receipt(noted) == {"dropped": 0, "found_left_out": True}
+    # A block with nothing found in it, left out whole: the person is told too.
+    sent = question + P.once_block(P.own("\n\nA NOTE " + "ZQXOWN " * 5000), lead=DATE_LINE)
+    msgs = [LLMMessage(role="user", content=sent, stable_chars=len(question))]
+    noted = {}
+    again = chat_turn._overflow_refit(d, msgs, "SYSTEM", "mock", "mock", head=1, record=noted, tools=[])(
+        RuntimeError("this model's maximum context length is 8000 tokens"), msgs, "SYSTEM")
+    assert again is not None and again[0][0].content == question
+    assert chat_turn.refit_receipt(noted) == {"dropped": 0, "found_left_out": True}, "the whole block went unsaid"
+    plain = [LLMMessage(role="user", content="x " * 9000), LLMMessage(role="assistant", content="ok"),
+             LLMMessage(role="user", content=question)]
+    noted = {}
+    again = chat_turn._overflow_refit(d, plain, "SYSTEM", "mock", "mock", head=3, record=noted, tools=[])(
+        RuntimeError("this model's maximum context length is 4000 tokens"), plain, "SYSTEM")
+    assert again is not None and chat_turn.refit_receipt(noted) == {"dropped": 2}, "history alone: no such key"
