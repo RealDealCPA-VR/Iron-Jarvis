@@ -68,6 +68,8 @@ RUNS_MAX = 20_000
 TOOL_ROWS_MAX = 20_000
 #: Two lists of tools match when they share this many, in the same order.
 SHARED_TOOLS = 2
+#: Units the grouping rule looks at, at most (the newest).
+UNITS_MAX = 2000
 #: Candidates one :func:`detect` call adds at most.
 MINT_MAX = 5
 #: A tool row is written a moment before its turn's run row (the ledger's
@@ -137,6 +139,15 @@ def _ordered_shared(a: Sequence[str], b: Sequence[str]) -> int:
     return prev[-1]
 
 
+def _work_matches(a: Unit, b: Unit) -> bool:
+    """The work half of the rule: two shared tools in order, or the same
+    file kinds in and out (not none)."""
+    if _ordered_shared(a.tools, b.tools) >= SHARED_TOOLS:
+        return True
+    same_kinds = a.kinds_in == b.kinds_in and a.kinds_out == b.kinds_out
+    return same_kinds and bool(a.kinds_in or a.kinds_out)
+
+
 def matches(a: Unit, b: Unit) -> bool:
     """Are ``a`` and ``b`` the same kind of task? The words rule AND (two
     shared tools in order, or the same file kinds in and out, not none)."""
@@ -144,10 +155,7 @@ def matches(a: Unit, b: Unit) -> bool:
 
     if similarity(task_tokens(a.words), task_tokens(b.words)) < SAME_TASK:
         return False
-    if _ordered_shared(a.tools, b.tools) >= SHARED_TOOLS:
-        return True
-    same_kinds = a.kinds_in == b.kinds_in and a.kinds_out == b.kinds_out
-    return same_kinds and bool(a.kinds_in or a.kinds_out)
+    return _work_matches(a, b)
 
 
 def day_of(start: float, tz: "tzinfo | None" = None) -> date:
@@ -167,37 +175,56 @@ def eligible(u: Unit) -> bool:
     return len(task_tokens(u.words)) >= MIN_TOKENS
 
 
+def group_of(us: list[Unit], *, tz: "tzinfo | None" = None) -> Group:
+    """The group these units make, newest first: the tools EVERY unit used
+    (in the newest one's order), the file kinds when all agree, the days.
+    Pure."""
+    us = sorted(us, key=lambda u: (-u.start, u.ref))
+    seed = us[0]
+    return Group(
+        units=us, tools=[t for t in seed.tools if all(t in u.tools for u in us)],
+        kinds_in=sorted(seed.kinds_in) if all(u.kinds_in == seed.kinds_in for u in us) else [],
+        kinds_out=sorted(seed.kinds_out) if all(u.kinds_out == seed.kinds_out for u in us) else [],
+        days=sorted({day_of(u.start, tz).isoformat() for u in us}),
+    )
+
+
+def qualifies(us: list[Unit], *, tz: "tzinfo | None" = None) -> bool:
+    """D-19.1: at least :data:`MIN_UNITS` units on :data:`MIN_DAYS` days."""
+    return len(us) >= MIN_UNITS and len({day_of(u.start, tz) for u in us}) >= MIN_DAYS
+
+
 def groups(units: Iterable[Unit], *, tz: "tzinfo | None" = None) -> list[Group]:
     """The repeats among ``units`` (see the module docstring). PURE: reads
     only its input. Each unit joins at most one group; a group is built
-    around its newest unit, so the draft is written on the newest model."""
-    pool = sorted((u for u in units if eligible(u)), key=lambda u: (-u.start, u.ref))
+    around its newest unit, so the draft is written on the newest model.
+    BOUNDED: the newest :data:`UNITS_MAX` eligible units only, each
+    request's words split once (the night review runs this on a thread
+    that holds the interpreter)."""
+    from ..templates import SAME_TASK, similarity, task_tokens
+
+    pool = sorted((u for u in units if eligible(u)), key=lambda u: (-u.start, u.ref))[:UNITS_MAX]
+    words = [task_tokens(u.words) for u in pool]
     taken: set[int] = set()
     out: list[Group] = []
     for i, seed in enumerate(pool):
         if i in taken:
             continue
-        members = [(i, seed)]
+        members = [seed]
+        picked = [i]
         for j in range(i + 1, len(pool)):
             other = pool[j]
-            if j in taken or other.owner != seed.owner:
-                continue
             if seed.start - other.start > WINDOW_DAYS * 86400:
                 break  # oldest last: none further back can be in the window
-            if matches(seed, other):
-                members.append((j, other))
-        days = {day_of(u.start, tz) for _, u in members}
-        if len(members) < MIN_UNITS or len(days) < MIN_DAYS:
+            if j in taken or other.owner != seed.owner:
+                continue
+            if similarity(words[i], words[j]) >= SAME_TASK and _work_matches(seed, other):
+                members.append(other)
+                picked.append(j)
+        if not qualifies(members, tz=tz):
             continue
-        taken.update(k for k, _ in members)
-        us = [u for _, u in members]
-        shared = [t for t in seed.tools if all(t in u.tools for u in us)]
-        out.append(Group(
-            units=us, tools=shared,
-            kinds_in=sorted(seed.kinds_in) if all(u.kinds_in == seed.kinds_in for u in us) else [],
-            kinds_out=sorted(seed.kinds_out) if all(u.kinds_out == seed.kinds_out for u in us) else [],
-            days=sorted(d.isoformat() for d in days),
-        ))
+        taken.update(picked)
+        out.append(group_of(members, tz=tz))
     return out
 
 
@@ -215,16 +242,23 @@ def _masked(text: str) -> str:
     return str(mask(str(text or "")) or "")
 
 
-def evidence_of(group: Group) -> dict[str, Any]:
+def evidence_of(group: Group, *, words: bool = True) -> dict[str, Any]:
     """What a chat candidate keeps (``evidence_json``): enough to find each
-    task again, never a file's name. Pure."""
+    task again, never a file's name. ``words=False`` (a DRAFT's evidence)
+    keeps none of the owner's words: the rejected-draft check reads them off
+    the candidate, which a deleted chat takes them from. Pure."""
+    def _unit(u: Unit) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "thread": u.ref, "start": u.start, "end": u.end if math.isfinite(u.end) else None,
+            "at": _iso(u.start), "provider": u.provider, "model": u.model,
+            "account": u.account, "local_only": bool(u.local_only),
+        }
+        if words:
+            row["words"] = _masked(u.words)[:2000]
+        return row
+
     return {
-        "units": [
-            {"thread": u.ref, "start": u.start, "end": u.end if math.isfinite(u.end) else None,
-             "at": _iso(u.start), "words": _masked(u.words)[:2000], "provider": u.provider, "model": u.model,
-             "account": u.account, "local_only": bool(u.local_only)}
-            for u in group.units
-        ],
+        "units": [_unit(u) for u in group.units],
         "tools": list(group.tools),
         "kinds_in": list(group.kinds_in),
         "kinds_out": list(group.kinds_out),
@@ -328,7 +362,9 @@ def _line_local(m: Any) -> bool:
     if m.get("localOnly") is True:
         return True
     route = m.get("route")
-    if isinstance(route, dict) and route.get("local_only") is True:
+    # A reply a model on the owner's own PC or network answered counts too:
+    # its words stay home even when the chat was not switched Local only.
+    if isinstance(route, dict) and (route.get("local_only") is True or route.get("on_this_network") is True):
         return True
     return str(m.get("errorKind") or "") == "local_only"
 
@@ -492,6 +528,44 @@ def _task_lines(timed: tuple[list[float], list[dict]], start: float, end: float)
     return lines[bisect_left(times, start):bisect_left(times, end)]
 
 
+def _segments(task: Any, timed: tuple[list[float], list[dict]]) -> list[tuple[float, float, bool]]:
+    """``(start, end, ended well)`` of each piece of one task. The chat's
+    task splitter reads the SAME request sent again as a retry, so a chat
+    reopened every Monday with the same line is one task spanning weeks.
+    Here a re-send on a DIFFERENT local day, after the reply before it ended
+    well, starts a new piece of work. Pure."""
+    from bisect import bisect_left
+
+    from ..eval.autonomy import normalize_request, reply_succeeded
+
+    times, lines = timed
+    lo, hi = bisect_left(times, task.start), bisect_left(times, task.end)
+    want = normalize_request(task.request)
+    cuts: list[int] = [lo]
+    last_reply: Any = None
+    for k in range(lo, hi):
+        m = lines[k]
+        role = m.get("role")
+        if role == "assistant":
+            last_reply = m
+            continue
+        if role != "user" or k == lo or m.get("steer") or m.get("continuation"):
+            continue
+        if (want and normalize_request(m.get("content")) == want and reply_succeeded(last_reply)
+                and day_of(times[k]) != day_of(times[cuts[-1]])):
+            cuts.append(k)
+            last_reply = None
+    out: list[tuple[float, float, bool]] = []
+    for n, k in enumerate(cuts):
+        stop = cuts[n + 1] if n + 1 < len(cuts) else hi
+        replies = [lines[i] for i in range(k, stop) if lines[i].get("role") == "assistant"]
+        start = times[k] if k < len(times) else task.start
+        end = times[stop] if n + 1 < len(cuts) else task.end
+        ok = reply_succeeded(replies[-1]) if replies else False
+        out.append((float(start if n else task.start), float(end), ok if n + 1 < len(cuts) else bool(task.success)))
+    return out
+
+
 def chat_units(messages: list, *, ref: str, fallback_at: "float | None", since: float,
                setup_json: str = "", remote: bool = False, ledger: "_Ledger | None" = None,
                owner: str = "") -> list[tuple[Unit, list[str], list[dict]]]:
@@ -505,35 +579,46 @@ def chat_units(messages: list, *, ref: str, fallback_at: "float | None", since: 
     out: list[tuple[Unit, list[str], list[dict]]] = []
     timed: "tuple[list[float], list[dict]] | None" = None
     for task in split_conversation(messages, surface="chat", key=ref, fallback_at=fallback_at):
-        if not task.success or not task.whole or task.start < since or not task.request.strip():
+        if not task.whole or not task.request.strip() or task.end < since:
             continue
         if timed is None:
             timed = _timed(messages, fallback_at)
-        lines = _task_lines(timed, task.start, task.end)
-        runs = [r for r in (ledger.runs.get(ref, []) if ledger is not None else [])
-                if task.start - SLACK_S <= r[0] < task.end - SLACK_S]
-        rows: list[Any] = []
-        for r in runs:
-            rows += ledger.tools.get(r[4], []) if ledger is not None else []
-        tools, kinds_in, kinds_out, paths = _tools_of(rows)
-        for line in lines:
-            if line.get("role") == "user" and not line.get("steer"):
-                for name in line.get("attachmentNames") or []:
-                    kind = _kind(name)
-                    if kind:
-                        kinds_in.add(kind)
-                break  # the request line only
-        newest = runs[-1] if runs else None
-        out.append((Unit(
-            source=CHAT, ref=ref, start=float(task.start), end=float(task.end),
-            words=" ".join(task.request.split()), tools=tools,
-            kinds_in=frozenset(kinds_in), kinds_out=frozenset(kinds_out),
-            provider=newest[2] if newest else "", model=newest[3] if newest else "",
-            account=_account_of(lines, setup_json),
-            local_only=chat_local or any(_line_local(m) for m in lines),
-            low_trust=any(_line_low(m) for m in lines), remote=remote, owner=owner,
-        ), paths, lines))
+        for start, end, ok in _segments(task, timed):
+            if ok and start >= since:
+                out.append(_unit_of(task.request, start, end, timed, ref=ref, setup_json=setup_json,
+                                    chat_local=chat_local, remote=remote, ledger=ledger, owner=owner))
     return out
+
+
+def _unit_of(request: str, start: float, end: float, timed: tuple[list[float], list[dict]], *, ref: str,
+             setup_json: str, chat_local: bool, remote: bool, ledger: "_Ledger | None",
+             owner: str) -> tuple[Unit, list[str], list[dict]]:
+    """One piece of work [start, end) of a chat as a unit (its ledger rows
+    by the chat's run rows in the window)."""
+    lines = _task_lines(timed, start, end)
+    runs = [r for r in (ledger.runs.get(ref, []) if ledger is not None else [])
+            if start - SLACK_S <= r[0] < end - SLACK_S]
+    rows: list[Any] = []
+    for r in runs:
+        rows += ledger.tools.get(r[4], []) if ledger is not None else []
+    tools, kinds_in, kinds_out, paths = _tools_of(rows)
+    for line in lines:
+        if line.get("role") == "user" and not line.get("steer"):
+            for name in line.get("attachmentNames") or []:
+                kind = _kind(name)
+                if kind:
+                    kinds_in.add(kind)
+            break  # the request line only
+    newest = runs[-1] if runs else None
+    return (Unit(
+        source=CHAT, ref=ref, start=float(start), end=float(end),
+        words=" ".join(request.split()), tools=tools,
+        kinds_in=frozenset(kinds_in), kinds_out=frozenset(kinds_out),
+        provider=newest[2] if newest else "", model=newest[3] if newest else "",
+        account=_account_of(lines, setup_json),
+        local_only=chat_local or any(_line_local(m) for m in lines),
+        low_trust=any(_line_low(m) for m in lines), remote=remote, owner=owner,
+    ), paths, lines)
 
 
 def _owner_key(cmap: Any, folder: str, words: str, paths: list[str]) -> str:
@@ -651,61 +736,122 @@ def reread(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[dict
 # --------------------------------------------------------------------------- #
 # detect: groups become candidates (BLOCKING; no model)
 # --------------------------------------------------------------------------- #
-def _covered_by_saved(engine: Any, words: str) -> bool:
-    """A saved template or a schedule already says this. RAISES when they
-    cannot be read."""
+@dataclass
+class _Known:
+    """What :func:`detect` checks each repeat against, read ONCE per call:
+    the saved templates' and schedules' words, the tasks earlier chat
+    candidates hold, and the words of the chat drafts the owner rejected
+    (read off their candidates: a draft keeps none)."""
+
+    saved: list[frozenset] = field(default_factory=list)
+    held: set[tuple[str, float]] = field(default_factory=set)
+    rejected: list[frozenset] = field(default_factory=list)
+
+
+def _known(engine: Any) -> _Known:
+    """BLOCKING; RAISES when a table cannot be read."""
     from sqlmodel import select
 
     from ..core.db import session_scope
     from ..core.models import SavedPromptRecord
     from ..scheduling.models import ScheduledTaskRecord
-    from ..templates import ALREADY_SAVED, similarity, task_tokens
+    from ..skills.learning_models import SOURCE_CHAT, SkillCandidateRecord as C, SkillProposalRecord as P
+    from ..templates import task_tokens
 
-    mine = task_tokens(words)
     with session_scope(engine) as db:
         saved = [str(t or "") for t in db.exec(select(SavedPromptRecord.task))]
         payloads = [str(p or "") for p in db.exec(select(ScheduledTaskRecord.payload_json))]
-    for text in saved:
-        if similarity(mine, task_tokens(text)) >= ALREADY_SAVED:
-            return True
+        cands = list(db.exec(select(C.signature, C.evidence_json).where(C.source == SOURCE_CHAT)))
+        rejected_sigs = {str(sig or "") for sig in db.exec(
+            select(P.signature).where(P.source == SOURCE_CHAT, P.status == "rejected")
+        )}
+    out = _Known(saved=[task_tokens(t) for t in saved])
     for raw in payloads:
         try:
             payload = json.loads(raw or "{}")
         except (TypeError, ValueError):
             continue
         task = payload.get("task") if isinstance(payload, dict) else None
-        if isinstance(task, str) and similarity(mine, task_tokens(task)) >= ALREADY_SAVED:
-            return True
-    return False
+        if isinstance(task, str):
+            out.saved.append(task_tokens(task))
+    for sig, text in cands:
+        rejected = str(sig or "") in rejected_sigs
+        for u in load_evidence(text).get("units") or []:
+            if not isinstance(u, dict):
+                continue
+            out.held.add((str(u.get("thread") or ""), float(u.get("start") or 0.0)))
+            if rejected and u.get("words"):
+                out.rejected.append(task_tokens(str(u["words"])))
+    return out
 
 
-def _held_before(engine: Any, group: Group) -> bool:
+def _covered_by_saved(known: _Known, words: str) -> bool:
+    """A saved template or a schedule already says this."""
+    from ..templates import ALREADY_SAVED, similarity, task_tokens
+
+    mine = task_tokens(words)
+    return any(similarity(mine, t) >= ALREADY_SAVED for t in known.saved)
+
+
+def _held_before(known: _Known, group: Group) -> bool:
     """Does an earlier chat candidate already hold one of these tasks, or
-    did the owner reject a chat draft for the same kind of task? RAISES when
-    the tables cannot be read."""
-    from sqlmodel import select
-
-    from ..core.db import session_scope
-    from ..skills.learning_models import SOURCE_CHAT, SkillCandidateRecord as C, SkillProposalRecord as P
+    did the owner reject a chat draft for the same kind of task?"""
     from ..templates import SAME_TASK, similarity, task_tokens
 
-    keys = {(u.ref, u.start) for u in group.units}
+    if any((u.ref, u.start) in known.held for u in group.units):
+        return True
     words = [task_tokens(u.words) for u in group.units]
-    with session_scope(engine) as db:
-        cands = [str(e or "") for e in db.exec(select(C.evidence_json).where(C.source == SOURCE_CHAT))]
-        rejected = [str(e or "") for e in db.exec(
-            select(P.evidence_json).where(P.source == SOURCE_CHAT, P.status == "rejected")
-        )]
-    for text in cands:
-        for u in load_evidence(text).get("units") or []:
-            if isinstance(u, dict) and (str(u.get("thread") or ""), float(u.get("start") or 0.0)) in keys:
-                return True
-    for text in rejected:
-        for u in load_evidence(text).get("units") or []:
-            theirs = task_tokens(str((u or {}).get("words") or "")) if isinstance(u, dict) else frozenset()
-            if any(similarity(theirs, w) >= SAME_TASK for w in words):
-                return True
-    return False
+    return any(similarity(theirs, w) >= SAME_TASK for theirs in known.rejected for w in words)
+
+
+def drop_thread(db: Any, thread_id: str) -> int:
+    """A chat was DELETED: what was taken from it goes too (called inside the
+    delete's own transaction, ``routes/chat.delete_thread``). Every chat
+    candidate that names it loses that task (its words with it); one that
+    no longer holds three tasks on three days and was still waiting or held
+    is dismissed. A draft keeps no words, so nothing else holds them. How
+    many candidates changed. RAISES (the delete then fails whole)."""
+    from sqlmodel import select
+
+    from ..skills.learning_models import HELD, SOURCE_CHAT, SkillCandidateRecord as C
+
+    tid = str(thread_id or "")
+    changed = 0
+    for cand in list(db.exec(select(C).where(C.source == SOURCE_CHAT))):
+        evidence = load_evidence(cand.evidence_json)
+        units = [u for u in evidence.get("units") or [] if isinstance(u, dict)]
+        keep = [u for u in units if str(u.get("thread") or "") != tid]
+        if len(keep) == len(units):
+            continue
+        days = sorted({day_of(float(u.get("start") or 0.0)).isoformat() for u in keep})
+        evidence.update(units=keep, days=days)
+        cand.evidence_json = json.dumps(evidence)
+        newest = keep[0] if keep else {}
+        cand.session_id = str(newest.get("thread") or "")
+        cand.task = str(newest.get("words") or "")[:4000]
+        if cand.status in ("pending", HELD) and (len(keep) < MIN_UNITS or len(days) < MIN_DAYS):
+            cand.status = "dismissed"
+        db.add(cand)
+        changed += 1
+    return changed
+
+
+def _home_if_here(platform: Any, u: Unit) -> Unit:
+    """A task a model on the owner's own PC or network answered is kept
+    home (Local only) even when its chat was not switched Local only: its
+    words never go to a cloud model in a draft. Unsure = home."""
+    if u.local_only or not u.provider:
+        return u
+    try:
+        from ..providers.egress import stays_on_this_network
+
+        here = bool(stays_on_this_network(u.provider, getattr(platform, "providers", None),
+                                          getattr(platform, "config", None), u.model))
+    except Exception:  # noqa: BLE001
+        here = True
+    from dataclasses import replace
+
+    return replace(u, local_only=True) if here else u
 
 
 def _signature(words: str) -> str:
@@ -733,15 +879,16 @@ def detect(platform: Any, *, now: "datetime | None" = None) -> int:
             moment = moment.replace(tzinfo=timezone.utc)
         since = moment - timedelta(days=WINDOW_DAYS)
         cmap = client_store.load_map(engine)  # RAISES when unreadable: fail closed
-        found = groups(units(engine, since, cmap=cmap))
+        found = groups([_home_if_here(platform, u) for u in units(engine, since, cmap=cmap)])
+        known = _known(engine) if found else _Known()
         added = 0
         for group in found:
             if added >= MINT_MAX:
                 break
             words = group.newest.words
-            if learning._matches_existing_skill(words) or _covered_by_saved(engine, words):
+            if _covered_by_saved(known, words) or _held_before(known, group):
                 continue
-            if _held_before(engine, group):
+            if learning._matches_existing_skill(words):
                 continue
             with session_scope(engine) as db:
                 db.add(SkillCandidateRecord(
@@ -759,6 +906,6 @@ def detect(platform: Any, *, now: "datetime | None" = None) -> int:
 
 __all__ = [
     "MIN_DAYS", "MIN_UNITS", "THREADS_MAX", "UNKNOWN_OWNER", "WINDOW_DAYS", "Group", "Unit", "chat_units",
-    "day_of", "days_words", "detect", "eligible", "evidence_of", "groups", "load_evidence", "matches",
+    "day_of", "days_words", "detect", "drop_thread", "eligible", "evidence_of", "group_of", "groups", "load_evidence", "matches",
     "reread", "times_line", "tools_line", "units",
 ]

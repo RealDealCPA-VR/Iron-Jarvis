@@ -316,10 +316,14 @@ def test_a_repeat_a_template_or_a_schedule_covers_is_skipped(platform):
 def test_a_repeat_like_a_rejected_chat_draft_is_skipped(platform):
     engine = platform.engine
     _three(engine)
+    # the rejected draft keeps no words; its candidate (same signature) does
     with session_scope(engine) as db:
+        db.add(SkillCandidateRecord(session_id="chat_x", task=ALIKE, signature="chat::earlier", source="chat",
+                                    status="distilled", evidence_json=json.dumps(
+                                        {"units": [{"thread": "chat_x", "start": 1.0, "words": ALIKE}]})))
         db.add(SkillProposalRecord(kind="create", skill_name="bank", source="chat", status="rejected",
-                                   evidence_json=json.dumps({"units": [{"thread": "chat_x", "start": 1.0,
-                                                                         "words": ALIKE}]})))
+                                   signature="chat::earlier", evidence_json=json.dumps(
+                                       {"units": [{"thread": "chat_x", "start": 1.0}]})))
         db.commit()
     assert R.detect(platform) == 0
 
@@ -362,3 +366,64 @@ def test_a_chat_in_a_client_s_folder_does_not_group_with_others(platform):
     seed_chat(engine, _monday(1))
     seed_chat(engine, _monday(2))
     assert R.detect(platform) == 0
+
+
+# --------------------------------------------------------------------------- #
+# review fixes
+# --------------------------------------------------------------------------- #
+def test_the_rule_looks_at_the_newest_units_only(monkeypatch):
+    """Bounded: only the newest UNITS_MAX units are grouped. Three matching
+    units just past the bound make nothing; inside it they group."""
+    base = _monday(0)
+    filler = [U(base - timedelta(minutes=k), words=f"unrelated request number {k} about gardening",
+                tools=("shell",), kin=(), kout=()) for k in range(R.UNITS_MAX)]
+    old = [U(_monday(w) - timedelta(hours=1)) for w in range(1, 4)]
+    assert R.groups(filler + old) == []
+    monkeypatch.setattr(R, "UNITS_MAX", R.UNITS_MAX + 3)
+    assert len(R.groups(filler + old)) == 1
+
+
+def test_detect_reads_what_it_checks_against_once(platform, monkeypatch):
+    for words in (WORDS, "write the weekly status email to the whole team with the open items"):
+        for w in range(3):
+            seed_chat(platform.engine, _monday(w, hour=9 if words == WORDS else 14), words=words,
+                      tools=TOOLS if words == WORDS else ("read_document", "write_document"),
+                      files=("C:/Work/a.csv", "C:/Work/b.xlsx") if words == WORDS else ("C:/W/n.docx", "C:/W/o.docx"))
+    calls = []
+    real = R._known
+    monkeypatch.setattr(R, "_known", lambda engine: calls.append(1) or real(engine))
+    assert R.detect(platform) == 2
+    assert calls == [1]
+
+
+def test_the_same_request_in_one_chat_on_three_mondays_is_three_times(platform):
+    """A chat reopened every Monday with the same line: the task splitter
+    calls it a retry; here each re-send on a new day after a good reply is a
+    new piece of work."""
+    engine = platform.engine
+    lines = []
+    for w in (2, 1, 0):
+        at = _monday(w)
+        lines += [{"role": "user", "content": WORDS, "at": at.isoformat()},
+                  {"role": "assistant", "content": "Done: the summary sheet is written.",
+                   "at": (at + timedelta(seconds=60)).isoformat()}]
+    with session_scope(engine) as db:
+        t = ChatThreadRecord(title="bank", messages_json=json.dumps(lines))
+        t.updated_at = _utc(_monday(0) + timedelta(seconds=61))
+        db.add(t)
+        for w in (2, 1, 0):
+            at = _monday(w)
+            run = AgentRun(session_id="chat", agent_type=AgentType.BUILDER, provider="claude-cli",
+                           model="claude-sonnet-4-6", thread_id=t.id)
+            run.created_at, run.finished_at = _utc(at + timedelta(seconds=1)), _utc(at + timedelta(seconds=55))
+            db.add(run)
+            for k, tool in enumerate(TOOLS):
+                row = ToolInvocation(session_id="chat", agent_run_id="chat", tool=tool, ok=True, output="ok",
+                                     args_json=json.dumps({"path": ("C:/W/x.csv", "C:/W/y.xlsx")[k]}))
+                row.created_at = _utc(at + timedelta(seconds=10 + k))
+                db.add(row)
+        db.commit()
+    us = R.units(engine, _monday(3))
+    assert len(us) == 3 and all(u.tools == TOOLS for u in us)
+    (group,) = R.groups(us)
+    assert len(group.days) == 3
