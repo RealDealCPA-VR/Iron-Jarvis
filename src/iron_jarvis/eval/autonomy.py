@@ -472,6 +472,10 @@ class Task:
     #: count, success or hands-off rate, nor "per task" — the metric sees
     #: such a turn only when it asked something and never reads its reply.
     whole: bool = True
+    #: Next leaps 19-a (``learning/repeats``): the line that STARTED the task,
+    #: the owner's own words as sent ("" for a task seen only through its
+    #: cards). The metrics never read it.
+    request: str = ""
 
     @property
     def human_nudges(self) -> int:
@@ -583,7 +587,8 @@ def split_conversation(messages: list, *, surface: str, key: str, fallback_at: "
             _close()
             if current is not None and at is not None:
                 current.end = at
-            current = Task(surface=surface, key=key, start=at if at is not None else 0.0)
+            current = Task(surface=surface, key=key, start=at if at is not None else 0.0,
+                           request=str(raw.get("content") or ""))
             tasks.append(current)
             requests.append(str(raw.get("content") or ""))
             last_reply = None
