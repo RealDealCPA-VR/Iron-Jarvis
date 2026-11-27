@@ -556,9 +556,8 @@ def _recalculates(path: Path) -> bool:
     try:
         with zipfile.ZipFile(path) as zf:
             for name in zf.namelist():
-                if _TOP_PART_RX.fullmatch(name) and zf.getinfo(name).file_size <= 4 * 1024 * 1024:
-                    if _FULL_CALC_RX.search(zf.read(name)):
-                        return True
+                if _TOP_PART_RX.fullmatch(name) and _FULL_CALC_RX.search(zf.read(name)):
+                    return True
         return False
     except Exception:  # noqa: BLE001 — in doubt, the saved results are not trusted
         log.debug("a workbook's calculation setting could not be read", exc_info=True)
@@ -1418,6 +1417,11 @@ def _docx_checks(path: Path, name: str, folder: str = "", late: Callable[[], boo
     why = _older_container(path)
     if why:
         return [row(FILE_OPENS, NOT_CHECKED, why)]
+    # The reader's library is imported HERE, outside the try: a reader that
+    # is not there is no fact about the file ("it could not be checked
+    # here", ``check_one``'s own net), never "could not open".
+    import docx
+
     from ..documents.readers import _nonempty_or_sentinel, _read_docx
 
     try:
@@ -1425,8 +1429,6 @@ def _docx_checks(path: Path, name: str, folder: str = "", late: Callable[[], boo
     except Exception:  # noqa: BLE001 — did it not open, or did its text not read?
         log.debug("a made Word document could not be read", exc_info=True)
         try:
-            import docx
-
             docx.Document(str(path))
         except Exception as exc:  # noqa: BLE001 — the reader could not open it: the one "Problem"
             if _disk_refused(exc):      # a lock, a permission: not the reader's failure
@@ -1454,9 +1456,9 @@ def _pdf_checks(path: Path, name: str, folder: str = "", late: Callable[[], bool
     def row(code: str, result: str, detail: str) -> Check:
         return Check(code, result, detail, file=name, folder=folder, path_key=path_key(path))
 
-    try:
-        from pypdf import PdfReader
+    from pypdf import PdfReader     # outside the try: a reader that is not there is no fact about the file
 
+    try:
         reader = PdfReader(str(path))
         if reader.is_encrypted:
             try:

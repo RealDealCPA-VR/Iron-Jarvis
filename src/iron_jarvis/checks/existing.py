@@ -17,8 +17,8 @@ allowlist; a row of any other check is never a "Problem"):
 * :func:`required_file_checks`: ``failed`` ONLY for a required file that is
   not on disk (a fact). One that is there passes with that fact alone ("it
   is on disk (12 KB)": never "opens", the older check opens nothing of most
-  kinds). One that is there and empty, or that the older check could not
-  open, is ``look``.
+  kinds). One that is there and empty, or that the older check did not
+  pass, is ``look``.
 * :func:`proof_check`, :func:`finish_checks` (tests): ``failed`` ONLY for a
   test command that ran to its end and reported failure (a fact). A run
   that did not finish in its time, or could not be run, is ``not_checked``.
@@ -68,6 +68,7 @@ OPEN_WORDS = {
 NOT_ON_DISK = frozenset({"missing", "folder"})
 #: A test run that did not run to its end (``harness/finish.FinishCheck
 #: .tests_ended``): never a failed test run.
+TESTS_FIXED = "they failed, then passed after a fix"
 TESTS_TIMED_OUT = "they did not finish in their time"
 TESTS_NO_EXIT = "they could not be run"
 TESTS_UNREAD = "how the run ended could not be read"
@@ -163,9 +164,11 @@ def required_file_checks(states: Iterable[Any]) -> list[Check]:
             if status == "ok":
                 said = on_disk
             elif status == "unreadable":
-                # Why it could not is the older check's guess (an exception's
-                # name, a part it looked for by name): only the fact is kept.
-                said = (f"{on_disk}, and the check of required files could not open it" if size
+                # Why is the older check's guess (an exception's name, a part
+                # it looked for by name), and it files a text file of blank
+                # space here too: only what is true of each is kept (it did
+                # not pass that check).
+                said = (f"{on_disk}, and the check of required files did not pass it" if size
                         else "the check of required files could not read it")
             else:
                 said = plain_words(str(getattr(s, "detail", "") or ""))
@@ -221,7 +224,12 @@ def finish_checks(record: Any, ended: str = "") -> list[Check]:
         if tests == "passed":
             out.append(Check(TESTS, PASSED, "they passed"))
         elif tests == "failed":
-            if ended == "failed":
+            if str(record.get("after") or "") == "passed":
+                # The finish check's own ``after``: the SAME tests, run again
+                # after the reply's fix, by their own exit status. The first
+                # run is not the last word, and not a problem that stands.
+                out.append(Check(TESTS, PASSED, TESTS_FIXED))
+            elif ended == "failed":
                 out.append(Check(TESTS, FAILED, "they failed"))
             else:
                 out.append(Check(TESTS, NOT_CHECKED, {"timed_out": TESTS_TIMED_OUT, "no_exit": TESTS_NO_EXIT}.get(
@@ -329,7 +337,7 @@ def workflow_check(step_name: Any, problem: Any, *, run_id: str = "") -> "Check 
 
 
 __all__ = [
-    "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "STEP_FAILED", "TESTS_NO_EXIT",
+    "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "STEP_FAILED", "TESTS_FIXED", "TESTS_NO_EXIT",
     "TESTS_NOT_RUN_WORDS", "TESTS_TIMED_OUT", "TESTS_UNREAD",
     "claims_check", "finish_checks", "proof_check", "required_file_checks", "step_check", "workflow_check",
 ]

@@ -493,6 +493,10 @@ async def test_the_finish_checks_tests_and_review_are_rows_from_its_own_record(p
     ]
     # Nobody said how the run ended: never a problem on the verdict's word alone.
     assert existing.finish_checks(rec)[0] == Check(R.TESTS, R.NOT_CHECKED, existing.TESTS_UNREAD)
+    # The same record once the same tests passed after the fix: no problem stands, however the first run ended.
+    fixed = {**rec, "after": "passed"}
+    assert existing.finish_checks(fixed, fc.tests_ended())[0] == Check(R.TESTS, R.PASSED, existing.TESTS_FIXED)
+    assert existing.finish_checks({**rec, "after": "failed"}, fc.tests_ended())[0] == Check(R.TESTS, R.FAILED, "they failed")
     await T.note_finish(platform, rec, turn_id="turn_code", thread_id="build_thread", session_id="build_thread",
                         ended=fc.tests_ended())
     got = _rows(platform.engine, turn_id="turn_code")
@@ -560,6 +564,11 @@ async def test_a_test_run_that_did_not_finish_is_not_a_failed_test_run(platform)
 @pytest.mark.parametrize("record,want", [
     ({"tests": "passed"}, [Check(R.TESTS, R.PASSED, "they passed")]),
     ({"tests": "failed"}, [Check(R.TESTS, R.NOT_CHECKED, "how the run ended could not be read")]),
+    # The same tests were run again after the reply's fix and passed (the finish check's own `after`): the
+    # first run is not a problem that stands. A second run that failed too changes nothing.
+    ({"tests": "failed", "after": "passed"}, [Check(R.TESTS, R.PASSED, "they failed, then passed after a fix")]),
+    ({"tests": "failed", "after": "failed"}, [Check(R.TESTS, R.NOT_CHECKED, "how the run ended could not be read")]),
+    ({"tests": "passed", "after": "passed"}, [Check(R.TESTS, R.PASSED, "they passed")]),
     ({"tests": "not_run", "why": "this reply is in low trust, so the check runs no command"},
      [Check(R.TESTS, R.NOT_CHECKED, "this reply is in low trust, so the check runs no command")]),
     # A reason the finish check's own code did not write (a command's raw
@@ -1048,10 +1057,18 @@ def test_a_required_file_that_does_not_open_is_said_in_plain_words(tmp_path):
     # parts by their names, and reads a cut piece of a large file): neither is copied. What is said is the
     # fact: the file is there, and that check could not open it. Worth a look; a PROBLEM only for the fact
     # that the file is not on disk.
-    assert got["summary.xlsx"] == (R.LOOK, "it is on disk (32 bytes), and the check of required files could not open it")
-    assert got["odd.docx"] == (R.LOOK, "it is on disk (2 KB), and the check of required files could not open it")
+    assert got["summary.xlsx"] == (R.LOOK, "it is on disk (32 bytes), and the check of required files did not pass it")
+    assert got["odd.docx"] == (R.LOOK, "it is on disk (2 KB), and the check of required files did not pass it")
     assert got["late.pdf"] == (R.NOT_CHECKED, "not checked (the check ran out of time)")
     assert got["x.bin"] == (R.LOOK, "the check of required files could not read it")
+    # A text file of blank space is "unreadable" to the older check as well, and it DID open that one: the row
+    # says only that it did not pass.
+    blank = tmp_path / "notes.md"
+    blank.write_bytes(b"   \n\n")
+    state = FileState("OUTPUT/notes.md", blank, *check_file(blank))
+    assert (state.status, state.detail) == ("unreadable", "it holds only blank space")
+    (row,) = existing.required_file_checks([state])
+    assert (row.result, row.detail) == (R.LOOK, "it is on disk (5 bytes), and the check of required files did not pass it")
     assert got["gone.md"] == (R.FAILED, "not on disk")
     assert existing.NOT_ON_DISK == {"missing", "folder"}
     folder = existing.required_file_checks([FileState("OUTPUT/out", tmp_path, "folder", "a folder is there, not a file")])

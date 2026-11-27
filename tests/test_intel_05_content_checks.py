@@ -1925,6 +1925,30 @@ def test_the_disks_refusal_is_not_the_readers_failure(tmp_path, monkeypatch):
     assert content.check_files([str(pdf)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.pdf")]
 
 
+def test_a_reader_that_is_not_there_is_no_fact_about_the_file(tmp_path, monkeypatch):
+    """The library that opens a kind cannot be imported (a build that left
+    it out). Nobody tried to open the file: it is "not checked", never
+    "Iron Jarvis could not open" it."""
+    import sys
+
+    import docx
+
+    book = _xlsx(tmp_path / "t.xlsx", BUDGET)
+    letter = tmp_path / "t.docx"
+    d = docx.Document()
+    d.add_paragraph("words")
+    d.save(str(letter))
+    pdf = _pdf(tmp_path / "t.pdf", 1)
+    for library, path in (("docx", letter), ("pypdf", pdf), ("openpyxl", book)):
+        with monkeypatch.context() as mp:
+            mp.setitem(sys.modules, library, None)      # "import <library>" now fails
+            got = content.check_files([str(path)])
+        assert got == [Check(FILE_OPENS, NOT_CHECKED, content.BROKE, file=path.name)], (library, got)
+    # ... and with the libraries back, each opens.
+    assert [c.detail for c in content.check_files([str(letter), str(pdf), str(book)]) if c.check == FILE_OPENS] == [
+        "opens", "opens", "opens"]
+
+
 def test_a_word_file_that_opens_and_whose_text_cannot_be_read_is_not_called_broken(tmp_path, monkeypatch):
     import docx
 
@@ -2106,6 +2130,27 @@ def test_a_locked_pdf_is_not_checked_and_is_not_said_to_open(tmp_path):
         w.write(fh)
     assert [(c.check, c.result, c.detail) for c in content.check_files([str(free)])][:2] == [
         (FILE_OPENS, PASSED, "opens"), (PDF_PAGES, PASSED, "1 page")]
+
+
+def test_a_pdf_whose_lock_could_not_be_tried_says_nothing_about_a_password(tmp_path, monkeypatch):
+    """The empty password could not be TRIED (the piece that does it is not
+    there, or broke): "it is protected with a password" would be a guess.
+    Not checked, with what is true: it could not be read here."""
+    import pypdf
+    from pypdf import PdfWriter
+
+    w = PdfWriter()
+    w.add_blank_page(width=200, height=200)
+    w.encrypt("a-password-for-this-test")
+    p = tmp_path / "locked.pdf"
+    with open(p, "wb") as fh:
+        w.write(fh)
+
+    def broke(self, _password):
+        raise RuntimeError("the piece that tries a password is not there")
+
+    monkeypatch.setattr(pypdf.PdfReader, "decrypt", broke)
+    assert content.check_files([str(p)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="locked.pdf")]
 
 
 # --------------------------------------------------------------------------- #
