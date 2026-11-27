@@ -3076,7 +3076,20 @@ def build_platform(
         # The SHARED orchestrator (attached in v1.119.0), so the cancel route
         # can find and stop a scheduled run's step sessions — a throwaway
         # orchestrator made cancels silently ineffective.
-        return WorkflowEngine(platform, platform.orchestrator).run(wf)
+        run = WorkflowEngine(platform, platform.orchestrator).run(wf)
+
+        async def _refused_by_name():
+            # Idea 09 (09-a review): a block that would run wrongly is refused
+            # before the run exists (``create_record``), in its own sentence
+            # on the row, as an unknown kind is.
+            from .workflows.validate import BlockRefused
+
+            try:
+                return (await run) if inspect.isawaitable(run) else run
+            except BlockRefused as exc:
+                raise _ScheduleRefused(str(exc)) from None
+
+        return _refused_by_name()
 
     # Goal contracts (v1.208.0): the engine ``routes/goals.py`` and the
     # ``kind="goal"`` dispatch above run iterations through. Constructed with

@@ -2255,9 +2255,11 @@ class WorkflowEngine:
             found = len(items) + beyond
             # The listing is the whole folder only when it was neither cut
             # short (a scan that hit its cap or its deadline) nor showed fewer
-            # entries than match. A part is worked through only when the
-            # limit stops the block inside the part anyway (and says so).
-            if data.get("scan_capped") or (beyond and len(items) < min(found, limit)):
+            # entries than match. Otherwise nothing is worked through,
+            # whatever the limit: a partial listing is not the first files by
+            # name (`list_folder` keeps the largest), so even "the first 200"
+            # of it would skip files that come earlier.
+            if data.get("scan_capped") or beyond:
                 return [], 0, True, folder_unlisted_words(
                     str(base), listed, len(entries), bool(data.get("scan_capped")),
                 )
@@ -2280,13 +2282,21 @@ class WorkflowEngine:
         if not isinstance(parsed, list):
             shown = " ".join(text.split())[:80] or "nothing"
             return [], 0, False, f"{source.strip()} is not a list to work through (it gave {shown})"
+        # The items are outside words when any value the list is made from
+        # is: the reference as written (a step named with a dot owns its
+        # name), and the output it reads from, found as the save check finds
+        # it (``validate._ref_base``: ``item.sub`` reads ``item``, an outer
+        # For each's item, so a nested For each over a field of an item from
+        # {{Trigger}} or a folder is fenced too).
+        from .validate import _ref_base
+
         outside = False
         for m in _TEMPLATE_RX.finditer(source):
             ref = m.group(1).strip()
-            base = ref.split(".data", 1)[0].strip() if ".data" in ref else ref
-            base_out = view.get(base)
-            if isinstance(base_out, dict) and _from_outside(base_out):
-                outside = True
+            for name in (ref, _ref_base(ref)):
+                base_out = view.get(name)
+                if isinstance(base_out, dict) and _from_outside(base_out):
+                    outside = True
         return parsed[:limit], len(parsed), outside, None
 
     async def _exec_for_each(
@@ -2378,6 +2388,13 @@ class WorkflowEngine:
                         # (and a block that halts) says it the same way.
                         "step": name, "why": str(failed.get("summary") or "")[:_MAX_ITEM_SUMMARY],
                     }
+                    if res.get("failed") is not None:
+                        # The item's failure was not skipped past inside it:
+                        # it stops a block set to stop (a limit, any block).
+                        # An inner step's own skip leaves the row without it.
+                        rows[n]["halts"] = True
+                        if failed.get("bound"):
+                            rows[n]["bound"] = True
                     first_failure.append((n, name, failed))
                 else:
                     last = ""
@@ -2406,16 +2423,26 @@ class WorkflowEngine:
         pending = [(n, it) for n, it in enumerate(items, 1) if rows.get(n, {}).get("status") not in ("done", "failed")]
         stop: tuple[int, dict] | None = None
         cancelled = False
-        if step.on_failure != "skip":
-            # A block that stops at a failed item stays stopped there: a
-            # resume that finds that item failed runs none after it (an item
-            # before it that was under way, several at once, is finished).
-            halted_at = next((n for n in sorted(rows) if rows[n].get("status") == "failed"), None)
-            if halted_at is not None:
-                row = rows[halted_at]
-                pending = [(n, it) for n, it in pending if n < halted_at]
-                stop = (halted_at, {"summary": str(row.get("why") or row.get("summary") or "")})
-                first_failure.append((halted_at, str(row.get("step") or step.name), {}))
+        # A block that stopped at a failed item stays stopped there: a resume
+        # that finds the row that stopped it runs no item after it (an item
+        # before it that was under way, several at once, is finished). Only a
+        # row that STOPPED the block counts: one whose failure an inner step
+        # skipped past ("halts" unset) was gone past on purpose, and a
+        # limit reached inside an item stops even a block set to skip.
+        def stopped_here(row: dict) -> bool:
+            return row.get("status") == "failed" and bool(
+                row.get("bound") or (row.get("halts") and step.on_failure != "skip")
+            )
+
+        halted_at = next((n for n in sorted(rows) if stopped_here(rows[n])), None)
+        if halted_at is not None:
+            row = rows[halted_at]
+            pending = [(n, it) for n, it in pending if n < halted_at]
+            why = {"summary": str(row.get("why") or row.get("summary") or "")}
+            if row.get("bound"):
+                why["bound"] = True
+            stop = (halted_at, why)
+            first_failure.append((halted_at, str(row.get("step") or step.name), {}))
         if parallel == 1:
             for n, item in pending:
                 if await self._cancelling(ctx.run_id):
@@ -2452,7 +2479,7 @@ class WorkflowEngine:
                             "summary": "a For each that works on several items at once cannot ask you",
                         }), "handled": []}
                         rows[n] = {"n": n, "label": _item_label(item, n), "status": "failed",
-                                   "summary": res["failed"][1]["summary"]}
+                                   "summary": res["failed"][1]["summary"], "halts": True}
                         await note_progress()
                     if res["status"] == "cancelled":
                         cancelled = True

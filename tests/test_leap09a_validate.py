@@ -394,3 +394,42 @@ def test_the_builder_writes_blocks_and_saves_them_through_the_one_check(tmp_path
         assert r2.status_code == 422
         assert "an If needs at least one step" in r2.json()["detail"]
         assert client.get("/workflows/broken").status_code == 404
+
+
+async def test_a_stored_workflow_a_rule_or_a_schedule_cannot_run_is_said_in_its_own_sentence(tmp_path):
+    """Review (note): a hand-made or very old row a rule or a schedule runs,
+    with a kind this version does not know or a block that would run
+    wrongly, put the class name on the row ("UnknownStepKind: …"), or the
+    schedule's generic words. Both now say the refusal's own sentence."""
+    from sqlmodel import select
+
+    from iron_jarvis.agents.orchestrator import Orchestrator
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.reflex.router import ReflexRouter
+    from iron_jarvis.scheduling.models import ScheduledTaskRecord
+
+    platform = build_platform(str(tmp_path))
+    store = WorkflowStore(platform.engine)  # the store is lenient; the doors are not
+    store.save("typo", [{"name": "s", "task": "t", "kind": "toool"}])
+    store.save("zero", [_each(max_items=0)])
+    router = ReflexRouter(platform, Orchestrator(platform), spawn_bg=None)
+    for target in ("typo", "zero"):
+        router.store.add(name=f"hook-{target}", source="webhook", match=target, action="workflow", target=target)
+    typo = (await router.on_webhook("typo", {"text": "x"}))[0]
+    zero = (await router.on_webhook("zero", {"text": "x"}))[0]
+    assert typo["ok"] is False and typo["error"].startswith("The step “s” is a “toool” step"), typo
+    assert zero["ok"] is False and zero["error"].startswith("This workflow cannot run: steps[0] (Each file)"), zero
+    with session_scope(platform.engine) as db:
+        for target in ("typo", "zero"):
+            db.add(ScheduledTaskRecord(
+                name=f"sched-{target}", cron="0 9 * * *", trigger_type="cron", kind="workflow",
+                payload_json=json.dumps({"workflow": target, "notify": False}),
+            ))
+        db.commit()
+    for target in ("typo", "zero"):
+        await platform.scheduler.run_now(f"sched-{target}")
+    with session_scope(platform.engine) as db:
+        rows = {r.name: r for r in db.exec(select(ScheduledTaskRecord)).all()}
+    assert "“s” is a “toool” step" in rows["sched-typo"].last_detail, rows["sched-typo"].last_detail
+    assert "This workflow cannot run: steps[0] (Each file)" in rows["sched-zero"].last_detail, rows["sched-zero"].last_detail
+    assert not any("Refused" in r.last_detail or "Kind:" in r.last_detail for r in rows.values())

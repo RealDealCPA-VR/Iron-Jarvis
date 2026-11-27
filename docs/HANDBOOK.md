@@ -174,8 +174,8 @@ Good to know:
   stops and says why, rather than running on.
 - If a folder holds more matching files than Iron Jarvis can list in one
   go (more than 1,000, or a folder too slow to read), the For each stops
-  before the first file and says so. It never works through part of a
-  folder as if it were all of it.
+  before the first file and says so, whatever its limit. It never works
+  through part of a folder as if it were all of it.
 - An **Agent step inside a For each runs once for every item: one model run
   per item.** The chat's card says so before you run it.
 - By default a failed item stops the run. Set **If an item fails** to
@@ -190,6 +190,11 @@ Good to know:
   instead of quietly running as an agent step.
 
 There is nothing to set up, no new page and no new notice.
+
+**Also in this version.** A long job close to the limit of its model's
+context window no longer sends more than the window holds once the script
+tool joins it part way through. When the script tool would not fit, the
+job goes on without it instead of stopping.
 
 ## It offers to run a task you repeat by itself (v1.594.0)
 

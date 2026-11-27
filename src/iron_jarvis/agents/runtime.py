@@ -5240,9 +5240,13 @@ class AgentRuntime:
 
     def _offer_script_tool(self, session: Session, tool_specs: list, state: dict, messages: list) -> bool:
         """Add `tool_script` to a run that keeps making the same read
-        (v1.473.0). Returns whether it was added. Never raises."""
+        (v1.473.0). Returns whether it was added. Never raises.
+
+        The offer can be TAKEN BACK by the next step's planning, before any
+        request carries it (``_withdraw_script_offer``): what it adds is
+        priced, and an optional tool never ends a run that fits without it."""
         try:
-            if not self._script_armable.get(session.id):
+            if not self._script_armable.get(session.id) or state.get("script_withheld"):
                 return False
             names = {str(s.get("name") or "") for s in tool_specs if isinstance(s, dict)}
             registry = self.p.registry
@@ -5258,12 +5262,39 @@ class AgentRuntime:
                         best, most = name, n
             if not best:
                 return False
+            before = list(tool_specs)
             tool_specs[:] = registry.add_script_tool(list(tool_specs))
             note = SCRIPT_OFFER_NOTE.format(tool=best, n=most)
+            told = None
             for message in reversed(messages):
                 if getattr(message, "role", "") == "tool":
-                    message.content = str(message.content or "") + note
+                    told = (message, str(message.content or ""))
+                    message.content = told[1] + note
                     break
+            state["script_offer_undo"] = (tool_specs, before, told)
+            return True
+        except Exception:  # noqa: BLE001 — an offer never fails a run
+            return False
+
+    @staticmethod
+    def _withdraw_script_offer(tool_specs: list, state: dict) -> bool:
+        """Take back the script tool the step before offered, BEFORE any
+        request carried it, when the definitions it adds (~1,300 tokens on a
+        builder: its own and the file tools' longer ones) would leave a KNOWN
+        window no room for the task and the newest results. The run goes on
+        with the tools it had, the note that offered it goes from the result,
+        and it is not offered again in this run (idea 09 review: pricing what
+        each step really carries turned a run that fitted into "too small").
+        Returns whether it was taken back. Never raises."""
+        undo = state.pop("script_offer_undo", None)
+        try:
+            if not undo or undo[0] is not tool_specs:
+                return False
+            _same, before, told = undo
+            tool_specs[:] = before
+            if told is not None:
+                told[0].content = told[1]
+            state["script_withheld"] = True
             return True
         except Exception:  # noqa: BLE001 — an offer never fails a run
             return False
@@ -5518,33 +5549,48 @@ class AgentRuntime:
                 # pressure either (`TranscriptPlan.raw_tokens`): a summary
                 # cannot shrink a tool list. Passed only when set, so a run
                 # with no tools, or an unknown window, plans byte-identically.
-                _fixed_kw: dict[str, int] = {}
-                if _win and tool_specs:
-                    # Serialised again whenever the list changed: the script
-                    # tool joins MID-RUN (`_offer_script_tool`, in place) and
-                    # rewrites the file tools' descriptions, ~1,300 tokens a
-                    # once-only blob never priced, so the steps after it went
-                    # out over a known window (found in the idea 09 review).
-                    _names = tuple(str(s.get("name") or "") for s in tool_specs if isinstance(s, dict))
-                    if _tools_blob is None or _tools_names != _names:
-                        _tools_blob = json.dumps(
-                            tool_specs, ensure_ascii=False, sort_keys=True, default=str,
-                        )
-                        _tools_names = _names
-                    _fixed_kw = {"fixed_tokens": _estimate_tokens(_tools_blob, _cpt)}
+                # At most twice: once more only when the script tool the step
+                # before offered is taken back (`_withdraw_script_offer`).
+                for _pricing in (0, 1):
+                    _fixed_kw: dict[str, int] = {}
+                    if _win and tool_specs:
+                        # Serialised again whenever the list changed: the
+                        # script tool joins MID-RUN (`_offer_script_tool`, in
+                        # place) and rewrites the file tools' descriptions,
+                        # ~1,300 tokens a once-only blob never priced, so the
+                        # steps after it went out over a known window (found
+                        # in the idea 09 review).
+                        _names = tuple(str(s.get("name") or "") for s in tool_specs if isinstance(s, dict))
+                        if _tools_blob is None or _tools_names != _names:
+                            _tools_blob = json.dumps(
+                                tool_specs, ensure_ascii=False, sort_keys=True, default=str,
+                            )
+                            _tools_names = _names
+                        _fixed_kw = {"fixed_tokens": _estimate_tokens(_tools_blob, _cpt)}
 
-                _plan = plan_agent_transcript(
-                    _eff_messages,
-                    window=_win,
-                    system_text=_eff_system,
-                    chars_per_token=_cpt,
-                    # v1.387.0: a local endpoint's reply-budget reserve (the
-                    # chat lanes' rule; omitted for every other provider).
-                    **_reserve_kw(
-                        SimpleNamespace(platform=self.p), session.provider, session.model, _win,
-                    ),
-                    **_fixed_kw,
-                )
+                    _plan = plan_agent_transcript(
+                        _eff_messages,
+                        window=_win,
+                        system_text=_eff_system,
+                        chars_per_token=_cpt,
+                        # v1.387.0: a local endpoint's reply-budget reserve
+                        # (the chat lanes' rule; omitted for every other
+                        # provider).
+                        **_reserve_kw(
+                            SimpleNamespace(platform=self.p), session.provider, session.model, _win,
+                        ),
+                        **_fixed_kw,
+                    )
+                    # The optional script tool never ends a run that fits
+                    # without it: when what it adds leaves no room for the
+                    # task and the newest results, it is taken back and the
+                    # step is planned again with the tools it had.
+                    if not (
+                        _win
+                        and (_plan.clipped_task or _plan.lost_newest)
+                        and self._withdraw_script_offer(tool_specs, _bstate)
+                    ):
+                        break
                 step_messages, step_system = _plan.messages, _eff_system
                 if _plan.recap:
                     # The recap goes in the SYSTEM prompt, not the transcript —
@@ -5601,6 +5647,9 @@ class AgentRuntime:
             except Exception:  # noqa: BLE001 — a budgeting fault must never
                 # break a run; the untrimmed transcript is what shipped before.
                 step_messages, step_system = messages, system_prompt
+            # An offer is taken back only by the planning of the step right
+            # after it; from here a request carries it.
+            _bstate.pop("script_offer_undo", None)
             if _too_small:
                 raise ContextTooSmall(run, _too_small)
             # FX-01: consume the router as a TOKEN STREAM. Text deltas are pushed to

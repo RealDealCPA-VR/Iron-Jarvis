@@ -310,3 +310,72 @@ def test_known_window_tools_trim_what_an_unpriced_plan_would_have_sent(tmp_path,
     last = calls[-1]
     assert sum(1 for m in last if m.role == "tool" and "trimmed" not in (m.content or "")) < 8
 
+
+
+def _script_room_run(tmp_path, monkeypatch, *, window: int, withdraw: bool = True):
+    """A run near its KNOWN window whose model reads one folder six times:
+    after the fourth read the script tool is offered (v1.473.0). Sizes: at
+    12,000 tokens a task of 640 sentences (~5,800 tokens) beside the short
+    roster (772 tokens of definitions) and the newest step fits, and the 727
+    tokens the script tool adds would not (measured: 601 to 685 sentences
+    are that band; 600 fits with it, 690 fits without it neither)."""
+    from iron_jarvis.agents.runtime import AgentRuntime
+
+    if not withdraw:
+        monkeypatch.setattr(AgentRuntime, "_withdraw_script_offer", staticmethod(lambda *a, **k: False))
+    p = build_platform(str(tmp_path / "home"))
+    p.config.model_context_windows = {"mock": window}
+    seen: list[tuple[str, list, list]] = []
+
+    class Scripted(MockLLMAdapter):
+        async def complete(self, *, system, messages, tools, **kw):
+            seen.append((system, list(messages), list(tools or [])))
+            i = len(seen)
+            if i <= 6:
+                return LLMResponse(
+                    text=("I am still looking at item %d. " % i) * 66,
+                    tool_calls=[ToolCall(id=f"c{i}", name="list_files", arguments={"path": "."})],
+                    finish_reason="tool_use",
+                )
+            return LLMResponse(text="done", finish_reason="stop")
+
+    p.providers.register("mock", lambda model=None: Scripted())
+    short = dataclasses.replace(get_agent_definition(AgentType.BUILDER), tools=["list_files"])
+    s = _run(p, task="Note the plain items in this list. " * 640, definition=short)
+    return s, seen
+
+
+def test_a_script_tool_that_would_leave_no_room_is_taken_back_and_the_run_goes_on(tmp_path, monkeypatch):
+    """Idea 09 review: pricing the tools each step really carries made a run
+    that fitted end "too small" the moment the OPTIONAL script tool joined.
+    The offer is taken back before any request carries it: the run finishes
+    on the tools it had, and every request fits its window."""
+    from iron_jarvis.context.budget import output_reserve
+
+    s, seen = _script_room_run(tmp_path, monkeypatch, window=12_000)
+    assert s.status is SessionStatus.COMPLETED, s.summary
+    assert len(seen) == 7
+    for system, msgs, tools in seen:
+        assert "tool_script" not in [t.get("name") for t in tools]
+        # The note that offered it never reaches the model either.
+        assert not any("is now one of your tools" in (m.content or "") for m in msgs)
+        wire = estimate_tokens(json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str))
+        sent = estimate_tokens(system) + sum(estimate_tokens(m.content or "") + 4 for m in msgs)
+        # Against the planner's own reply room at this window.
+        assert sent + wire + output_reserve(12_000) <= 12_000, (sent, wire)
+
+
+def test_without_taking_it_back_the_same_run_would_end_too_small(tmp_path, monkeypatch):
+    """The run the test above means: with the offer kept, its next step does
+    not fit, and the run ends with the sentence that names the window."""
+    s, seen = _script_room_run(tmp_path, monkeypatch, window=12_000, withdraw=False)
+    assert s.status is SessionStatus.FAILED
+    assert s.summary.startswith("This model's context window (12,000 tokens) is too small for this job:")
+    assert len(seen) == 4
+
+
+def test_a_script_tool_that_fits_still_joins(tmp_path, monkeypatch):
+    s, seen = _script_room_run(tmp_path, monkeypatch, window=200_000)
+    assert s.status is SessionStatus.COMPLETED, s.summary
+    joined = ["tool_script" in [t.get("name") for t in tools] for _sys, _m, tools in seen]
+    assert joined == [False] * 4 + [True] * 3, joined

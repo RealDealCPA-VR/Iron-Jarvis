@@ -631,12 +631,21 @@ class ReflexRouter:
                         result = {**result, "again": again}
             except Exception as exc:  # noqa: BLE001 — one bad rule never breaks the rest
                 from ..agents.resolve import UnattendedRefusal
+                from ..workflows.engine import UnknownStepKind
+                from ..workflows.validate import BlockRefused
 
                 if isinstance(exc, UnattendedRefusal):
                     # Leap 05-a: its agent is gone or cannot take a rule —
                     # the refusal's own sentence, on the row and the bell.
                     result = {"ok": False, "error": str(exc)}
                     reason = str(exc)
+                elif isinstance(exc, (UnknownStepKind, BlockRefused)):
+                    # Idea 09 (09-a review): a stored workflow with a step of
+                    # a kind this version does not know, or a block that
+                    # would run wrongly, says its own sentence, never the
+                    # class name ("UnknownStepKind: …").
+                    result = {"ok": False, "error": str(exc)}
+                    reason = _lower_first(str(exc).rstrip("."))
                 else:
                     log.exception("reflex rule %r failed", rule.name)
                     result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
