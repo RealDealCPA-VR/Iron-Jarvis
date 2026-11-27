@@ -203,9 +203,21 @@ def widen(
         # the tier that app has in it (``_add`` -> ``_tier``): a removed app,
         # one switched off for the chat or one that lost its approval brings
         # nothing.
+        # READERS ONLY (the tool's own ``readOnlyHint``; unknown = does not
+        # stay): a tool that may change something is armed by the words of
+        # its own message, never kept.
+        from ..tools.base import Reversibility
+
+        kept_readers = []
         for name in _app_names(kept):
-            if server_of(name) in apps:
-                _add(name)
+            tool = registry.get(name) if server_of(name) in apps else None
+            if tool is not None and getattr(tool, "reversibility", None) == Reversibility.READONLY:
+                kept_readers.append(name)
+        # Bounded like the tools a previous reply used (the most recently
+        # sent stay); they join BESIDE this message's own picks, never in
+        # place of one.
+        for name in kept_readers[-MAX_CONTINUED:]:
+            _add(name)
         # THE FINDER: only while an app of the reply has tools it does not
         # hold, and only where the reply can take what it finds.
         reach = {server_of(n) for n in (*new_armed, *new_ask) if server_of(n)}

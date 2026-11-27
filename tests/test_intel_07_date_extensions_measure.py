@@ -31,7 +31,7 @@ from iron_jarvis.mcp import reach
 from tests.test_intel_06_agent_run_used import PLAIN, _run, _write, clock  # noqa: F401  (clock: a fixture)
 from tests.test_intel_06_measure_script import NOW_ARG, M, _digest, _record, _row
 from tests.test_intel_07_stable_prefix import Chat, once_of
-from tests.test_mcp_app_reach_v1577 import APP, SimpleD, _connect
+from tests.test_mcp_app_reach_v1577 import APP, READERS, SimpleD, _connect
 
 DAY = "2031-02-03"
 LINE = f"Today's date is {DAY}."
@@ -130,77 +130,95 @@ def _app_names(call) -> list[str]:
 
 
 @pytest.mark.parametrize("lane", ("/chat", "/chat/stream"))
-def test_a_switched_on_extensions_tools_stay_in_place_across_a_restart(tmp_path, lane):
+def test_a_kept_extension_tool_never_displaces_what_this_message_picked(tmp_path, lane):
+    """A large extension: the message's words pick as many tools as the cap
+    allows. Every one of them is seated; what the chat held before takes only
+    the room that is left (none here), and the tools both replies hold keep
+    their place."""
     chat = Chat(tmp_path / "home", lane)
     _connect(chat.app.state.platform)
-    first = chat.say("record a customer payment against the invoice", connectors=[APP])
-    mine = _app_names(first)
-    assert len(mine) == chat_turn._MAX_CONNECTOR_TOOLS, "a large extension: the words picked a capped set"
+    first = _app_names(chat.say("record a customer payment against the invoice", connectors=[APP]))
+    assert len(first) == chat_turn._MAX_CONNECTOR_TOOLS
     reach.RECENT.clear()
     chat.open()                      # a restart: nothing in memory survives
     _connect(chat.app.state.platform)
-    second = chat.say("now list every thing we have on file", connectors=[APP])
-    assert _app_names(second) == mine, "the extension's tools changed with the message"
-    assert second["tools"] == first["tools"], "the tool list is not the bytes the reply before sent"
-    assert reach.FINDER in second["names"], "a tool with no room is still found with the extension's own finder"
+    second = _app_names(chat.say("now list thing 7 and thing 12 please", connectors=[APP]))
+    # What a NEW chat is given for the same words: the message's own picks.
+    fresh = Chat(tmp_path / "fresh", lane, thread="t-fresh")
+    _connect(fresh.app.state.platform)
+    picked = _app_names(fresh.say("now list thing 7 and thing 12 please", connectors=[APP]))
+    assert f"mcp__{APP}__list_thing_7" in picked and f"mcp__{APP}__list_thing_12" in picked
+    assert set(picked) <= set(second), "a kept tool displaced one this message picked"
+    # What the chat held joins BESIDE the picks: readers only, a bounded few.
+    extra = [n for n in second if n not in picked]
+    registry = chat.app.state.platform.registry
+    assert len(extra) <= reach.MAX_CONTINUED and all(n in first for n in extra)
+    assert all(n.split("__")[-1] in READERS for n in extra), f"a tool that may change something stayed: {extra}"
+    assert all(registry.get(n) is not None for n in extra)
+    both = [n for n in first if n in second]
+    assert both and both == [n for n in second if n in first], "a tool both replies hold moved"
     # Switched off for the chat: gone on the very next reply.
-    third = chat.say("thanks, that is all for now")
-    assert _app_names(third) == []
-    # Switched on again later: its tools are picked by the message's words
-    # again, and the ones the chat was sent before keep their old order.
-    fourth = _app_names(chat.say("and the invoice again please", connectors=[APP]))
-    assert len(fourth) == chat_turn._MAX_CONNECTOR_TOOLS
-    again = [n for n in fourth if n in mine]
-    assert again and again == [n for n in mine if n in fourth]
+    assert _app_names(chat.say("thanks, that is all for now")) == []
 
 
 def test_a_kept_extension_tool_joins_at_the_tier_its_extension_has_in_this_reply(platform):  # noqa: F811
-    _connect(platform, quarantined=("record_payment",))
+    _connect(platform, quarantined=("find_customer",))
     d = SimpleD(platform)
-    pay, bill, inv = (f"mcp__{APP}__{n}" for n in ("record_payment", "enter_bill", "get_invoice"))
-    kept = [bill, pay, "mcp__gone__tool", f"mcp__{APP}__no_such_tool", "read_file"]
+    writer, held_reader, reader, inv = (
+        f"mcp__{APP}__{n}" for n in ("enter_bill", "find_customer", "list_thing_3", "get_invoice"))
+    kept = [reader, writer, held_reader, "mcp__gone__tool", f"mcp__{APP}__no_such_tool", "read_file"]
     # Its extension is not part of this reply: nothing joins.
     assert reach.widen(d, None, ["read_file"], [], [], can_ask=True, kept=kept) == (["read_file"], [], [])
-    # Its extension is switched on (granted): the kept tool joins as that
-    # switch would have armed it; a held-back one joins asking.
+    # Its extension is switched on (granted): a kept READER joins as that
+    # switch would have armed it. A kept tool that may change something does
+    # NOT stay: it is armed by the words of its own message.
     armed, auto, ask = reach.widen(d, None, [inv], [], [], can_ask=True, kept=kept)
-    assert bill in armed and bill in auto and "mcp__gone__tool" not in armed
-    assert f"mcp__{APP}__no_such_tool" not in armed + ask and "read_file" not in armed
-    # Its extension is only ASKED in this reply: it joins asking where someone
-    # can be asked, and not at all where nobody can.
+    assert reader in armed and reader in auto
+    assert writer not in armed + ask, "a writer stayed armed without its words"
+    assert "mcp__gone__tool" not in armed and f"mcp__{APP}__no_such_tool" not in armed + ask
+    assert "read_file" not in armed
+    # Its extension is only ASKED in this reply: a reader joins asking where
+    # someone can be asked, and not at all where nobody can.
     armed, _a, ask = reach.widen(d, None, [], [], [inv], can_ask=True, kept=kept)
-    assert bill in ask and bill not in armed
+    assert reader in ask and reader not in armed and writer not in ask
     armed, _a, ask = reach.widen(d, None, [], [], [inv], can_ask=False, kept=kept)
-    assert bill not in armed and bill not in ask and pay not in armed
+    assert reader not in armed and reader not in ask
     # Nothing joins a reply at low trust.
     assert reach.widen(d, None, [inv], [], [], can_ask=True, low_trust=True, kept=kept) == ([inv], [], [])
     # And a held-back tool still asks before each use, whatever list it is on.
     from iron_jarvis.tools.permissions import asks_each_use
 
-    assert asks_each_use(platform.registry.get(pay))
+    assert asks_each_use(platform.registry.get(held_reader))
 
 
-def test_keep_conn_keeps_only_what_is_still_switched_on_and_registered(platform):  # noqa: F811
+def test_keep_conn_seats_this_messages_picks_and_keeps_readers_only_in_the_room_left(platform):  # noqa: F811
     from iron_jarvis.daemon import chat_prefix as CP
 
     _connect(platform)
     d = SimpleD(platform)
-    a, b, c, x = (f"mcp__{APP}__{n}" for n in ("get_invoice", "find_customer", "enter_bill", "no_such_tool"))
-    kept = chat_kept.Kept(tools=[c, x, "mcp__other__t", a, "read_file"], held={c, x, "mcp__other__t", a, "read_file"})
+    r1, r2, r3, w, x = (f"mcp__{APP}__{n}" for n in
+                        ("get_invoice", "find_customer", "list_thing_1", "enter_bill", "no_such_tool"))
+    everything = [r1, w, x, "mcp__other__t", r2, "read_file"]
+    kept = chat_kept.Kept(tools=everything, held=set(everything))
     turn = CP.StableTurn(active=True, kept=kept)
     assert turn.keep_conn(d, [], 24) == [], "the extension is switched off: nothing of it stays"
-    assert turn.keep_conn(d, [b, a], 24) == [c, a], "kept first, in their order; never more than the words picked"
-    assert turn.keep_conn(d, [b, a, f"mcp__{APP}__apply_credit"], 24) == [c, a, b]
-    assert turn.keep_conn(d, [b], 1) == [c], "the cap holds"
-    assert CP.StableTurn(active=True, kept=kept, low_trust=True).keep_conn(d, [b], 24) == [b]
-    assert CP.StableTurn(active=False, kept=kept).keep_conn(d, [b], 24) == [b]
-    not_held = chat_kept.Kept(tools=[c, a], held=set())
-    assert CP.StableTurn(active=True, kept=not_held).keep_conn(d, [b], 24) == [b]
-    # A tool that now asks before each use (held back) lost its standing
-    # approval: it does not stay; the words of a message may still pick it.
-    platform.registry.get(c).quarantined = True
-    assert turn.keep_conn(d, [b, a], 24) == [a, b]
-    assert turn.keep_conn(d, [c, b], 24) == [a, c], "picked by this message's own words: it is the words' pick"
+    # This message's picks are all seated, first; kept READERS fill the room left.
+    assert turn.keep_conn(d, [r3], 24) == [r3, r1, r2]
+    assert w not in turn.keep_conn(d, [r3], 24), "a tool that may change something does not stay"
+    assert turn.keep_conn(d, [r3, w], 24) == [r3, w, r1, r2], "picked by this message's own words: seated"
+    # No room: the picks stay whole and nothing kept displaces one.
+    assert turn.keep_conn(d, [r3, w], 2) == [r3, w]
+    # One seat left: the most recently sent kept reader takes it.
+    assert turn.keep_conn(d, [r3, w], 3) == [r3, w, r2]
+    assert CP.StableTurn(active=True, kept=kept, low_trust=True).keep_conn(d, [r3], 24) == [r3]
+    assert CP.StableTurn(active=False, kept=kept).keep_conn(d, [r3], 24) == [r3]
+    not_held = chat_kept.Kept(tools=[r1, r2], held=set())
+    assert CP.StableTurn(active=True, kept=not_held).keep_conn(d, [r3], 24) == [r3]
+    # A reader that now asks before each use (held back) lost its standing approval.
+    platform.registry.get(r1).quarantined = True
+    assert turn.keep_conn(d, [r3], 24) == [r3, r2]
+    assert CP.reads_only(platform.registry, r2) and not CP.reads_only(platform.registry, w)
+    assert not CP.reads_only(platform.registry, x) and not CP.reads_only(None, r2)
 
 
 # --------------------------------------------------------------------------- #
@@ -245,6 +263,13 @@ def test_the_script_reads_reuse_and_the_first_word_before_and_after(two_weeks, c
     assert ["4", "1", "6,000", "not", "reported", "-"] in table
     assert _digest(two_weeks) == before, "it wrote to the database"
     assert sorted(p.name for p in two_weeks.parent.iterdir()) == ["ironjarvis.db"], "it left a file beside it"
+
+
+def test_a_bad_split_is_refused_even_when_there_is_no_database(tmp_path, capsys):
+    code = M.main(["--db", str(tmp_path / "nothing-here.db"), "--split", "yesterday"])
+    out, err = capsys.readouterr()
+    assert code == 2 and out == "" and err.strip() == M.BAD_SPLIT.format(value="yesterday")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_bad_split_ends_in_one_sentence_before_anything_is_opened(two_weeks, capsys):

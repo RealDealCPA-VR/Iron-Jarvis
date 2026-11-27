@@ -477,12 +477,21 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--days", type=int, default=7, help="how many days back to read (default 7)")
     ap.add_argument("--max-replies", type=int, default=12, help="reply numbers past this print as one row")
     ap.add_argument("--now", help="read as if it were this time (ISO, UTC), for a copy taken earlier")
-    ap.add_argument("--split", help="a moment (ISO, UTC): also print plain chat's reuse and time to the "
-                                    "first word before it and from it on")
+    ap.add_argument("--split", help="a moment (ISO; read as UTC when it names no zone, as --now is): also "
+                                    "print plain chat's reuse and time to the first word before it and "
+                                    "from it on")
     args = ap.parse_args(argv)
     tools_json, db_path = args.tools_json, args.db or args.db_path
     if tools_json and not db_path and not tools_json.lower().endswith(".json"):
         tools_json, db_path = None, tools_json  # one positional that is the database
+    # A bad --split ends here in one sentence, before anything is looked for or opened.
+    try:
+        split = datetime.fromisoformat(args.split) if args.split else None
+    except ValueError:
+        print(BAD_SPLIT.format(value=args.split), file=sys.stderr)
+        return 2
+    if split is not None and split.tzinfo is not None:
+        split = split.astimezone(timezone.utc).replace(tzinfo=None)
     db_path = db_path or default_db(args.root)
     if not os.path.isfile(db_path):
         print(f"What each reply used: there is no database at {db_path}. Nothing yet.")
@@ -494,14 +503,6 @@ def main(argv: "list[str] | None" = None) -> int:
         return 2
     if now is not None and now.tzinfo is not None:
         now = now.astimezone(timezone.utc).replace(tzinfo=None)
-    # A bad --split ends here in one sentence, before anything is opened.
-    try:
-        split = datetime.fromisoformat(args.split) if args.split else None
-    except ValueError:
-        print(BAD_SPLIT.format(value=args.split), file=sys.stderr)
-        return 2
-    if split is not None and split.tzinfo is not None:
-        split = split.astimezone(timezone.utc).replace(tzinfo=None)
     left_behind = wal_state(db_path) == "left_behind"
     try:
         db = open_read_only(db_path)

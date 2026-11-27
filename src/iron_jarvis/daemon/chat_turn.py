@@ -12379,7 +12379,7 @@ class _Grounding:
         "project", "project_query", "folder_rules", "folder_rules_used", "lessons", "index",
         "fabric", "connector", "conn_tools", "roster", "workflows", "packs_starting",
         "text_only", "apps", "apps_named", "apps_live", "apps_on", "apps_offer",
-        "harness", "apps_phone", "late", "work", "client", "used",
+        "harness", "apps_phone", "late", "work", "client", "used", "live_beside",
     )
 
     def __init__(self) -> None:
@@ -12417,6 +12417,14 @@ class _Grounding:
         #: Set by the lane for an IJ harness turn (v1.366.0): it never hands
         #: work to anyone either, so the roster is left out the same way.
         self.harness = False
+        #: Release 7: set by the lane for a PLAIN CHAT reply. The sections
+        #: that hold a count or live state (the memory index: "Past
+        #: conversations: N indexed", the memory graph's counts; the roster:
+        #: "(busy, 87% over 23 runs)") then ride beside the newest message
+        #: (:meth:`query`, :meth:`live_last`) instead of in the stable head,
+        #: which must not change between two replies. False (a coding
+        #: session, any other reader): every section is where it always was.
+        self.live_beside = False
         #: The project folder's AGENTS.md / CLAUDE.md (+ .local) sections
         #: (v1.326.0, ``projects/folder_rules``) and the file names injected —
         #: the turn's ``folder_rules`` receipt on BOTH lanes ([] = none).
@@ -12480,7 +12488,9 @@ class _Grounding:
         lessons — the client's own preferences beside the owner's) and the
         memory index. The lanes join it at the old seam, in the prompt's
         stable head, BEFORE compaction and the planner (both price it)."""
-        return self.project + self.folder_rules + self.lessons + self.client + self.index
+        return self.project + self.folder_rules + self.lessons + self.client + (
+            "" if self.live_beside else self.index
+        )
 
     def query(self) -> str:
         """v1.420.0 (C3.7): the grounded sections that change with each
@@ -12495,19 +12505,32 @@ class _Grounding:
         from ..context.prefix import found as _found
         from ..context.prefix import own as _own
 
-        return _found(self.project_query + self.work + self.fabric + self.connector) + _own(self.apps)
+        # The memory index (it holds live counts) is Iron Jarvis's own account
+        # of what it can remember: beside the message for a plain chat reply.
+        return (
+            _own(self.index if self.live_beside else "")
+            + _found(self.project_query + self.work + self.fabric + self.connector)
+            + _own(self.apps)
+        )
 
     def after_skill(self) -> str:
         # The packs note rides the shared join (v1.311.0 review), so both
         # lanes carry it on EVERY turn — not only one that armed tools — and
         # it is "" (byte-identical prompt) whenever nothing is starting.
         note = packs_starting_note(self.packs_starting)
-        roster = "" if (self.text_only or self.harness) else self.roster
+        roster = "" if (self.text_only or self.harness or self.live_beside) else self.roster
         # v1.420.0 (C3.8): a CODING turn is not offered the saved workflows
         # either — it never hands work to a workflow (no workflow tool is in
         # its set), so the list was cost without use.
         workflows = "" if self.harness else self.workflows
         return roster + workflows + (("\n\n" + note) if note else "")
+
+    def live_last(self) -> str:
+        """Release 7: the roster for a PLAIN CHAT reply (it carries each
+        agent's live state and counts), joined to the query tail (read last)
+        so it rides beside the newest message. "" whenever :meth:`after_skill`
+        carries it (or the reply hands work to nobody)."""
+        return self.roster if (self.live_beside and not self.text_only and not self.harness) else ""
 
 
 #: v1.418.0 (C3.4): how long a turn waits for its grounding hops before it
@@ -13986,6 +14009,7 @@ async def run_chat_turn(
     # stable head before it reads from a provider's prompt cache again. The
     # planner and the compaction still price ``system + _query_tail``.
     # MIRROR NOTE (lock-step): routes/chat.py keeps the same tail.
+    _grounding.live_beside = _stable.active  # release 7: no live figure in the head (lock-step)
     _query_tail = _tail_own(_brain.block)  # release 7: Iron Jarvis's own words (lock-step)
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block, before the planner).
@@ -14250,6 +14274,10 @@ async def run_chat_turn(
     # so their cost is priced (the repo rule).
     # MIRROR NOTE (lock-step): routes/chat.py appends the same sections.
     system += _grounding.after_skill()
+    # Release 7: the roster carries each agent's live state and counts, so
+    # for a plain chat reply it joins the tail (read last, beside the newest
+    # message), here, before the planner prices it. MIRROR NOTE (lock-step).
+    _query_tail += _tail_last(_grounding.live_last())
 
     # WORKSPACE GROUNDING (v1.210.0): a chat bound to a folder (the Build
     # pane's per-pane chat sends `workspace_dir` every turn) has that folder

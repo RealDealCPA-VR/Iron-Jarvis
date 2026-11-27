@@ -447,15 +447,15 @@ class WorkHistoryTool(Tool):
         self.platform = platform
 
     def spec(self) -> dict[str, Any]:
-        """The schema, with TODAY on this PC at the end of the description
-        (13-b review): a plain chat's prompt says no date, and the model
-        turns "in March" or "last week" into dates itself. Built each time
-        the roster is (the day changes once a day)."""
-        out = super().spec()
-        today = today_line()
-        if today:
-            out = {**out, "description": f"{out.get('description') or self.description} {today}"}
-        return out
+        """The schema. It no longer ends with today's date (the intelligence
+        plan, release 7): every plain chat reply now carries today's date
+        beside its newest message (``core/today``, ``context/prefix``), and
+        an agent run in its Environment section, so the model that turns "in
+        March" or "last week" into dates still knows the day. A date in a
+        tool's DEFINITION changed the chat's tool list at midnight, and with
+        it everything a model server had already read. :func:`today_line`
+        stays for the tool's own answers."""
+        return super().spec()
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from ..providers.failure_words import answers_the_phone

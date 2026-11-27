@@ -128,6 +128,33 @@ def test_a_tool_the_chat_already_sent_keeps_its_place_and_a_new_one_goes_at_the_
     assert P.spec_name({"type": "function", "function": {"name": "fn_shape"}}) == "fn_shape"
 
 
+def test_past_the_most_names_a_chat_keeps_the_stalest_leave_never_one_this_reply_holds():
+    turn = CP.StableTurn(active=True)
+    names = [f"tool_{i}" for i in range(K.MAX_TOOLS + 5)]
+    held = names[:3] + names[-2:]          # the chat's oldest core readers, and the two newest
+    kept = turn._trim(names, held)
+    assert len(kept) == K.MAX_TOOLS and all(n in kept for n in held)
+    assert kept[:3] == names[:3], "the oldest names this reply holds are not the ones that leave"
+    assert [n for n in names if n not in kept] == names[3:8], "the stalest leave, longest-kept first"
+
+
+def test_rows_of_a_chat_that_is_gone_are_swept_when_they_are_old(engine):
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    with session_scope(engine) as db:
+        db.add(ChatThreadRecord(id="t-alive", title="alive"))
+        db.commit()
+    for thread in ("t-alive", "t-gone", "t-gone-new"):
+        K.save_tools(engine, thread, "", ["a_tool"])
+    with engine.begin() as conn:
+        conn.execute(K.ChatKept.__table__.update().where(K.ChatKept.thread_id.in_(["t-alive", "t-gone"]))
+                     .values(created_at=utcnow() - timedelta(days=K.ORPHAN_DAYS, minutes=1)))
+    K.save_tools(engine, "t-other", "", ["b_tool"])
+    with session_scope(engine) as db:
+        left = sorted(r.thread_id for r in db.exec(select(K.ChatKept)))
+    assert left == ["t-alive", "t-gone-new", "t-other"]
+
+
 def test_a_tool_that_joins_in_the_middle_of_a_reply_goes_at_the_end():
     from iron_jarvis.daemon.chat_turn import _keep_spec_order
 
@@ -151,23 +178,31 @@ def test_kept_readers_stay_under_the_cap_and_a_tool_the_message_asked_for_never_
     assert P.keep_auto([], [], ["r1"], may_stay=lambda n: 1 / 0, ceiling=6) == []
 
 
-def test_the_readers_that_stay_are_autos_own_and_never_reach_the_internet(tmp_path):
+def test_only_a_tool_named_on_the_list_may_stay(tmp_path):
+    """Registry-wide: a tool that is not on the list never stays, whatever it
+    declares, so a new read-only tool is not sticky until someone adds it on
+    purpose. And the list holds no tool that reaches the internet, the
+    person's live browser tab, a model, or a process."""
     from iron_jarvis.platform import build_platform
     from iron_jarvis.providers import egress
-    from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS
     from iron_jarvis.tools.base import Reversibility
 
     registry = build_platform(str(tmp_path / "home")).registry
-    assert CP.UNDECLARED_READERS <= AUTO_SAFE_TOOLS
-    assert not (CP.UNDECLARED_READERS & egress.INTERNET_TOOLS)
-    assert not ({"web_search", "web_fetch", "view_image"} & CP.UNDECLARED_READERS)
-    for name in CP.UNDECLARED_READERS:
-        assert registry.get(name) is not None, name
-    # A tool that changes something declares it, and so can never stay.
-    for name in ("write_file", "write_document", "excel_edit", "docx_edit", "ltm_append", "remember_preference"):
-        tool = registry.get(name)
-        assert tool is not None and tool.reversibility != Reversibility.READONLY
-        assert name not in CP.UNDECLARED_READERS
+    names = [spec["name"] for spec in registry.specs()]
+    assert len(names) > 100
+    stays = {n for n in names if CP.may_stay(registry, n)}
+    assert stays == CP.STAY_READERS & set(names)
+    assert len(stays) >= 20, "the list names tools that exist"
+    declared = {n for n in names if registry.get(n).reversibility == Reversibility.READONLY}
+    assert declared - CP.STAY_READERS, "control: some tools declare they only read and still do not stay"
+    for name in ("web_search", "web_fetch", "view_image", "run_doctor", "code_load", "code_search",
+                 "browser_read_page", "browser_get_elements", "browser_screenshot", "browser_list_tabs",
+                 "write_file", "write_document", "excel_edit", "docx_edit", "ltm_append", "remember_preference"):
+        assert not CP.may_stay(registry, name), name
+    assert not (CP.STAY_READERS & egress.INTERNET_TOOLS)
+    assert not any(n.startswith(("browser_", "mcp__")) for n in CP.STAY_READERS)
+    # A name on the list that this build does not register does not stay either.
+    assert not CP.may_stay(registry, "no_such_tool") and not CP.may_stay(None, "read_file")
 
 
 def test_the_shared_prefix_is_counted_to_the_character():
@@ -426,6 +461,7 @@ def test_a_coding_session_is_not_touched():
     assert str(tail) == "\n\nRULES" + CP.ATTACH_HEAD + str(block), "the attachments section is the bytes it was"
     assert turn.later("\n\nSKILLS") == "\n\nSKILLS", "it stays in the instructions"
     assert turn.keep_auto(None, None, ["a"], ["a"], None, 6) == (["a"], ["a"])
+    assert turn._trim(["a", "b"], ["b"]) == ["a", "b"]
     assert turn.kept_app_tools() == [] and turn.keep_conn(None, ["mcp__a__b"], 24) == ["mcp__a__b"]
     specs = _specs("b", "a")
     assert turn.settle(["b", "a"], ["a"], specs) == (["b", "a"], ["a"], specs)

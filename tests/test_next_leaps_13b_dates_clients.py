@@ -310,14 +310,20 @@ async def test_a_clients_count_past_the_newest_rows_read_is_at_least(march, monk
 
 
 def test_the_model_is_told_today_on_this_pc(scene, monkeypatch):
-    """Review finding 4: a plain chat's prompt says no date, and the model
-    turns "in March" or "last week" into ISO dates itself, so the tool's
-    description ends with today on the owner's PC (its zone, the one seam)."""
+    """Review finding 4: the model turns "in March" or "last week" into ISO
+    dates itself, so it must know today on the owner's PC. Release 7 (moved
+    on purpose): the date rides beside every chat message now (pinned in the
+    lane test below and in ``tests/test_intel_07_*``), so the tool's
+    DEFINITION no longer carries it: a definition that changed at midnight
+    changed the chat's whole tool list. The tool's own date helper still
+    answers in the owner's zone (the one seam)."""
     monkeypatch.setattr(B, "_local_zone", lambda: timezone(timedelta(hours=-5)))
     monkeypatch.setattr(WT, "_utc_now", lambda: datetime(2027, 2, 4, 3, 0))  # Feb 3, 22:00 there
+    assert WT.today_line() == "Today is Wednesday, Feb 3, 2027 (2027-02-03) on the user's PC."
     described = scene.tool.spec()["description"]
-    assert described.endswith(" Today is Wednesday, Feb 3, 2027 (2027-02-03) on the user's PC.")
-    assert described.startswith(WT.WorkHistoryTool.description)
+    assert described == WT.WorkHistoryTool.description, "the definition is the same every day"
+    monkeypatch.setattr(WT, "_utc_now", lambda: datetime(2027, 2, 5, 9, 0))
+    assert scene.tool.spec() == {**scene.tool.spec(), "description": described}
     assert "2026-03-01" not in described  # no example year the model could copy
     assert WT.WorkHistoryTool.description == scene.tool.description  # the class text is untouched
 
@@ -669,6 +675,8 @@ def test_a_real_stream_turn_draws_three_march_rows_that_open_their_chats(app_sce
             spec = t if isinstance(t, dict) else getattr(t, "__dict__", {})
             if spec.get("name") == "work_history":
                 offered.append(str(spec.get("description") or ""))
+        dated.append(any("Today's date is " in str(m.get("content") if isinstance(m, dict) else m.content)
+                         for m in messages))
         for m in messages:
             if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "tool":
                 told.append(str(m.get("content") if isinstance(m, dict) else m.content))
@@ -685,6 +693,7 @@ def test_a_real_stream_turn_draws_three_march_rows_that_open_their_chats(app_sce
 
         return RouteResult(LLMResponse(text="ok", usage={"input_tokens": 1, "output_tokens": 1}), "mock", "mock")
 
+    dated: list = []
     monkeypatch.setattr(app_scene.platform.router, "stream", fake_stream)
     monkeypatch.setattr(app_scene.platform.router, "complete", fake_complete)
     body = {"messages": [{"role": "user", "content": "what did we do for Baker in March?"}],
@@ -693,7 +702,10 @@ def test_a_real_stream_turn_draws_three_march_rows_that_open_their_chats(app_sce
     assert r.status_code == 200, r.text
     assert any("3 pieces of work in March 2026, for Baker:" in t for t in told), told
     # Review finding 4: the model that turned "in March" into dates was told today's date.
-    assert offered and all(WT.today_line() in d for d in offered), offered
+    # (Release 7: beside the message, in every call of the reply; no longer
+    # in the tool's definition, which must not change at midnight.)
+    assert dated and all(dated), "the model was not told today's date"
+    assert offered and not any("Today is" in d for d in offered), offered
     finished = [d for e, d in _frames(r.text)
                 if e == "tool_call" and d.get("name") == "work_history" and d.get("status") == "finished"]
     assert finished, "no finished work_history step"

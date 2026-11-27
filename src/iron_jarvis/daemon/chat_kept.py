@@ -161,10 +161,29 @@ def save_tools(engine: Any, thread_id: Any, turn_id: Any, names: Iterable[Any], 
             conn.execute(sa_delete(ChatKept).where(
                 ChatKept.thread_id == "", ChatKept.created_at < utcnow() - timedelta(days=ORPHAN_DAYS),
             ))
+        _sweep_gone(engine)
         return True
     except Exception:  # noqa: BLE001
         log.warning("the chat's tool names could not be kept", exc_info=True)
         return False
+
+
+def _sweep_gone(engine: Any) -> None:
+    """Remove the rows of chats that no longer exist (a reply into a deleted
+    chat's id writes a row again) once they are :data:`ORPHAN_DAYS` old. A
+    chat that was never saved has no chat record either: its row goes the
+    same way when the chat has been quiet that long. Never raises."""
+    try:
+        from ..core.models import ChatThreadRecord
+
+        with engine.begin() as conn:
+            conn.execute(sa_delete(ChatKept).where(
+                ChatKept.thread_id != "",
+                ChatKept.created_at < utcnow() - timedelta(days=ORPHAN_DAYS),
+                ChatKept.thread_id.notin_(select(ChatThreadRecord.id)),  # type: ignore[attr-defined]
+            ))
+    except Exception:  # noqa: BLE001 — a tidy-up is never worth a failed reply
+        log.debug("kept tool names of chats that are gone could not be swept", exc_info=True)
 
 
 def home_turn(engine: Any, turn_id: Any, thread_id: Any) -> int:

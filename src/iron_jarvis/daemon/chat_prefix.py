@@ -26,9 +26,8 @@ WHAT STAYS FOR THE CHAT, AND WHAT DOES NOT. A tool definition the chat's last
 reply was sent stays in the next reply's list, in the same place, only when
 the reply could have armed it by itself anyway:
 
-* a tool of Auto's own safe set that only READS (it declares
-  ``Reversibility.READONLY``, or is one of :data:`UNDECLARED_READERS`),
-  while Auto is on for the chat. A tool that changes something is armed by
+* a built-in tool NAMED on :data:`STAY_READERS` (readers of Iron Jarvis's
+  own local data), while Auto is on for the chat. A tool that changes something is armed by
   the words of the message that asks for the change, exactly as before
   ("change needs intent"), so it is never kept;
 * an extension's tool, through :meth:`StableTurn.keep_conn` and
@@ -55,37 +54,69 @@ log = logging.getLogger(__name__)
 
 ATTACH_HEAD = "\n\n# Attachments (provided by the user this turn)"
 
-#: Tools of Auto's safe set that only READ but do not declare
-#: ``Reversibility.READONLY`` (a tool that declares nothing reads as one that
-#: changes something, on purpose). They stay for a chat like the declared
-#: readers. ``recall`` reads the same memory every reply is already grounded
-#: in (and ``ltm_search``, which declares itself, reads). NOT here, on
-#: purpose: ``view_image`` (it spends a model call) and the web tools (the web
-#: is armed by a message that asks for it): each of those is armed by the
-#: words of its own message, as before.
-UNDECLARED_READERS = frozenset({
-    "file_search", "recall", "guide_search", "app_search", "app_status", "image_info",
+#: THE TOOLS THAT MAY STAY FOR A CHAT, BY NAME. Readers of Iron Jarvis's own
+#: local data: files the chat can already reach, memory, history, the work
+#: record, settings and lists. A tool that is NOT named here never stays,
+#: whatever it declares: a new read-only tool is not sticky until someone
+#: adds it on purpose (a registry-wide test holds that). NEVER here: anything
+#: in ``egress.INTERNET_TOOLS`` (the web is armed by a message that asks for
+#: it), any ``browser_*`` tool (it reaches the person's live tab),
+#: ``view_image`` or anything else that makes a model call of its own,
+#: anything that starts a process (``run_doctor``, ``code_search``),
+#: ``code_load``, and every tool that changes something.
+STAY_READERS = frozenset({
+    # files on this PC (each read is still confined by the file policy)
+    "read_file", "read_document", "list_files", "list_folder", "file_search",
+    "extract_pdf", "pdf_form_fields", "compare_documents", "redact_scan", "image_info",
+    # a workbook's contents, read only
+    "excel_profile", "excel_query", "excel_read", "excel_sheet_spec", "excel_formula_check",
+    "excel_accounts_diff",
+    # memory, history and the work record (what every reply is already grounded in)
+    "recall", "ltm_search", "history_search", "work_history",
+    # Iron Jarvis's own guides, settings and lists
+    "guide_search", "app_search", "app_status", "pack_status", "workflow_list", "chat_fullness",
+    "config_list",
 })
+
+
+def may_stay(registry: Any, name: str) -> bool:
+    """May the built-in tool *name* stay for a chat without its words? Only a
+    name on :data:`STAY_READERS` that is registered. Never raises."""
+    try:
+        return name in STAY_READERS and registry.get(name) is not None
+    except Exception:  # noqa: BLE001 — cannot tell: it does not stay
+        return False
+
+
+def reads_only(registry: Any, name: str) -> bool:
+    """Is the EXTENSION tool *name* a reader by its own annotation (MCP
+    ``readOnlyHint: true``, which the registry reads as
+    ``Reversibility.READONLY``)? Unknown or unannotated = no: a tool that
+    may change something is armed by the words of its own message, never
+    kept. Never raises."""
+    try:
+        from ..tools.base import Reversibility
+
+        tool = registry.get(name)
+        return tool is not None and getattr(tool, "reversibility", None) == Reversibility.READONLY
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def keep_ceiling(ceiling: "int | None", standing: int, local: bool) -> int:
     """The most named tools a chat reply holds once kept readers are counted.
 
-    * a model with a MEASURED, narrower ceiling keeps that ceiling;
-    * a model served from the owner's own machine or network (*local*) with
-      no measured ceiling keeps the lanes' standing cap (*standing*, six): a
-      small local model picks worse from a wide menu, and nothing has
-      measured this one;
+    * a model served from the owner's own machine or network, or one whose
+      provider is not known yet (*local*): the lanes' standing cap
+      (*standing*, six). A small local model picks worse from a wide menu;
     * every other model: the bound ``mcp/reach`` already puts on tools that
-      continue from the reply before (``MAX_CONTINUED``, twelve).
+      continue from the reply before (``MAX_CONTINUED``, twelve);
+    * a MEASURED ceiling always wins when it is lower than either.
     """
     from ..mcp.reach import MAX_CONTINUED
 
-    if ceiling is not None and ceiling < standing:
-        return int(ceiling)
-    if local:
-        return int(standing)
-    return max(int(standing), MAX_CONTINUED)
+    base = int(standing) if local else max(int(standing), MAX_CONTINUED)
+    return min(base, int(ceiling)) if ceiling is not None else base
 
 
 def is_local_model(d: Any, provider: str) -> bool:
@@ -93,11 +124,14 @@ def is_local_model(d: Any, provider: str) -> bool:
     ``providers.local.is_local_provider`` (``ollama``, ``custom``, the
     ``fleet-*`` servers) asked of the reply's provider: the pick, else the
     configured default. By name only (no adapter is built: this runs on the
-    loop). True when the provider cannot be read (the narrower cap)."""
+    loop). True when the provider is not known at this point (Auto routing
+    picks later, or nothing can be read): the narrower cap."""
     from ..providers.local import is_local_provider
 
     try:
         name = (provider or "").strip() or str(getattr(d.platform.config, "default_provider", "") or "")
+        if not name or name == "auto":
+            return True
         return bool(is_local_provider(name))
     except Exception:  # noqa: BLE001 — cannot tell: the narrower cap
         return True
@@ -182,23 +216,19 @@ class StableTurn:
             from ..mcp.reach import _held, server_of
 
             registry = d.platform.registry
-            on = {server_of(n) for n in conn_tools if server_of(n)}
+            picks = list(conn_tools)
+            on = {server_of(n) for n in picks if server_of(n)}
             stay = [
                 n for n in self.kept.tools
-                if n in self.kept.held and server_of(n) in on and registry.get(n) is not None
+                if n in self.kept.held and server_of(n) in on and reads_only(registry, n)
             ]
-            stay = [n for n in stay if not _held(registry, n)]
-            if not stay:
+            stay = [n for n in stay if not _held(registry, n) and n not in picks]
+            # This message's own picks are ALWAYS seated; kept readers take
+            # only the room that is left, the most recently sent first.
+            room = max(0, int(cap) - len(picks))
+            if not stay or not room:
                 return conn_tools
-            limit = max(int(cap), len(conn_tools))
-            out = stay[:limit]
-            target = max(len(conn_tools), len(out))
-            for name in conn_tools:
-                if len(out) >= target:
-                    break
-                if name not in out:
-                    out.append(name)
-            return out
+            return picks + stay[-room:]
         except Exception:  # noqa: BLE001 — the words' own pick stands
             log.warning("a chat's kept extension tools could not be joined", exc_info=True)
             return conn_tools
@@ -210,6 +240,23 @@ class StableTurn:
             return []
         return [n for n in self.kept.tools if n in self.kept.held and n.startswith("mcp__")]
 
+    def _trim(self, order: "list[str]", sent: "list[str]") -> "list[str]":
+        """*order* cut to the most names a chat keeps: the STALEST leave (a
+        name this reply was not sent, the longest-kept first), never one this
+        reply holds."""
+        over = len(order) - chat_kept.MAX_TOOLS
+        if over <= 0:
+            return order
+        held = set(sent)
+        out = list(order)
+        for name in list(order):
+            if over <= 0:
+                break
+            if name not in held:
+                out.remove(name)
+                over -= 1
+        return out[-chat_kept.MAX_TOOLS:]
+
     # -- after the arming pass ------------------------------------------------ #
     def keep_auto(self, d: Any, body: Any, armed: list, auto_armed: list, ceiling: "int | None",
                   standing: int, provider: str = "") -> "tuple[list, list]":
@@ -220,26 +267,11 @@ class StableTurn:
         try:
             if not bool(getattr(body, "auto_tools", False)):
                 return armed, auto_armed
-            from ..tools.autoselect import AUTO_SAFE_TOOLS
-            from ..tools.base import Reversibility
-
             registry = d.platform.registry
-
-            def may_stay(name: str) -> bool:
-                if name not in AUTO_SAFE_TOOLS or name.startswith("mcp__"):
-                    return False
-                tool = registry.get(name)
-                if tool is None:
-                    return False
-                return (
-                    getattr(tool, "reversibility", None) == Reversibility.READONLY
-                    or name in UNDECLARED_READERS
-                )
-
             explicit = [t for t in armed if t not in auto_armed]
             auto = P.keep_auto(
                 explicit, auto_armed, [n for n in self.kept.tools if n in self.kept.held],
-                may_stay=may_stay,
+                may_stay=lambda name: may_stay(registry, name),
                 ceiling=keep_ceiling(ceiling, standing, is_local_model(d, provider)),
             )
             return explicit + auto, auto
@@ -381,7 +413,7 @@ class StableTurn:
         chat at once when the page already linked it."""
         try:
             sent = chat_kept.clean_names(sent_names)
-            order = P.order_names([*self._order, *sent], self._order)[-chat_kept.MAX_TOOLS:]
+            order = self._trim(P.order_names([*self._order, *sent], self._order), sent)
             if order != self.kept.tools or set(sent) != set(self.kept.held):
                 chat_kept.save_tools(self.engine, self.thread, self.turn, order, held=sent)
             if not self.thread and self.turn:
@@ -424,5 +456,6 @@ async def begin(d: Any, body: Any, *, harness: Any = None, low_trust: bool = Fal
 
 
 __all__ = [
-    "ATTACH_HEAD", "AttachBlock", "StableTurn", "UNDECLARED_READERS", "begin", "is_local_model", "keep_ceiling",
+    "ATTACH_HEAD", "AttachBlock", "STAY_READERS", "StableTurn", "begin", "is_local_model", "keep_ceiling",
+    "may_stay", "reads_only",
 ]

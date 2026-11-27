@@ -4698,6 +4698,7 @@ async def chat_stream(
     # v1.420.0 (C3.7, PROMPT ORDER FOR THE CACHE) — the lock-step copy of
     # chat_turn's: the query-dependent sections are kept in ``_query_tail``
     # and joined LAST (after the tool list), priced with the rest.
+    _grounding.live_beside = _stable.active  # release 7: no live figure in the head (lock-step)
     _query_tail = _tail_own(_brain.block)  # release 7: Iron Jarvis's own words (lock-step)
     # v1.326.0: this join also carries the project folder's AGENTS.md /
     # CLAUDE.md sections (right after the project block). MIRROR NOTE
@@ -4970,6 +4971,10 @@ async def chat_stream(
     # dashboard uses, so skipping them here would make the model roster- and
     # workflow-blind on every real turn. MIRROR NOTE (lock-step): chat_turn.
     system += _grounding.after_skill()
+    # Release 7: the roster carries each agent's live state and counts, so
+    # for a plain chat reply it joins the tail (read last, beside the newest
+    # message), here, before the planner prices it. MIRROR NOTE (lock-step).
+    _query_tail += _tail_last(_grounding.live_last())
 
     # WORKSPACE GROUNDING (v1.210.0) — the lock-step copy of chat_turn's
     # injection: a chat bound to a folder (the Build pane's per-pane chat

@@ -301,10 +301,13 @@ _LESSONS = "\n\n# Lessons learned (fake)\n- L-ONE"
 _EXPECTED_STABLE_SEGMENT = (
     "\n\n# Project: Grounded"
     + _LESSONS
-    + "\n\nIDX-1"
-    + "\n\nROSTER-1"
     + "\n\nWF-1"
 )
+#: Release 7 (moved on purpose): the memory index and the roster hold counts
+#: and live state ("Past conversations: N indexed", "(busy, 87% over 23
+#: runs)"), so for a plain chat reply they ride beside the newest message:
+#: the index as Iron Jarvis's own words ahead of the found block, the roster
+#: after it. The stable head holds no number and no live state.
 _EXPECTED_QUERY_SEGMENT = (
     "\n\nProject knowledge (reference):\nKNOW-1"
     + "\n\nFAB-1"
@@ -472,6 +475,9 @@ def test_grounded_system_prompt_is_byte_identical(tmp_path, monkeypatch, lane):
     )
     beside_at = system.index(_prefix.ONCE_TOP)
     assert system.index(_EXPECTED_STABLE_SEGMENT) < beside_at
+    assert "IDX-1" not in system[:beside_at] and "ROSTER-1" not in system[:beside_at]
+    assert beside_at < system.index("IDX-1") < system.index(_prefix.FOUND_TOP)
+    assert system.index("ROSTER-1") > system.index(_prefix.FOUND_BOTTOM)
     assert _EXPECTED_QUERY_SEGMENT not in system[:beside_at], "a query-dependent section is in the system prompt"
     assert (_EXPECTED_QUERY_SEGMENT + "\n---\n" + _prefix.FOUND_BOTTOM) in system[beside_at:], (
         f"{lane}: the query-dependent sections are out of order, re-joined, or followed by something:\n"
@@ -523,7 +529,7 @@ def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, mon
         f"{lane}: the apps section is not Iron Jarvis's own words beside the message:\n{system[-900:]!r}"
     )
     assert head not in system[:beside_at] and "CONN-1" not in system[:beside_at]
-    assert system.index(head.lstrip("\n")) > system.index("\n\nROSTER-1"), f"{lane}: must follow the stable roster"
+    assert system.index(head.lstrip("\n")) > system.index("\n\nWF-1"), f"{lane}: must follow the stable head"
     assert "- Dropbox: not connected." in system
     assert probe.peak == len(_GROUND_HOPS), f"{lane}: the hops stopped overlapping"
     assert not any(probe.on_loop.values()), f"{lane}: a hop ran on the loop"
