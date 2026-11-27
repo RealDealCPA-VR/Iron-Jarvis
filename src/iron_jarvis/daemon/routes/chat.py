@@ -361,8 +361,8 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # (not the kept ones), in this same transaction.
         if marks_ok:
             _marks.drop_thread(db, thread_id)
-        # Release 7: and what the chat kept between replies (its tool names
-        # and the text attached to its messages), in this same transaction.
+        # Release 7: and what the chat kept between replies (its tool names:
+        # nothing else is kept), in this same transaction.
         if kept_ok:
             _kept.drop_thread(db, thread_id)
         # Third plan CS7: and its turn records (each reply's text, thinking,
@@ -3805,20 +3805,24 @@ def register(app: FastAPI, d) -> None:
                     hold_local_only(d.platform.engine, tid, app_id)
 
             await asyncio.shield(asyncio.to_thread(_hold_all))
-        # Release 7: the tool names the first reply kept for the chat belong
-        # to the chat now named. AFTER the Local only holds above are
-        # applied: a request cancelled at this await must lose no hold.
-        # Never raises.
-        from .. import chat_kept as _kept
-
-        await asyncio.to_thread(_kept.home_turn, d.platform.engine, turn_id, tid)
         # v1.435.0 (D3): a new chat's first turn that switched Local only on
         # or off from chat (`chat_local_only`) applies it to the chat now named.
+        # It is "taken once, then written" like the holds above, so its write
+        # is shielded the same way: a request cancelled here still writes it.
         from ...providers.egress import set_thread_local_only, take_pending_local_only
 
         _pending_lo = take_pending_local_only(turn_id)
         if _pending_lo is not None:
-            await asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+            await asyncio.shield(
+                asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+            )
+        # Release 7: the tool names the first reply kept for the chat belong
+        # to the chat now named. AFTER the Local only holds AND the chat's own
+        # Local only switch are written: a request cancelled at this await
+        # must lose neither. Never raises.
+        from .. import chat_kept as _kept
+
+        await asyncio.to_thread(_kept.home_turn, d.platform.engine, turn_id, tid)
         # Idea 39 (39-a, review): a schedule, watcher, workflow run or night
         # task a new chat's first turn set up before this link reports to the
         # chat now named.
@@ -4974,7 +4978,9 @@ async def chat_stream(
     # Release 7: the roster carries each agent's live state and counts, so
     # for a plain chat reply it joins the tail (read last, beside the newest
     # message), here, before the planner prices it. MIRROR NOTE (lock-step).
-    _query_tail += _tail_last(_grounding.live_last())
+    # (Its place: a standing note, BEFORE what was found; the per-message
+    # directives are what a model reads last.)
+    _query_tail += _tail_own(_grounding.live_last())
 
     # WORKSPACE GROUNDING (v1.210.0) — the lock-step copy of chat_turn's
     # injection: a chat bound to a folder (the Build pane's per-pane chat
@@ -5553,6 +5559,9 @@ async def chat_stream(
             # Idea 33-a — lock-step: the chat's own model, which a recording's
             # notes are offered to when nothing local can write them.
             chat_model=(provider_choice, model_choice),
+            # Release 7: the tools armed on this reply ONLY because they
+            # stayed for the chat; they do no new work (lock-step).
+            stayed_only=_stable.stayed_only(body),
             # Next leaps 16-a: only the dashboard's chat page draws a card
             # under the reply (the search-by-meaning offer): its route asks
             # for the suggestion line (`suggest_preferences`: never a Build
@@ -5571,7 +5580,9 @@ async def chat_stream(
         # the browser — a brief that says "you can click" beside no click tool
         # is a lie. MIRROR NOTE (lock-step): chat_turn's Tools seam.
         if _is_browser_agent_turn({*armed, *ask_armed}):
-            system += "\n\n" + browser_agent_block({*armed, *ask_armed})
+            # Release 7: a brief that follows a tool armed for THIS message rides
+            # beside the message (``later``), never in the system prompt (lock-step).
+            system += _stable.later("\n\n" + browser_agent_block({*armed, *ask_armed}))
         # v1.454.0: the user's browsing preferences (Settings › Your browser):
         # any turn with a browser tool, "" when unset. MIRROR NOTE
         # (lock-step): chat_turn's Tools seam.
@@ -5579,17 +5590,17 @@ async def chat_stream(
             d.platform.config, {*armed, *ask_armed}, event_bus=d.platform.event_bus
         )
         if _browse_prefs:
-            system += "\n\n" + _browse_prefs
+            system += _stable.later("\n\n" + _browse_prefs)
         # THE MEMORY BRIEF (v1.279.0). MIRROR NOTE (lock-step): chat_turn's
         # Tools seam.
         _pref = preference_block({*armed, *ask_armed})
         if _pref:
-            system += "\n\n" + _pref
+            system += _stable.later("\n\n" + _pref)
         # v1.470.0: the skill brief, only beside `skill_create`. MIRROR NOTE
         # (lock-step): chat_turn's Tools seam.
         _skill_brief = _chat_turn.skill_block({*armed, *ask_armed})
         if _skill_brief:
-            system += "\n\n" + _skill_brief
+            system += _stable.later("\n\n" + _skill_brief)
         # v1.479.0: the lookup's brief, only beside `find_capability`.
         # MIRROR NOTE (lock-step): chat_turn's Tools seam.
         _cap_brief = _chat_turn.capability_block({*armed, *ask_armed}, d.platform.config)
@@ -5607,26 +5618,25 @@ async def chat_stream(
                 # Release 7: it follows THIS message's words, so it rides
                 # beside the message (``later``). MIRROR NOTE (lock-step).
                 system += _stable.later("\n\n" + _skills_fit)
-        # v1.577.0: what each app of the reply said about its own tools when
-        # it started (MCP `instructions`), fenced and scanned, at the Tools
-        # seam like the skills above. MIRROR NOTE (lock-step): the other lane.
-        _app_notes = await asyncio.to_thread(_chat_turn.app_instructions, [*armed, *ask_armed])
-        if _app_notes:
-            system += _app_notes
-        explicit_armed = [
+        _explicit_now = lambda: [  # noqa: E731
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
         # v1.366.0: a harness turn's tool guidance is its component tree
         # (rendered before the planner, in the dialect's own names), so
         # this chat block - which names the REAL tools - is left out.
         # MIRROR NOTE (lock-step): the other lane skips it the same way.
-        _tools_block = (
+        # Release 7: built when the request is SENT (``_stable.when_sent``), from
+        # the tool list as it stands then, and placed beside the newest message:
+        # the system prompt of a plain chat names no tool, so a tool the lookup
+        # joins after this seam is named in this reply as in the next one.
+        # MIRROR NOTE (lock-step): chat_turn's Tools seam.
+        _tools_text = lambda: (  # noqa: E731
             "\n\n# Tools\n"
             + (
                 "The user armed these tools for this chat: "
-                + ", ".join(explicit_armed)
+                + ", ".join(_explicit_now())
                 + ". "
-                if explicit_armed
+                if _explicit_now()
                 else ""
             )
             + (
@@ -5751,7 +5761,7 @@ async def chat_stream(
             + _stable.later(_write_directive(body, armed))
         )
         if _harness is None:
-            system += _tools_block
+            system += _stable.when_sent(_tools_text)
     overrides: dict[str, str] = {}
     for _name in armed:
         overrides[_name] = "allow"
@@ -5819,6 +5829,14 @@ async def chat_stream(
         )
         if _routed_section:
             system += _stable.later("\n\n" + _routed_section)  # release 7 (lock-step)
+    # v1.577.0: what each app of the reply said about its own tools when it
+    # started (MCP `instructions`), fenced and scanned. Release 7: read HERE,
+    # after the lookup's head start joined, so an app whose tool joined is
+    # covered in this reply as in the next. MIRROR NOTE (lock-step).
+    if armed or ask_armed:
+        _app_notes = await asyncio.to_thread(_chat_turn.app_instructions, [*armed, *ask_armed])
+        if _app_notes:
+            system += _app_notes
     # THE STABLE PREFIX (release 7): the system prompt is final and the tool
     # definitions are known, so the history is planned once more with the
     # tools counted, and what changes with this message is placed beside it.

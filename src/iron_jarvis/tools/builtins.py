@@ -270,7 +270,9 @@ async def _extract_document(
         try:
             from ..documents.tools import _with_ocr
 
-            text, ocr_note = await _with_ocr(path, text, resolver, ctx)
+            # (read_file's own extractor: the name tells a reply on which it only
+            # stayed to start no new reading of a scan, release 7.)
+            text, ocr_note = await _with_ocr(path, text, resolver, ctx, tool="read_file")
         except Exception:  # noqa: BLE001 — recovery is a bonus, never a gate
             ocr_note = ""
     if not ocr_note and not _document_body(text):

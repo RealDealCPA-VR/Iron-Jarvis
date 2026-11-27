@@ -112,6 +112,14 @@ class ToolContext:
     #: Build session, the sidebar, the POST lane and every agent run, which
     #: draw no such card.
     chat_page: bool = False
+    #: The intelligence plan, release 7: the tools armed on this chat reply
+    #: ONLY because they stayed for the chat (no message of this reply asked
+    #: for them). Such a tool does no NEW work beyond reading this PC's data:
+    #: a workbook reader does not open the workbook that is open in Excel,
+    #: and a file reader starts no new reading of a scan. Set by both chat
+    #: lanes (``chat_prefix.StableTurn.stayed_only``); empty everywhere else
+    #: (agent runs, scripts, coding sessions), where nothing changes.
+    stayed_only: "frozenset[str]" = frozenset()
     #: An id of this context's own (the intelligence plan, release 1). Both
     #: chat lanes build ONE context per message, so for a chat call that names
     #: no chat and no turn (a script against the API) this is what its kept

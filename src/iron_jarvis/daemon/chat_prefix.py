@@ -6,7 +6,8 @@ module is the seam both lanes call, so they cannot drift:
 ``begin`` (when the reply starts) -> ``keep_conn`` (the switched-on
 extensions' tools) -> ``attached`` (the attachments seam) -> ``keep_auto``
 (after the arming pass) -> ``settle`` (right after the tool definitions are
-built) -> ``later`` (a per-message section that used to join the system
+built) -> ``when_sent`` (the Tools seam: every line that names the reply's
+tools) -> ``later`` (a per-message section that used to join the system
 prompt) -> ``place`` (where the query tail used to be joined to the system
 prompt: the final plan, the messages to send, the save of the tool names).
 
@@ -54,9 +55,18 @@ log = logging.getLogger(__name__)
 
 ATTACH_HEAD = "\n\n# Attachments (provided by the user this turn)"
 
-#: THE TOOLS THAT MAY STAY FOR A CHAT, BY NAME. Each one only reads data that
-#: is already on this PC, starts no process and makes no network or model
-#: call (read line by line; the reasons are in ``docs/rules/chat.md``). A
+#: THE TOOLS THAT MAY STAY FOR A CHAT, BY NAME. A tool that is armed on a
+#: reply ONLY because it stayed reads data that is already on this PC, starts
+#: no process and makes no network or model call (read line by line; the
+#: reasons are in ``docs/rules/chat.md``). Nine of them CAN do more when a
+#: message asks: five workbook readers open the workbook that is open in
+#: Excel (a ``live:`` path starts the Excel helper), and four file readers
+#: read a scan with a model call per page. Armed only by staying they do
+#: neither (``ToolContext.stayed_only``, set from :meth:`StableTurn.
+#: stayed_only`): the workbook reader says in one sentence that the open
+#: workbook is read when the message asks, and the file reader returns the
+#: text it has (and a reading already made of that file) and says the
+#: scanned pages were not read. A
 #: tool that is NOT named here never stays, whatever it declares: a new
 #: read-only tool is not sticky until someone adds it on purpose (a
 #: registry-wide test holds that). NEVER here: anything in
@@ -83,7 +93,16 @@ STAY_READERS = frozenset({
     # Iron Jarvis's own guides, settings, lists and state (kept answers only: nothing is probed)
     "guide_search", "app_search", "app_status", "pack_status", "workflow_list", "chat_fullness",
     "config_list", "app_health", "code_search", "downloads_list",
+    # arithmetic only: it reads and writes nothing
+    "calculate",
 })
+
+#: The names on the list that can do MORE than read this PC's data when a
+#: message asks (see above): what ``ToolContext.stayed_only`` is read for.
+LIVE_WORKBOOK_READERS = frozenset({
+    "excel_read", "excel_profile", "excel_query", "excel_formula_check", "excel_sheet_spec",
+})
+SCAN_READERS = frozenset({"read_file", "read_document", "extract_pdf", "redact_scan"})
 
 
 def may_stay(registry: Any, name: str, permissions: Any = None) -> bool:
@@ -180,6 +199,42 @@ class AttachBlock(str):
         return self
 
 
+class SentMessages(list):
+    """The messages of ONE plain chat reply, as :meth:`StableTurn.place`
+    built them. The ONE place everything added later in the reply passes
+    through (a tool round's assistant turn and its results, a note in the
+    user's place): its content is neutralised of the block's marker lines
+    (``prefix.neutral``), so a file read in a tool round, or a model that
+    echoes them, cannot put a second "added by the app" line in the request.
+    A fenced result was neutralised already (``wrap_untrusted``); this covers
+    the unfenced ones. Deterministic: the same text gives the same bytes."""
+
+    @staticmethod
+    def _clean(message: Any) -> Any:
+        try:
+            content = getattr(message, "content", None)
+            if isinstance(content, str) and "[" in content:
+                clean = P.neutral(content)
+                if clean != content:
+                    message.content = clean
+        except Exception:  # noqa: BLE001 — the message goes as it came
+            pass
+        return message
+
+    def append(self, message: Any) -> None:
+        super().append(self._clean(message))
+
+    def extend(self, messages: Any) -> None:
+        super().extend(self._clean(m) for m in messages)
+
+    def insert(self, index: Any, message: Any) -> None:
+        super().insert(index, self._clean(message))
+
+    def __iadd__(self, messages: Any) -> "SentMessages":
+        self.extend(messages)
+        return self
+
+
 def _user_index(messages: Any) -> int:
     for i in range(len(messages) - 1, -1, -1):
         if str(getattr(messages[i], "role", "") or "") == "user":
@@ -199,6 +254,9 @@ class StableTurn:
         self.kept = kept or chat_kept.Kept()
         self.low_trust = bool(low_trust)
         self._later: list[str] = []
+        self._when_sent: list = []
+        self._built_last: "str | None" = None
+        self._stayed: "frozenset[str]" = frozenset()
         self._order: list[str] = list(self.kept.tools)
 
     # -- the attachments seam ------------------------------------------------ #
@@ -220,11 +278,13 @@ class StableTurn:
 
     # -- the switched-on extensions' tools -------------------------------------- #
     def keep_conn(self, d: Any, conn_tools: list, cap: int) -> list:
-        """The tools of the extensions switched on for this chat: the ones the
-        chat's last reply was sent come FIRST, in their order, then the ones
-        this message's words picked, never more than *cap* in all (the lanes'
-        own bound on a switched-on extension's tools) or than the words alone
-        picked. Only tools of an extension that is STILL switched on and
+        """The tools of the extensions switched on for this chat: the ones
+        this message's words picked come FIRST and are always seated, then
+        the readers the chat's last reply was sent, in the room that is left
+        under *cap* (the lanes' own bound on a switched-on extension's
+        tools), the most recently sent ones. (Their place in the tool LIST is
+        :meth:`settle`'s: a tool the chat already sent keeps it.) Only tools
+        of an extension that is STILL switched on and
         still registered stay: one that was removed, switched off or
         unregistered brings nothing, and neither does a tool that now asks
         before each use (held back, or its extension locked: it lost its
@@ -308,10 +368,28 @@ class StableTurn:
                 may_stay=lambda name: may_stay(registry, name, permissions),
                 ceiling=keep_ceiling(ceiling, standing, is_local_model(d, provider)),
             )
+            # Armed ONLY because it stayed: not ticked, not armed by this
+            # message's words (``stayed_only``).
+            asked = set(explicit) | set(auto_armed)
+            self._stayed = frozenset(n for n in auto if n not in asked)
             return explicit + auto, auto
         except Exception:  # noqa: BLE001 — the arming pass's own answer stands
             log.warning("a chat's kept tools could not be joined", exc_info=True)
             return armed, auto_armed
+
+    def stayed_only(self, body: Any = None) -> "frozenset[str]":
+        """The tools armed on this reply ONLY because they stayed (for
+        ``ToolContext.stayed_only``; empty for a coding session, at low trust
+        and whenever nothing stayed). With "Use Excel in this chat" switched
+        on for the message (``excel_now``) the workbook readers are not among
+        them: the user's own switch asks for the open workbook."""
+        names = self._stayed
+        try:
+            if names and getattr(body, "excel_now", None) is not None:
+                names = names - LIVE_WORKBOOK_READERS
+        except Exception:  # noqa: BLE001 — cannot tell: the narrower answer stands
+            pass
+        return names
 
     # -- right after the tool definitions are built ---------------------------- #
     def settle(self, armed: list, auto_armed: list, tool_specs: list, ask_armed: "list | None" = None):
@@ -345,6 +423,36 @@ class StableTurn:
             self._later.append(text)
         return ""
 
+    def when_sent(self, build: Any) -> str:
+        """A section that NAMES the reply's tools (the Tools seam: the armed
+        names and every brief that follows them). For a plain chat reply it
+        is built when the request is sent (:meth:`place`), from the tool list
+        as it stands then, and rides beside the newest message with the
+        other directives: a tool that joins after the seam (the lookup's
+        head start) is named in this reply as it is in the next, and the
+        system prompt names no tool. Answers "" (a coding session: the text,
+        for the system prompt, as before)."""
+        if not self.active:
+            return str(build() or "")
+        self._when_sent.append(build)
+        return ""
+
+    def _last_sections(self) -> str:
+        """The sections read last, in order: the Tools seam (built now), then
+        what ``later`` holds (the skills this message fits, what was looked
+        up, this message's own directive). A builder that fails costs its
+        own section only."""
+        if self._built_last is None:
+            built: list[str] = []
+            for build in self._when_sent:
+                try:
+                    built.append(str(build() or ""))
+                except Exception:  # noqa: BLE001 — never a failed reply over a brief
+                    log.warning("a chat reply's tools section could not be built", exc_info=True)
+            # Built ONCE: the old way (after a failed placing) reuses it.
+            self._built_last = "".join(built)
+        return self._built_last + "".join(self._later)
+
     # -- where the query tail used to join the system prompt -------------------- #
     async def place(self, d: Any, body: Any, *, system: str, tail: Any, plan: Any, msgs: list,
                     images: Any, tool_specs: Any, provider: str, model: str,
@@ -369,7 +477,10 @@ class StableTurn:
         except Exception:  # noqa: BLE001 — never a failed reply over where a section rides
             log.warning("a chat reply's added text could not be placed beside its message; "
                         "it rides in the instructions for this reply", exc_info=True)
-            return system + tail + "".join(self._later), msgs, plan
+            from ..core.today import today_line
+
+            # The old way still knows the date (it used to ride beside the message).
+            return system + tail + self._last_sections() + "\n\n" + today_line(), msgs, plan
 
     async def _place(self, d: Any, body: Any, *, system: str, tail: Any, plan: Any, images: Any,
                      tool_specs: Any, provider: str, model: str,
@@ -381,13 +492,18 @@ class StableTurn:
         # ``chat_turn._plan_context`` (a patch of it reaches this plan too).
         from . import chat_turn as _ct
 
-        t = P.as_tail(tail)
-        once = P.once_block(t + P.last("".join(self._later)), lead=today_line())
         items = list(ctx_messages if ctx_messages is not None else (getattr(body, "messages", None) or []))
         newest = _user_index(items)
+        if newest < 0:
+            # Nothing to place the block beside: never drop it in silence.
+            raise RuntimeError("no user message to place the block beside")
+        t = P.as_tail(tail)
+        once = P.once_block(t + P.last(self._last_sections()), lead=today_line())
         riders = [""] * len(items)
-        if newest >= 0:
-            riders[newest] = once
+        riders[newest] = once
+        # ONE fixed sentence: only the block at the end of the newest message
+        # is the app's (before the final plan, which prices it).
+        system += "\n\n" + P.BLOCK_NOTE
         # The recap of the first plan rode in the middle of the system prompt;
         # the final plan's goes at its end.
         first_recap = str(getattr(plan, "recap", "") or "")
@@ -424,7 +540,11 @@ class StableTurn:
         last_user = -1
         for i, m in enumerate(final.messages):
             rider = str(m.get("rider") or "")
-            msg = LLMMessage(role=m["role"], content=m["content"] + rider)
+            # Everything that is not the one real block is neutralised of the
+            # block's marker lines: an earlier message (a model that echoed
+            # them cannot plant them in history) and the person's own words.
+            # The same input gives the same bytes on every reply.
+            msg = LLMMessage(role=m["role"], content=P.neutral(m["content"]) + rider)
             if m["role"] == "user":
                 last_user = i
             out.append(msg)
@@ -437,7 +557,7 @@ class StableTurn:
             if images:
                 target.images = images
         await asyncio.to_thread(self._save, [P.spec_name(s) for s in tool_specs or ()])
-        return system, out, final
+        return system, SentMessages(out), final
 
     # -- the save ---------------------------------------------------------------- #
     def _save(self, sent_names: "list[str]") -> None:
@@ -490,6 +610,6 @@ async def begin(d: Any, body: Any, *, harness: Any = None, low_trust: bool = Fal
 
 
 __all__ = [
-    "ATTACH_HEAD", "AttachBlock", "STAY_READERS", "StableTurn", "begin", "is_local_model", "keep_ceiling",
-    "may_stay", "reads_only",
+    "ATTACH_HEAD", "AttachBlock", "LIVE_WORKBOOK_READERS", "SCAN_READERS", "STAY_READERS", "SentMessages",
+    "StableTurn", "begin", "is_local_model", "keep_ceiling", "may_stay", "reads_only",
 ]

@@ -1069,12 +1069,41 @@ def _shrink_to_window(
     sent, sent_system = _fit_turn_transcript(
         d, kept, fit_system, provider, model, head=new_head, tools=tools,
     )
+    # Release 7: before giving up, what the app FOUND for the message (the
+    # found part of the block beside the question) is left out, one line
+    # saying so. Never any of the person's own words.
+    if _tokens_of(sent, sent_system, d, provider, model) + _fixed > int(window * 0.98):
+        lighter = _question_without_found(kept, new_head)
+        if lighter is not None:
+            sent, sent_system = _fit_turn_transcript(
+                d, lighter, fit_system, provider, model, head=new_head, tools=tools,
+            )
     # Still too big — including when nothing could be taken out, since an
     # unchanged request is over the learned window by construction: a retry
     # would be the same refusal again.
     if _tokens_of(sent, sent_system, d, provider, model) + _fixed > int(window * 0.98):
         return None
     return sent, sent_system, keep_from
+
+
+def _question_without_found(msgs, head: int):
+    """*msgs* with the found part of the question's block left out
+    (``context/prefix.without_found``), or None when there is none to leave
+    out. A new list and a new message: *msgs* is never edited in place."""
+    import dataclasses
+
+    from ..context.prefix import without_found
+
+    q = min(head, len(msgs)) - 1
+    while q >= 0 and getattr(msgs[q], "role", "") != "user":
+        q -= 1
+    if q < 0:
+        return None
+    content = getattr(msgs[q], "content", "") or ""
+    lighter = without_found(content)
+    if lighter == content:
+        return None
+    return [*msgs[:q], dataclasses.replace(msgs[q], content=lighter), *msgs[q + 1:]]
 
 
 def _overflow_refit(
@@ -14277,7 +14306,9 @@ async def run_chat_turn(
     # Release 7: the roster carries each agent's live state and counts, so
     # for a plain chat reply it joins the tail (read last, beside the newest
     # message), here, before the planner prices it. MIRROR NOTE (lock-step).
-    _query_tail += _tail_last(_grounding.live_last())
+    # (Its place: a standing note, BEFORE what was found; the per-message
+    # directives are what a model reads last.)
+    _query_tail += _tail_own(_grounding.live_last())
 
     # WORKSPACE GROUNDING (v1.210.0): a chat bound to a folder (the Build
     # pane's per-pane chat sends `workspace_dir` every turn) has that folder
@@ -14623,6 +14654,9 @@ async def run_chat_turn(
             # Idea 33-a — lock-step: the chat's own model, which a recording's
             # notes are offered to when nothing local can write them.
             chat_model=(provider_choice, model_choice),
+            # Release 7: the tools armed on this reply ONLY because they
+            # stayed for the chat; they do no new work (lock-step).
+            stayed_only=_stable.stayed_only(body),
         )
         # v1.470.0 — lock-step with the stream lane: start the isolated script
         # worker now when `tool_script` is offered, so the model's first
@@ -14633,22 +14667,24 @@ async def run_chat_turn(
         # THE AGENT'S BRIEF (v1.262.0) — lock-step with the stream lane: only
         # on a turn that can actually act in the browser.
         if _is_browser_agent_turn(armed):
-            system += "\n\n" + browser_agent_block(armed)
+            # Release 7: a brief that follows a tool armed for THIS message rides
+            # beside the message (``later``), never in the system prompt (lock-step).
+            system += _stable.later("\n\n" + browser_agent_block(armed))
         # v1.454.0: the user's browsing preferences — lock-step with the
         # stream lane: any turn with a browser tool, "" when unset.
         _browse_prefs = browsing_preferences_block(
             d.platform.config, armed, event_bus=d.platform.event_bus
         )
         if _browse_prefs:
-            system += "\n\n" + _browse_prefs
+            system += _stable.later("\n\n" + _browse_prefs)
         # THE MEMORY BRIEF (v1.279.0) — lock-step with the stream lane.
         _pref = preference_block(armed)
         if _pref:
-            system += "\n\n" + _pref
+            system += _stable.later("\n\n" + _pref)
         # v1.470.0 — lock-step with the stream lane: the skill brief.
         _skill_brief = skill_block(armed)
         if _skill_brief:
-            system += "\n\n" + _skill_brief
+            system += _stable.later("\n\n" + _skill_brief)
         # v1.479.0 — lock-step with the stream lane: the lookup's brief.
         _cap_brief = capability_block(armed, d.platform.config)
         if _cap_brief:
@@ -14663,26 +14699,25 @@ async def run_chat_turn(
                 # Release 7: it follows THIS message's words, so it rides
                 # beside the message (``later``). MIRROR NOTE (lock-step).
                 system += _stable.later("\n\n" + _skills_fit)
-        # v1.577.0: what each app of the reply said about its own tools when
-        # it started (MCP `instructions`), fenced and scanned, at the Tools
-        # seam like the skills above. MIRROR NOTE (lock-step): the other lane.
-        _app_notes = await asyncio.to_thread(app_instructions, list(armed))
-        if _app_notes:
-            system += _app_notes
-        explicit_armed = [
+        _explicit_now = lambda: [  # noqa: E731
             t for t in armed if t not in auto_armed and t not in conn_tools
         ]
         # v1.366.0: a harness turn's tool guidance is its component tree
         # (rendered before the planner, in the dialect's own names), so
         # this chat block - which names the REAL tools - is left out.
         # MIRROR NOTE (lock-step): the other lane skips it the same way.
-        _tools_block = (
+        # Release 7: built when the request is SENT (``_stable.when_sent``), from
+        # the tool list as it stands then, and placed beside the newest message:
+        # the system prompt of a plain chat names no tool, so a tool the lookup
+        # joins after this seam is named in this reply as in the next one.
+        # MIRROR NOTE (lock-step): routes/chat.py's Tools seam.
+        _tools_text = lambda: (  # noqa: E731
             "\n\n# Tools\n"
             + (
                 "The user armed these tools for this chat: "
-                + ", ".join(explicit_armed)
+                + ", ".join(_explicit_now())
                 + ". "
-                if explicit_armed
+                if _explicit_now()
                 else ""
             )
             + (
@@ -14769,7 +14804,7 @@ async def run_chat_turn(
             + _stable.later(_write_directive(body, armed))
         )
         if _harness is None:
-            system += _tools_block
+            system += _stable.when_sent(_tools_text)
     # Auto-allow keyed by BOTH the tool NAME and its perm_key(): the
     # permission engine authorizes on perm_key(), so for GROUPED tools
     # (pixio_*, view_image / image_*, mcp_*) whose perm_key differs from the
@@ -14833,6 +14868,14 @@ async def run_chat_turn(
         )
         if _routed_section:
             system += _stable.later("\n\n" + _routed_section)  # release 7 (lock-step)
+    # v1.577.0: what each app of the reply said about its own tools when it
+    # started (MCP `instructions`), fenced and scanned. Release 7: read HERE,
+    # after the lookup's head start joined, so an app whose tool joined is
+    # covered in this reply as in the next. MIRROR NOTE (lock-step).
+    if armed:
+        _app_notes = await asyncio.to_thread(app_instructions, list(armed))
+        if _app_notes:
+            system += _app_notes
     # THE STABLE PREFIX (release 7): the system prompt is final and the tool
     # definitions are known, so the history is planned once more with the
     # tools counted, and what changes with this message is placed beside it.

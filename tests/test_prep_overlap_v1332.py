@@ -221,9 +221,15 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
     placed, system = system[beside_at:], system[:beside_at]
     # ONE exact, contiguous string, as before this release: every join of
     # the block as it is laid out now, built from the block's own constants.
+    # (The roster, a standing note, stands between the two fenced sections
+    # and what was found: its lines are the only thing between the two
+    # exact strings below.)
+    roster = placed[placed.index("# Who can take this work"): placed.index("\n\n" + _prefix.FOUND_TOP)]
+    assert all(line.startswith("- ") for line in roster.splitlines()[1:]) and len(roster.splitlines()) > 3
     expected = (
         "\n\nPAGE-1"
         + "\n\nREFS-1"
+        + "\n\n" + roster
         + "\n\n" + _prefix.FOUND_TOP + "\n" + _prefix.FOUND_HEAD + "\n---\n"
         + "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
         + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"

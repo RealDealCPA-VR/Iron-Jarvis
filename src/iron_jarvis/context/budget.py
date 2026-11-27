@@ -472,6 +472,15 @@ def plan_history(
         # and tell the caller the model is too small for this conversation.
         last = prepared[-1] if prepared else {"role": "user", "content": ""}
         keep = max(MIN_LAST_MESSAGE_CHARS, 0)
+        # The intelligence plan, release 7: the tool definitions and what
+        # rides beside the newest message are counted now, and they alone can
+        # bring the room to nothing. The person's newest message is not what
+        # pays for that: while the system prompt and the reply reserve ALONE
+        # still leave room for it, it is kept whole (as before this release,
+        # which counted neither), and the per-call fit sheds history and, if
+        # it must, the found part of the block (``chat_turn._shrink_to_window``).
+        if win - system_tokens - reserve >= _est(last["content"]) + 4:
+            keep = len(last["content"])
         plan.messages = [_with_rider({"role": last["role"], "content": last["content"][:keep]})]
         plan.clipped_last = len(last["content"]) > keep
         plan.dropped = len(messages) - 1

@@ -56,6 +56,8 @@ STAYS = {
     # Iron Jarvis's own guides, settings, lists and state
     "guide_search", "app_search", "app_status", "pack_status", "workflow_list", "chat_fullness",
     "config_list", "app_health", "code_search", "downloads_list",
+    # arithmetic only
+    "calculate",
 }
 #: Read and left off: each can ask a memory base that is not on this PC.
 MEMORY_SEARCHES = ("recall", "ltm_search")
@@ -231,8 +233,7 @@ def test_how_many_tools_a_chat_holds_follows_the_model_through_the_lane(tmp_path
     firsts = routed.tools[: len(CAP_ASKS)] if len(routed.tools) == len(CAP_ASKS) else None
     assert firsts is not None, f"one model call a reply: {len(routed.tools)}"
     named = [[n for n in names if n not in EXITS] for names in firsts]
-    # (The workbook message also arms the calculator, which does not stay.)
-    assert all(set(names) <= STAYS | {"calculate"} for names in named), f"control: readers that stay: {named}"
+    assert all(set(names) <= STAYS for names in named), f"control: only tools that stay were armed: {named}"
     ever = {n for names in named[:-1] for n in names} & STAYS
     assert len(ever) > 12, f"control: the messages armed more than twelve readers: {sorted(ever)}"
     before, last = named[-2], named[-1]

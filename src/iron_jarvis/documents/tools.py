@@ -98,8 +98,14 @@ async def _with_ocr(
     ctx: ToolContext,
     *,
     page_range: "str | None" = None,
+    tool: str = "",
 ) -> tuple[str, str]:
     """``(text, note)`` after the shared OCR reach point (v1.174.0).
+
+    *tool* (the intelligence plan, release 7) is the calling tool's name.
+    Armed on a chat reply ONLY because it stayed (``ctx.stayed_only``), it
+    starts no new reading of a scan: the text the file has comes back, with a
+    reading already made of that file when there is one, and one sentence.
 
     EVERY document-reading tool goes through this one call. Before it,
     ``read_document`` transcribed a scan and ``extract_pdf`` returned silence
@@ -127,7 +133,8 @@ async def _with_ocr(
         if wanted:
             return text, _SLICE_NO_OCR_NOTE
         return text, ""
-    return await ocr_if_unreadable(path, text, resolver, config=config)
+    stayed = bool(tool) and tool in (getattr(ctx, "stayed_only", None) or ())
+    return await ocr_if_unreadable(path, text, resolver, config=config, cached_only=stayed)
 
 
 def _no_text_layer(path: Path, text: str) -> bool:
@@ -329,7 +336,7 @@ class ReadDocumentTool(Tool):
         # document. Cached by content hash, so the same scan is paid for once.
         text, note = await _with_ocr(
             path, text, self._router_resolver, ctx,
-            page_range=args.get("page_range"),
+            page_range=args.get("page_range"), tool=self.name,
         )
         if not note and path.suffix.lower() == ".csv" and chr(9) in text:
             # v1.473.0: the reader shows a CSV's cells with TABS between them.
@@ -613,7 +620,7 @@ class ExtractPdfTool(Tool):
         raw = text
         text, note = await _with_ocr(
             path, text, self._router_resolver, ctx,
-            page_range=args.get("page_range"),
+            page_range=args.get("page_range"), tool=self.name,
         )
         out, truncated = _truncate(text)
         lead = ""
@@ -932,7 +939,7 @@ class RedactScanTool(Tool):
             # call, and that flipped to success on an identical second call.
             no_layer = await asyncio.to_thread(_no_text_layer, source, raw_text)
             text, ocr_note = await _with_ocr(
-                source, raw_text, self._router_resolver, ctx
+                source, raw_text, self._router_resolver, ctx, tool=self.name
             )
             unreadable = no_layer and not _carries_ocr_mark(ocr_note)
             if not ocr_note and _carries_ocr_mark(text):

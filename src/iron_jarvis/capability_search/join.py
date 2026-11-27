@@ -796,6 +796,11 @@ def join_found(
             mine: list[str] = []
             for name in _wanted(rows):
                 held = {*armed, *(asks_list or ())}
+                # Release 7: a tool the lookup found for THIS message is asked
+                # for now, also when the chat already held it: it is no
+                # longer "armed only because it stayed" (``ToolContext.
+                # stayed_only``), so it does its full work again.
+                _asked_now(ctx, name)
                 if name in joined:
                     continue
                 # A writer's reader (READER_FOR) and a family's maker
@@ -988,6 +993,17 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
     if not parts:
         return ""
     return "(" + " ".join(parts) + ")"
+
+
+def _asked_now(ctx: Any, name: str) -> None:
+    """Take *name* off the turn's "armed only because it stayed" names
+    (the intelligence plan, release 7). Never raises."""
+    try:
+        stayed = getattr(ctx, "stayed_only", None)
+        if stayed and name in stayed:
+            ctx.stayed_only = frozenset(stayed) - {name}
+    except Exception:  # noqa: BLE001 — it keeps the narrower behaviour
+        pass
 
 
 def _say(msgs: list, note: str) -> None:
