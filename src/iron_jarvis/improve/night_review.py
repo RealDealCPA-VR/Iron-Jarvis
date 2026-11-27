@@ -830,7 +830,7 @@ async def _run_schedule_offer(platform: Any, job: dict[str, Any], night: str) ->
     nothing rehearsed."""
     from ..scheduling import offers as O
 
-    made = await asyncio.to_thread(O.make_offers, platform.engine)
+    made = await asyncio.to_thread(O.make_offers, platform)
     out = [{"kind": "schedule_offer", "ref": str(o.id), "why": OFFER_WHY} for o in made]
     return _entry(job, MADE if out else NOTHING), out
 

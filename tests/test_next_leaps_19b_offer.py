@@ -246,29 +246,76 @@ def test_accept_refuses_an_account_that_is_gone_and_makes_nothing(desk):
     assert reh.status_code == 409 and _rehearsals(desk) == []
 
 
-def test_a_local_only_offer_needs_its_chat_still_local_only(desk):
-    local = {"local_only": True}
-    tids = _three(desk, setups=(local, local, local))
+def test_local_only_work_makes_a_schedule_that_runs_local_only_on_every_fire(desk):
+    # A model on this PC answered the chats (ollama): their words stay home
+    # (19-a's rule), so the schedule's payload says Local only, which the
+    # fire reads whatever becomes of the chat.
+    _three(desk)
     _night(desk)
     (offer,) = _offers(desk)
     assert offer.local_only is True
-    with session_scope(desk.engine) as db:
-        t = db.get(ChatThreadRecord, tids[0])
-        t.setup_json = ""
-        db.add(t)
-        db.commit()
-    res = call(desk, "POST", f"/schedules/offers/{offer.id}/accept")
-    assert res.status_code == 409 and "Local only" in res.json()["detail"]
-    assert _schedules(desk) == []
-    with session_scope(desk.engine) as db:
-        t = db.get(ChatThreadRecord, tids[0])
-        t.setup_json = json.dumps(local)
-        db.add(t)
-        db.commit()
     res = call(desk, "POST", f"/schedules/offers/{offer.id}/accept")
     assert res.status_code == 200, res.text
     (sched,) = _schedules(desk)
-    assert sched.chat_thread_id == tids[0]  # each fire reads that chat's Local only
+    assert json.loads(sched.payload_json)["local_only"] is True
+
+
+def test_cloud_chats_make_a_schedule_with_no_local_only_mark(desk):
+    _three(desk, model=("claude-cli", "claude-sonnet-4-6"))
+    _night(desk)
+    (offer,) = _offers(desk)
+    assert offer.local_only is False
+    assert call(desk, "POST", f"/schedules/offers/{offer.id}/accept").status_code == 200
+    (sched,) = _schedules(desk)
+    payload = json.loads(sched.payload_json)
+    assert "local_only" not in payload
+    assert (payload["provider"], payload["model"]) == ("claude-cli", "claude-sonnet-4-6")
+
+
+# --------------------------------------------------------------------------- #
+# the record: words from the chats, a deleted chat, no model
+# --------------------------------------------------------------------------- #
+def test_the_offer_s_words_are_the_newest_chat_s_line_and_no_draft_holds_them(desk):
+    _three(desk)
+    _night(desk)
+    (offer,) = _offers(desk)
+    assert offer.words == WORDS  # the newest chat's own line, byte for byte
+    assert "bank-export-summary" not in offer.words
+    (prop,) = [i for i in _items(desk, "skill")]
+    assert WORDS not in json.dumps(prop) and WORDS not in offer.evidence_json
+
+
+def test_a_deleted_chat_takes_its_offer_and_its_words_with_it(desk):
+    tids = _three(desk)
+    _night(desk)
+    assert len(_offers(desk)) == 1
+    res = call(desk, "DELETE", f"/chat/threads/{tids[1]}")
+    assert res.status_code in (200, 204), res.text
+    assert _offers(desk) == [] and _items(desk) == []
+    # and it is not made again from the two chats left
+    _night(desk, days=1)
+    assert _offers(desk) == []
+
+
+def test_no_offer_without_the_model_the_chats_used(desk):
+    for w in range(3):
+        seed_chat(desk.engine, _monday(w), words=WORDS if w == 0 else ALIKE, provider="ollama", model="qwen3:8b")
+    with session_scope(desk.engine) as db:
+        from iron_jarvis.core.models import AgentRun
+
+        for run in db.exec(select(AgentRun)):
+            run.model = ""
+            db.add(run)
+        db.commit()
+    prop = SimpleNamespace(id="p1", skill_name="x", evidence_json=json.dumps({"units": [
+        {"thread": t.id, "start": _monday(w).timestamp()} for w, t in enumerate(_chats(desk))]}))
+    got, why = O.offer_for(desk.platform, prop)
+    assert got is None and why == "the model the chats used is not on record"
+
+
+def _chats(desk) -> list[ChatThreadRecord]:
+    with session_scope(desk.engine) as db:
+        return sorted(db.exec(select(ChatThreadRecord)), key=lambda t: t.created_at, reverse=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -289,7 +336,7 @@ def test_decline_is_final_for_that_task(desk):
         db.add(SkillProposalRecord(skill_name="bank-summary-2", body_md=prop.body_md, source="chat",
                                    evidence_json=prop.evidence_json, status="pending"))
         db.commit()
-    assert O.make_offers(desk.engine) == []
+    assert O.make_offers(desk.platform) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -325,6 +372,11 @@ def test_rehearse_runs_the_schedule_accept_would_make_and_changes_nothing(desk):
     first, view, keep = asyncio.run(go())
     assert view["status"] == "ready", view
     assert view["subject"]["kind"] == "offer"
+    from iron_jarvis.core.models import Session as SessionRow
+
+    with session_scope(desk.engine) as db:
+        runs = [r for r in db.exec(select(SessionRow)) if (r.origin or "").startswith("schedule:")]
+    assert len(runs) == 1 and json.loads(runs[0].options_json or "{}").get("local_only") is True
     assert any(w["kind"] == "write" for w in view["would"]), view["would"]
     assert view["sentence"].endswith("Nothing was changed.")
     assert not out.exists()  # nothing was written

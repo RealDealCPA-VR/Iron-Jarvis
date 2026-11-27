@@ -4,18 +4,15 @@ words an offer's schedule runs.
 ``learning/repeats.rhythm`` is PURE: the same weekday in consecutive weeks
 (one skipped week at most) is weekly, the same day of the month (within two
 days, a different month each time) is monthly, and the hour is the hour of
-the median start. An offer's words are the owner's own line, byte for byte:
-never a model's words, never the skill's name.
+the median start. (An offer's words, the owner's line byte for byte, are
+pinned through the served routes in ``test_next_leaps_19b_offer.py``.)
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 from iron_jarvis.learning import repeats as R
-from iron_jarvis.scheduling import offers as O
 
 UTC = timezone.utc
 
@@ -102,52 +99,3 @@ def test_the_cron_names_the_day_so_the_scheduler_reads_monday_as_monday():
     trig = CronTrigger.from_crontab(R.Rhythm(kind="weekly", hour=9, weekday=0).cron, timezone=UTC)
     nxt = trig.get_next_fire_time(None, datetime(2026, 11, 26, tzinfo=UTC))
     assert nxt.weekday() == 0 and nxt.hour == 9
-
-
-# --------------------------------------------------------------------------- #
-# an offer's words are the owner's line, byte for byte
-# --------------------------------------------------------------------------- #
-OWNER = "turn the bank export into a summary sheet with totals per category"
-
-
-def _prop(units: list[dict], name: str = "bank-export-summary") -> SimpleNamespace:
-    return SimpleNamespace(id="prop1", skill_name=name, evidence_json=json.dumps({"units": units, "days": []}))
-
-
-def _unit(start: float, words: str = OWNER, **kw) -> dict:
-    out = {"thread": "chat_new", "start": start, "words": words, "provider": "claude-cli",
-           "model": "claude-sonnet-4-6", "account": "", "local_only": False}
-    out.update(kw)
-    return out
-
-
-def test_an_offer_s_words_are_the_owner_s_line_byte_for_byte(tmp_path):
-    from iron_jarvis.core.db import init_db, make_engine
-
-    engine = make_engine(tmp_path / "db.sqlite")
-    init_db(engine)
-    older = "turn this bank export into a summary sheet with the totals per category"
-    prop = _prop([_unit(MON[2]), _unit(MON[1], words=older), _unit(MON[0], words=older)])
-    offer, why = O.offer_for(engine, prop, tz=UTC)
-    assert why == "" and offer is not None
-    assert offer.words == OWNER  # the newest task's own line
-    assert "bank-export-summary" not in offer.words and "skill" not in offer.words.lower()
-    assert offer.cadence == "0 10 * * mon"
-    assert (offer.provider, offer.model) == ("claude-cli", "claude-sonnet-4-6")
-
-
-def test_no_offer_without_a_rhythm_a_model_or_a_local_only_newest_chat(tmp_path):
-    from iron_jarvis.core.db import init_db, make_engine
-
-    engine = make_engine(tmp_path / "db.sqlite")
-    init_db(engine)
-    off_rhythm = _prop([_unit(MON[2]), _unit(MON[1] + 86400), _unit(MON[0])])
-    assert O.offer_for(engine, off_rhythm, tz=UTC)[0] is None
-    no_model = _prop([_unit(MON[2], model=""), _unit(MON[1]), _unit(MON[0])])
-    assert O.offer_for(engine, no_model, tz=UTC) == (None, "the model the chats used is not on record")
-    local_older = _prop([_unit(MON[2]), _unit(MON[1], local_only=True), _unit(MON[0])])
-    assert O.offer_for(engine, local_older, tz=UTC)[0] is None
-    unsaid = _prop([_unit(MON[2], local_only=True), _unit(MON[1], local_only=True),
-                    {k: v for k, v in _unit(MON[0]).items() if k != "local_only"}])
-    got, _ = O.offer_for(engine, unsaid, tz=UTC)
-    assert got is not None and got.local_only is True  # unknown = Local only

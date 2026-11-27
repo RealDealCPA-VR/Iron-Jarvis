@@ -16,7 +16,7 @@ THE RULES (each pinned in ``tests/test_next_leaps_19b_offer.py``):
   Rehearse (06-a's own rehearsal, ``tools/rehearsal_runs`` kind ``offer``;
   never a second one).
 * THE SCHEDULE'S WORDS ARE THE OWNER'S: ``words`` is the owner's own request
-  from the newest of the tasks, as 19-a kept it (masked), never a model's
+  from the newest of the tasks, read from its chat (masked), never a model's
   words: a schedule's words are read as the owner's on every run. The skill
   draft rides the schedule's ``skills`` knob (only once it is a skill), never
   its words.
@@ -26,10 +26,15 @@ THE RULES (each pinned in ``tests/test_next_leaps_19b_offer.py``):
   refused at Accept and at Rehearse (``scheduling/checks``, the same rule as
   every door that saves a schedule) and again at each fire (the platform's
   ``pin_for``): the run does not happen and says why.
-* LOCAL ONLY STAYS LOCAL ONLY: the schedule reports to the newest of the
-  chats (``chat_thread_id``, idea 39), whose Local only setting each fire
-  reads. An offer is made only when that chat is Local only whenever any of
-  the chats was, and Accept and Rehearse refuse while it is not.
+* LOCAL ONLY STAYS LOCAL ONLY: when any of the tasks was in a Local only
+  chat or answered by a model on the owner's PC or network (19-a's
+  ``_home_if_here``; unsure = home), the schedule's payload carries
+  ``local_only`` and EVERY fire, and the rehearsal, runs Local only
+  (``platform._dispatch_scheduled``), whatever becomes of the chat it
+  reports to (the newest of the chats, ``chat_thread_id``, idea 39).
+* A DELETED CHAT takes its offer with it (``drop_thread``), and an offer is
+  made only from tasks still in their chats, read again (``repeats.reread``):
+  19-a's draft keeps none of the owner's words.
 * DECLINE IS FINAL for that task: the row is ``declined``, and no offer is
   made again for its skill draft or for a request like it.
 * ONE ADD-TIME RULE: Accept saves through ``scheduling/checks.check_payload``,
@@ -211,59 +216,68 @@ def _declined_like(engine: Any, words: str) -> bool:
     return any(similarity(mine, task_tokens(w)) >= SAME_TASK for w in said)
 
 
-def offer_for(engine: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOfferRecord | None, str]":
+def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOfferRecord | None, str]":
     """The offer a chat skill draft ``prop`` would get, and why not when it
-    gets none (no row is written here). RAISES when a table cannot be read."""
-    from ..learning.repeats import load_evidence, rhythm
+    gets none (no row is written here). The draft keeps none of the owner's
+    words (19-a), so its tasks are READ AGAIN from their chats
+    (``repeats.reread``): a deleted chat's task is not counted, a task whose
+    reply now reads low trust ends it, and the words are the newest task's
+    own line from its chat. RAISES when a table cannot be read."""
+    from ..learning import repeats as R
 
-    got = load_evidence(getattr(prop, "evidence_json", ""))
-    units = [u for u in got.get("units") or [] if isinstance(u, dict)]
-    if not units:
+    engine = platform.engine
+    got = R.load_evidence(getattr(prop, "evidence_json", ""))
+    if not [u for u in got.get("units") or [] if isinstance(u, dict)]:
         return None, "its record holds no tasks"
-    rh = rhythm([float(u.get("start") or 0.0) for u in units], tz=tz)
+    found = R.reread(engine, got)
+    if found is None:
+        raise RuntimeError("the chats of a skill draft could not be read")
+    units = sorted((u for u, _lines in found), key=lambda u: -u.start)
+    if len(units) < R.MIN_UNITS:
+        return None, "fewer than three of its tasks are still in their chats"
+    if any(u.low_trust or u.remote for u in units):
+        return None, "one of its tasks read something from outside"
+    rh = R.rhythm([u.start for u in units], tz=tz)
     if rh is None:
         return None, "the times it was asked for fell on no rhythm"
     newest = units[0]
-    words = " ".join(str(newest.get("words") or "").split())
+    words = R._masked(" ".join(newest.words.split()))[:2000]
     if not words:
         return None, "the request's words were not kept"
-    provider = str(newest.get("provider") or "").strip()
-    model = str(newest.get("model") or "").strip()
+    provider, model = newest.provider.strip(), newest.model.strip()
     if not provider or not model:
         # Never the vendor's Default in place of the model the chats used.
         return None, "the model the chats used is not on record"
-    # Fail closed: a task that does not say whether it was Local only was.
-    local_only = any(bool(u.get("local_only", True)) for u in units)
-    if local_only and newest.get("local_only") is not True:
-        return None, "one of the chats was Local only, and the newest one is not"
-    chat = str(newest.get("thread") or "").strip()
-    if not chat:
-        return None, "the newest chat is not on record"
+    # A task in a Local only chat, or one a model on the owner's own PC or
+    # network answered, keeps the schedule's runs home (19-a's rule).
+    local_only = any(R._home_if_here(platform, u).local_only for u in units)
     if _scheduled_already(engine, words):
         return None, "a schedule already does this"
     if _declined_like(engine, words):
         return None, "you declined to run this by itself before"
-    folders = _chat_folders(engine, list(dict.fromkeys(str(u.get("thread") or "") for u in units)))
-    found = {folders.get(str(u.get("thread") or ""), "") for u in units}
-    folder = found.pop() if len(found) == 1 else ""
+    folders = _chat_folders(engine, list(dict.fromkeys(u.ref for u in units)))
+    seen = {folders.get(u.ref, "") for u in units}
+    folder = seen.pop() if len(seen) == 1 else ""
     name = str(getattr(prop, "skill_name", "") or "").strip()
     return ScheduleOfferRecord(
         title=name[:NAME_MAX] or "repeated-task", words=words, cadence=rh.cron,
         rhythm_json=json.dumps({"kind": rh.kind, "hour": rh.hour, "weekday": rh.weekday, "day": rh.day}),
         folder=folder, skill_name=name, proposal_id=str(prop.id),
-        evidence_json=str(getattr(prop, "evidence_json", "") or "{}"),
-        provider=provider, model=model, account=" ".join(str(newest.get("account") or "").split()),
-        local_only=local_only, chat_thread_id=chat, kind=KIND_TASK,
+        # The tasks just read, with none of the owner's words (19-a's draft rule).
+        evidence_json=json.dumps(R.evidence_of(R.group_of(units), words=False)),
+        provider=provider, model=model, account=newest.account, local_only=local_only,
+        chat_thread_id=newest.ref, kind=KIND_TASK,
     ), ""
 
 
-def make_offers(engine: Any, *, tz: Any = None) -> list[ScheduleOfferRecord]:
+def make_offers(platform: Any, *, tz: Any = None) -> list[ScheduleOfferRecord]:
     """The night review's step (no model, no schedule, no rehearsal): one
     offer for each chat skill draft (waiting or approved) that has none yet
     and whose tasks fell on a rhythm, at most :data:`OFFERS_MAX`. Returns
     the offers made. BLOCKING; RAISES when a table cannot be read."""
     from ..skills.learning_models import SOURCE_CHAT, SkillProposalRecord as P
 
+    engine = platform.engine
     with session_scope(engine) as db:
         offered = select(ScheduleOfferRecord.proposal_id)
         props = list(db.exec(
@@ -277,7 +291,7 @@ def make_offers(engine: Any, *, tz: Any = None) -> list[ScheduleOfferRecord]:
     for prop in props:
         if len(made) >= OFFERS_MAX:
             break
-        offer, why = offer_for(engine, prop, tz=tz)
+        offer, why = offer_for(platform, prop, tz=tz)
         if offer is None:
             log.debug("schedule offers: none for %s: %s", prop.id, why)
             continue
@@ -288,6 +302,30 @@ def make_offers(engine: Any, *, tz: Any = None) -> list[ScheduleOfferRecord]:
             db.expunge(offer)
         made.append(offer)
     return made
+
+
+def drop_thread(db: Any, thread_id: str) -> int:
+    """A chat was DELETED (``routes/chat.delete_thread``, inside its own
+    transaction, beside 19-a's ``repeats.drop_thread``): an offer still
+    waiting that was made from it goes, its words with it; a declined one
+    keeps no words (its draft still gets no new offer). A schedule already
+    made is the owner's and stays. How many offers changed. RAISES."""
+    from ..learning.repeats import load_evidence
+
+    tid = str(thread_id or "")
+    changed = 0
+    for row in list(db.exec(select(ScheduleOfferRecord).where(ScheduleOfferRecord.status != ACCEPTED))):
+        threads = {str(u.get("thread") or "") for u in load_evidence(row.evidence_json).get("units") or []
+                   if isinstance(u, dict)}
+        if tid not in threads and row.chat_thread_id != tid:
+            continue
+        if row.status == WAITING:
+            db.delete(row)
+        else:
+            row.words = ""
+            db.add(row)
+        changed += 1
+    return changed
 
 
 # --------------------------------------------------------------------------- #
@@ -313,23 +351,11 @@ def payload_of(platform: Any, row: ScheduleOfferRecord) -> dict[str, Any]:
         payload["skills"] = [row.skill_name]
     if row.folder:
         payload["workspace_root"] = row.folder
+    if row.local_only:
+        # Every fire runs Local only (``platform._dispatch_scheduled``),
+        # whatever becomes of the chat it reports to.
+        payload["local_only"] = True
     return payload
-
-
-def local_only_refusal(platform: Any, row: ScheduleOfferRecord) -> str:
-    """Why this offer cannot run now without leaving this network: "" when
-    it can. A Local only offer runs Local only through its chat (the fire
-    reads that chat's setting), so that chat must still be Local only."""
-    if not row.local_only:
-        return ""
-    from ..providers.egress import thread_local_only
-
-    if thread_local_only(platform.engine, row.chat_thread_id):
-        return ""
-    day = newest_day(row)
-    chat = f"your chat on {day}" if day else "the chat it came from"
-    return (f"This was done in Local only chats, and {chat} is no longer Local only (or is gone), so the "
-            "schedule could not stay on this PC. Nothing was made.")
 
 
 def schedule_name(platform: Any, row: ScheduleOfferRecord) -> str:
@@ -361,13 +387,10 @@ def task_of(platform: Any, row: ScheduleOfferRecord) -> Any:
 
 
 def check(platform: Any, row: ScheduleOfferRecord, name: str, payload: dict[str, Any]) -> None:
-    """The add-time rules every door that saves a schedule applies, and the
-    Local only rule. RAISES :class:`OfferRefused` in words."""
+    """The add-time rules every door that saves a schedule applies. RAISES
+    :class:`OfferRefused` in words."""
     from .checks import ScheduleRefused, check_payload
 
-    why = local_only_refusal(platform, row)
-    if why:
-        raise OfferRefused(why, 409)
     try:
         check_payload(platform, name, "task", payload)
     except ScheduleRefused as exc:
@@ -501,7 +524,7 @@ def set_rehearsal(engine: Any, offer_id: str, rehearsal_id: str) -> None:
 
 __all__ = [
     "ACCEPTED", "DECLINED", "DECLINED_NOTE", "KIND_TASK", "OFFERS_MAX", "OfferRefused", "ScheduleOfferRecord",
-    "WAITING", "accept", "accepted_note", "check", "decline", "evidence", "get", "local_only_refusal",
+    "WAITING", "accept", "accepted_note", "check", "decline", "drop_thread", "evidence", "get",
     "make_offers", "newest_day", "offer_for", "payload_of", "rhythm_of", "schedule_name", "set_rehearsal",
     "task_of",
 ]

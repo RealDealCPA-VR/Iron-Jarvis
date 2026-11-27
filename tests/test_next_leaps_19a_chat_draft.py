@@ -140,7 +140,7 @@ def _days() -> str:
 def test_three_mondays_leave_one_draft_in_improvements_the_next_morning(desk):
     tids = _three(desk)
     got = _pass(desk)
-    assert got["made"] == 1
+    assert got["made"] == 2  # the draft, and 19-b's offer to run it by itself on Mondays
     (call,) = desk.router.calls
     assert call["provider"] == "claude-cli" and call["model"] == "claude-sonnet-4-6" and call["pin"] is True
     assert call["background"] == "night_review" and call["local_only"] is False
