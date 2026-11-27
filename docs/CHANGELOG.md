@@ -24,7 +24,7 @@
 
 ## v1.584.0
 
-**Phone chats, coding sessions and round-tables keep every message too.** Phone chats, coding sessions and round-tables no longer lose their oldest messages, and you can scroll back to them.
+**Replies start sooner in a long chat.** In a long chat, Iron Jarvis now starts answering sooner. **Phone chats, coding sessions and round-tables keep every message too.** Phone chats, coding sessions and round-tables no longer lose their oldest messages, and you can scroll back to them.
 
 ## v1.583.0
 

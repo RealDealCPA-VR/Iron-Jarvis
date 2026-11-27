@@ -129,6 +129,95 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## Replies start sooner in a long chat (v1.584.0)
+
+In a long chat, Iron Jarvis now starts answering sooner. You will notice
+it most with a model on your own server.
+
+Why it was slow: with every new message, Iron Jarvis handed the model
+the whole chat again, arranged a little differently each time (what it
+remembered for your question came first, and its list of tools was
+picked again from your words). A model that keeps what it has already
+read could keep almost nothing, so it read the whole chat again before
+its first word.
+
+Now everything before your newest message is handed over exactly as it
+was the time before. What is new for this message (what Iron Jarvis
+remembered for it, a file you attached, today's date) goes beside the
+message itself, at the end. The model only has to read what is new.
+
+You will also notice:
+
+- **Iron Jarvis knows today's date** in every kind of work: chat,
+  agents, workflows and coding sessions. "What is due next Friday?" is
+  answered from the real date.
+- **Tools stay for the chat.** A tool that only reads what is already
+  on this PC stays ready for the rest of the chat once a message
+  needed it, instead of being picked again each time: opening a file
+  or a workbook, listing a folder, searching your files, your past
+  chats and your work record, and looking up Iron Jarvis's own guides,
+  settings and status, and working out arithmetic. The reading tools
+  of an extension you switched on for the chat stay the same way.
+
+Nothing to set up, and nothing on screen changed.
+
+Good to know:
+
+- Nothing about what needs your OK changed. A tool that changes
+  something (writes a file, edits a workbook, saves a note) is still
+  made ready only by a message that asks for that change, and every
+  approval works as before. Switch Auto off, untick a tool or switch an
+  extension off, and it is gone from the very next reply. The same
+  goes for a tool you set to "Ask before each use" or "Never run" in
+  Settings: it no longer stays.
+- A tool that is only there because it stayed does no new work
+  beyond reading what is already on this PC. It does not open the
+  workbook you have open in Excel, and it does not start reading a
+  scanned page (that takes a model). It says so in one sentence, and
+  does both as before as soon as your message asks for them.
+- What does not stay, so that it is only ever there when your own
+  message asks for it: anything that changes something, the web, the
+  browser, looking at a picture, anything that starts a program, and
+  searching your memory (a memory search can ask a memory base that is
+  not on this PC, such as Notion or a cloud drive).
+- A chat keeps at most six such tools with a model on your own
+  computer or network (or when Iron Jarvis picks the model for each
+  message), and at most twelve with a cloud model. A model Iron Jarvis
+  has measured as weaker with many tools keeps fewer. When there is no
+  room, the tool added last makes way; a tool your message asks for
+  is never the one that leaves.
+- A file you attach is read with the message you attached it to, as
+  before. For later questions Iron Jarvis still knows the file by name
+  and opens it again when it needs to. No copy of your file's words is
+  kept anywhere new: the only thing saved for a chat is the names of
+  its tools.
+- What Iron Jarvis places beside your message is marked as added by
+  the app, never as your words, and that mark cannot be copied: the
+  same words inside a file, a web page or an earlier reply are made
+  harmless before the model reads them. A step written inside a file or a
+  remembered note is carried out only when your own message asks for
+  it ("do what the attached file says" still works).
+- A chat left open over midnight simply carries the new date with its
+  next message.
+- A chat too long for its model still leaves out its oldest messages.
+  Where it can, it now does so a few messages at a time instead of one
+  more with every reply, so the wait stays short there too. The price
+  is small: at most a tenth of the room is given up for it. On a small
+  model with long messages there is no room to give, so nothing is
+  given up: there the start of a long chat still moves with every
+  reply, and those replies do not start sooner.
+- A reply right after a message that needed a tool which does not
+  stay (it wrote a file, searched the web or your memory, used the
+  browser or looked at a picture) reads the chat once more, because
+  that tool is put away again afterwards. So does the reply to a
+  message that needs a tool the chat did not hold yet.
+- Coding sessions work as before; this change is for plain chats.
+
+To see it yourself: in a chat of about twenty messages on your own
+model, the tenth reply and later should begin noticeably sooner than
+before. (This was measured with a stand-in for a model server, not
+yet on a real one.)
+
 ## Local only: memory search stays on this PC (v1.588.1)
 
 Two gaps in Local only are closed.
