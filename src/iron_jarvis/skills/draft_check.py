@@ -20,23 +20,30 @@ three days):
 
 A refused draft never reaches Improvements.
 
-Then, separately, whether the draft is CLEAN: no figure and no name from the
-work it was written from. Only a clean draft carries the line "No names or
-figures from your work are in it." (``repeats.checked_line``), so the line
-is true by construction:
+Then, separately, whether the draft is CLEAN. Only a clean draft carries
+the line "No client names, contact details or figures from your work are in
+it." (``repeats.checked_line``). The line promises ONLY what these checks
+guarantee (the review of release 10: a person's name written in lower case
+cannot be found in general, so it never says "no names"):
 
-* a FIGURE is any run of digits in the record (all of it, as saved, before
-  any mask or cut), compared without leading zeros; the draft's own ordered
-  list numbers ("1." at the start of a line) are not figures;
-* a NAME is a word in the record that starts with a capital letter where no
-  sentence starts (a person's, a client's, a company's or a place's name
-  written in the middle of a sentence), compared case for case as a whole
-  word; the app's own name is not one;
+* CLIENT NAMES: no name, signature or alias the client list holds (confirmed
+  or waiting) is in the WHOLE draft in any case or script ("hartwell",
+  "HARTWELL", "“Hartwell”", "иванова"), as whole words (:func:`client_named_any_case`;
+  a list that cannot be read is never clean);
+* CONTACT DETAILS: the mask and the identifier patterns find nothing in the
+  WHOLE draft (an improvement keeps the owner's own lines, so this is
+  checked again on all of it);
+* FIGURES: no figure of the record (all of it, as saved, before any mask or
+  cut) is in the draft, in any of its forms (:func:`figure_forms`: every run
+  of digits, and every run joined to the runs after it across ``,`` ``.``
+  ``'`` and a space, so "1,250.00", "1.250,00", "1'250" and "1 250" all
+  hold "1250"), compared both ways without leading zeros; the draft's own
+  ordered list numbers ("1." at the start of a line) are not figures;
 * a record cut short by :data:`RECORD_MAX` is never clean (what was not read
   cannot be promised).
 
-Strict on purpose: a draft that uses "Excel" where the record said "Excel"
-loses the line, never the other way round.
+Strict on purpose: a draft that says "3" where the record said "3" loses the
+line, never the other way round.
 
 :func:`check` is BLOCKING (the client list is read from the database).
 """
@@ -47,7 +54,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-#: The most record text the figure and name checks read (all of the work's
+#: The most record text the figure check reads (all of the work's
 #: own words, raw). Past it the draft is not called clean.
 RECORD_MAX = 400_000
 
@@ -56,30 +63,20 @@ SECRET = "secret"
 INSTRUCTION = "instruction"
 CLIENT = "client"
 
+#: A figure: runs of digits joined by one separator (``,`` ``.`` ``'`` ``’``
+#: or a space, a no-break space or a thin space) between digits.
+_FIGURE = re.compile("\\d+(?:[,.'’ \u00a0\u202f]\\d+)*")
 _DIGITS = re.compile(r"\d+")
 #: An ordered list number at the start of a line ("1." / "12)").
 _LIST_NUMBER = re.compile(r"^([ \t]*)\d{1,3}([.)])(?=[ \t])", re.MULTILINE)
-#: A word that starts with a capital letter (letters, digits, ' and - inside).
-_CAPITAL_WORD = re.compile(r"(?<![\w'’-])([A-Z][\w'’-]*)")
-#: What starts a sentence before a word: the end of one, a new line (with a
-#: list mark), an opening quote or bracket. A colon does NOT ("Client:
-#: Hartleys" names one).
-_SENTENCE_START = re.compile(r"(?:[.!?]\s+|\n\s*(?:[-*#>]+\s+|\d{1,3}[.)]\s+)?|[\"“(\[]\s*)$")
-#: Never a name from the owner's work: the app's own name, and the little
-#: words a line after a colon starts with.
-_NOT_NAMES = frozenset({
-    "Iron", "Jarvis", "I", "A", "An", "The", "This", "That", "These", "Those", "It", "We", "You", "He",
-    "She", "They", "My", "Your", "Our", "Its", "And", "But", "Or", "If", "When", "Then", "Here",
-    "There", "Done", "Yes", "No", "Please", "Thanks", "Hi", "Hello",
-})
 
 
 @dataclass(frozen=True)
 class Verdict:
     """What :func:`check` found. ``refused`` is "" (the draft may be shown),
     :data:`SECRET`, :data:`INSTRUCTION` or :data:`CLIENT`. ``clean``: no
-    figure and no name from the record is in it (only then may the line be
-    said); always False when refused."""
+    client name, contact detail or figure of the record is in it (only then
+    may the line be said); always False when refused."""
 
     refused: str = ""
     clean: bool = False
@@ -103,34 +100,30 @@ def _bounded(parts: Iterable[Any]) -> tuple[str, bool]:
     return "\n".join(out), True
 
 
-def figures(text: Any) -> set[str]:
-    """Every run of digits in ``text``, without leading zeros. Pure."""
-    return {m.lstrip("0") or "0" for m in _DIGITS.findall(str(text or ""))}
+def figure_forms(text: Any) -> set[str]:
+    """Every form of every figure in ``text``, without leading zeros: each
+    run of digits, and each run joined to the runs that follow it in the
+    same figure ("1,250.00" gives 1, 250, 0, 1250 and 125000). Pure, linear
+    in the figures' size."""
+    out: set[str] = set()
+    for m in _FIGURE.finditer(str(text or "")):
+        runs = _DIGITS.findall(m.group(0))
+        for i in range(len(runs)):
+            joined = ""
+            for run in runs[i:]:
+                joined += run
+                out.add(joined.lstrip("0") or "0")
+    return out
+
+
+#: The old name (every run of digits is one of the forms).
+figures = figure_forms
 
 
 def draft_figures(text: Any) -> set[str]:
-    """:func:`figures` of a DRAFT, its ordered list numbers left out. Pure."""
-    return figures(_LIST_NUMBER.sub(r"\1\2", str(text or "")))
-
-
-def names(text: Any) -> set[str]:
-    """The words of ``text`` that start with a capital letter where no
-    sentence starts (see the module docstring). Pure, linear."""
-    body = str(text or "")
-    found: set[str] = set()
-    for m in _CAPITAL_WORD.finditer(body):
-        word = m.group(1).rstrip("'’-")
-        if not word or word in _NOT_NAMES:
-            continue
-        before = body[max(0, m.start() - 12):m.start()]
-        if m.start() == 0 or _SENTENCE_START.search(before):
-            continue
-        found.add(word)
-    return found
-
-
-def _words(text: str) -> set[str]:
-    return {m.group(1).rstrip("'’-") for m in _CAPITAL_WORD.finditer(text)}
+    """:func:`figure_forms` of a DRAFT, its ordered list numbers left out.
+    Pure."""
+    return figure_forms(_LIST_NUMBER.sub(r"\1\2", str(text or "")))
 
 
 def new_lines(text: Any, before: Any = "") -> str:
@@ -143,15 +136,49 @@ def new_lines(text: Any, before: Any = "") -> str:
 
 
 def is_clean(draft: Any, record: Iterable[Any]) -> bool:
-    """No figure and no name from ``record`` in ``draft`` (and all of the
-    record was read). Pure."""
+    """No figure of ``record`` in ``draft``, in any of its forms, and all of
+    the record was read. Pure. (Client names and contact details are
+    :func:`check`'s.)"""
     source, whole = _bounded(record)
     if not whole:
         return False
-    text = str(draft or "")
-    if draft_figures(text) & figures(source):
+    return not (draft_figures(draft) & figure_forms(source))
+
+
+def _signed(text: str) -> str:
+    """``text`` as client-name signature tokens, lower case, any script,
+    joined by single spaces with a space at each end (the client list's own
+    folding, ``workmap/clients/names``)."""
+    from ..workmap.clients import names as N
+
+    out: list[str] = []
+    for m in N._TOKEN_RX.finditer(text):
+        sig = N.signature(m.group(0).lower())
+        if sig:
+            out.append(sig)
+    return " " + " ".join(out) + " "
+
+
+def client_named_any_case(engine: Any, text: Any) -> bool:
+    """Does ``text`` hold a name the client list has (confirmed or waiting:
+    its display name, signature or an alias), in ANY case or script, as
+    whole words? A list that cannot be read answers True. BLOCKING."""
+    try:
+        from ..workmap.clients import names as N
+        from ..workmap.clients import store
+
+        cmap = store.load_map(engine)
+        joined = _signed(str(text or ""))
+        for table in (cmap.names, cmap.waiting_names):
+            for entry in (table or {}).values():
+                name, sig, aliases = entry
+                for want in (N.signature(str(name or "").lower()), str(sig or ""), *tuple(aliases or ())):
+                    want = " ".join(str(want or "").lower().split())
+                    if want and f" {want} " in joined:
+                        return True
         return False
-    return not (_words(text) & names(source))
+    except Exception:  # noqa: BLE001 — unreadable: never called clean
+        return True
 
 
 def secret_shaped(text: Any) -> bool:
@@ -179,20 +206,27 @@ def check(engine: Any, draft: Any, record: Iterable[Any], *, before: Any = "") -
     """Check a draft's final text (see the module docstring). ``record``:
     the work's own words, raw (every piece the draft was written from).
     ``before``: an improved skill's current text; only the lines the draft
-    ADDS are checked (the owner's own text is theirs). BLOCKING."""
+    ADDS can refuse it (the owner's own text is theirs), but whether it is
+    clean is read off the WHOLE draft. BLOCKING."""
     from .learning import names_a_client
 
-    text = new_lines(draft, before)  # bounded: the parser caps a draft
+    whole = str(draft or "")  # bounded: the parser caps a draft
+    text = new_lines(whole, before)
     if secret_shaped(text):
         return Verdict(refused=SECRET)
     if read_as_instruction(text):
         return Verdict(refused=INSTRUCTION)
     if names_a_client(engine, text):
         return Verdict(refused=CLIENT)
-    return Verdict(clean=is_clean(text, record))
+    clean = (
+        is_clean(whole, record)
+        and not secret_shaped(whole)
+        and not client_named_any_case(engine, whole)
+    )
+    return Verdict(clean=clean)
 
 
 __all__ = [
-    "CLIENT", "INSTRUCTION", "RECORD_MAX", "SECRET", "Verdict", "check", "draft_figures",
-    "figures", "is_clean", "names", "new_lines", "read_as_instruction", "secret_shaped",
+    "CLIENT", "INSTRUCTION", "RECORD_MAX", "SECRET", "Verdict", "check", "client_named_any_case",
+    "draft_figures", "figure_forms", "figures", "is_clean", "new_lines", "read_as_instruction", "secret_shaped",
 ]

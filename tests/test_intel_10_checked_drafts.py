@@ -11,9 +11,10 @@ each with the way it would fail:
   same task asked for in chat, or as a task, on three days); an improvement
   approved and then put back restores the old text exactly;
 * DO-NOTHING CHECK: the same job on three days leaves a suggestion whose
-  lines say what was checked: "No names or figures from your work are in
-  it." — and only when it is true (a figure or a name from the work in the
-  draft loses the line);
+  lines say what was checked: "No client names, contact details or figures
+  from your work are in it." — and only when it is true (a client's name in
+  any case or script, a contact detail, or a figure of the work in any of
+  its forms loses the line; the line never promises "no names");
 * a draft holding a secret-shaped value, an identifier or a line read as an
   instruction never reaches Improvements;
 * the three-times bar now holds for agent runs: one run, or two, is not
@@ -87,11 +88,12 @@ def _utc(at: datetime) -> datetime:
 def seed_run(engine, at: datetime, *, task: str = TASK, tools=RUN_TOOLS, provider: str = "claude-cli",
              model: str = "claude-sonnet-4-6", origin: str | None = None, trust: str = "full",
              child: bool = False, summary: str = "", args: str = "", output: str = "ok",
-             status: SessionStatus = SessionStatus.COMPLETED, options: dict | None = None) -> str:
+             status: SessionStatus = SessionStatus.COMPLETED, options: dict | None = None,
+             agent_type: AgentType = AgentType.BUILDER) -> str:
     """One finished agent run started at ``at``: its row, its run row and its
     tool rows (every one ran). ``child``: another run handed it its task."""
     sess = Session(task=task, status=status, provider=provider, model=model, origin=origin, trust=trust,
-                   summary=summary)
+                   summary=summary, agent_type=agent_type)
     if options:
         sess.options_json = json.dumps(options)
     sess.created_at = _utc(at)
@@ -217,7 +219,7 @@ def test_the_same_job_on_three_days_leaves_a_suggestion_that_says_what_was_check
     assert item["evidence"] == [
         f"You asked for this 3 times, on {_days()}.",
         f"Each time Iron Jarvis used: {tools}.",
-        "No names or figures from your work are in it.",
+        "No client names, contact details or figures from your work are in it.",
     ]
     assert item["extra"]["night"]["why"] == NR.repeat_why(3, source)
     view = desk.client.get("/skills/learning").json()
@@ -225,8 +227,9 @@ def test_the_same_job_on_three_days_leaves_a_suggestion_that_says_what_was_check
     assert p["evidence"]["checked"] is True
 
 
-@pytest.mark.parametrize("what", ["figure", "name"])
-def test_a_draft_holding_a_figure_or_a_name_from_the_work_does_not_say_it_was_clean(desk, what):
+@pytest.mark.parametrize("what", ["figure", "client"])
+def test_a_draft_holding_a_figure_or_a_client_s_name_does_not_say_it_was_clean(desk, what):
+    _client(desk, "Marlow")
     tids = three_chats(desk.engine)
     from iron_jarvis.core.models import ChatThreadRecord
 
@@ -237,12 +240,77 @@ def test_a_draft_holding_a_figure_or_a_name_from_the_work_does_not_say_it_was_cl
         row.messages_json = json.dumps(lines)
         db.add(row)
         db.commit()
-    planted = "Keep the 1250 rows together." if what == "figure" else "Send the sheet to Marlow."
+    # A client's name in LOWER case is not held (the wall's own rule reads a
+    # one-word name only capitalised), but it is never called clean.
+    planted = "Keep the 1250 rows together." if what == "figure" else "Send the sheet to marlow."
     desk.router.text = CHAT_MD + "4. " + planted + "\n"
     _pass(desk)
     (item,) = _skill_items(desk)
     assert R.CHECKED_LINE not in item["evidence"]
     assert item["evidence"][0] == f"You asked for this 3 times, on {_days()}."
+
+
+def test_the_review_s_probe_is_not_called_clean(desk):
+    """The independent review's end-to-end probe: a name that only starts a
+    sentence, a lower-case name and "1,250.00" in the record; "1250" in the
+    draft. The figure is caught across its separators."""
+    tids = three_chats(desk.engine)
+    from iron_jarvis.core.models import ChatThreadRecord
+
+    with session_scope(desk.engine) as db:
+        row = db.get(ChatThreadRecord, tids[2])
+        lines = json.loads(row.messages_json)
+        lines[1]["content"] = "Done. Marlow sent 1,250.00 in total; ask ivanova at the bank."
+        row.messages_json = json.dumps(lines)
+        db.add(row)
+        db.commit()
+    desk.router.text = CHAT_MD + "4. Ask Marlow and ivanova to confirm the 1250 total.\n"
+    _pass(desk)
+    (item,) = _skill_items(desk)
+    assert R.CHECKED_LINE not in item["evidence"]
+
+
+def test_the_checked_line_promises_only_what_the_checks_guarantee():
+    """It says client names, contact details and figures: never "names" (a
+    person's name in lower case cannot be found in general)."""
+    assert R.CHECKED_LINE == "No client names, contact details or figures from your work are in it."
+    assert "names or" not in R.CHECKED_LINE.replace("client names", "")
+
+
+@pytest.mark.parametrize("record,draft", [
+    ("Marlow sent 1,250.00 in total.", "Confirm the 1250 total."),
+    ("Marlow sent 1.250,00 in total.", "Confirm the 1250 total."),
+    ("Marlow sent 1'250 in total.", "Confirm the 1250 total."),
+    ("Marlow sent 1 250 in total.", "Confirm the 1250 total."),
+    ("The total was 1250.", "Confirm the 1,250.00 total."),
+    ("The total was 1250.", "Confirm the 1.250 total."),
+])
+def test_a_figure_is_caught_across_its_separators(record, draft):
+    md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. " + draft + "\n"
+    assert not C.is_clean(md, [record])
+
+
+@pytest.mark.parametrize("client,record,draft", [
+    ("Hartwell", "Hartwell sent the export.", "Ask Hartwell to confirm."),        # starts a sentence in the record
+    ("Hartwell", "the export came in.", 'Write "Hartwell" on the cover.'),        # in quotes
+    ("Hartwell", "the export came in.", "ask hartwell to confirm."),              # lower case
+    ("Иванова", "the export came in.", "спросите иванова о выписке."),           # not Latin letters
+    ("Hartwell", "the export came in.", "Ask HARTWELL to confirm."),              # capitals
+])
+def test_a_client_s_name_in_any_form_is_never_called_clean(desk, client, record, draft):
+    _client(desk, client)
+    md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. " + draft + "\n"
+    verdict = C.check(desk.engine, md, [record])
+    assert verdict.clean is False
+
+
+def test_a_draft_holding_contact_details_is_never_called_clean(desk):
+    """An improvement keeps the owner's own line with an address (theirs, so
+    it is shown), but the line never says no contact details are in it."""
+    before = "---\nname: x\ndescription: d\n---\n\n1. Mail the list to billing@example.test.\n"
+    md = before + "2. Note who paid.\n"
+    verdict = C.check(desk.engine, md, ["chase the invoices"], before=before)
+    assert verdict.refused == "" and verdict.clean is False
 
 
 # --------------------------------------------------------------------------- #
@@ -335,10 +403,33 @@ def test_a_run_nobody_asked_for_is_never_counted(desk, how):
     assert desk.router.calls == [] and _cands(desk) == []
 
 
-@pytest.mark.parametrize("origin", [None, "user_task", "project:p1"])
+@pytest.mark.parametrize("origin", [None, "user_task", "project:p1", "assignment:a1"])
 def test_a_run_the_owner_started_is_counted(desk, origin):
     three_runs(desk.engine, origin=origin)
     assert R.detect(desk.platform, now=datetime.now().astimezone()) == 1
+
+
+def test_a_self_development_run_is_never_counted(desk):
+    """Self-development with no origin tag (an older row, a door that set
+    none): the run is about the app itself, not the owner's work."""
+    three_runs(desk.engine, agent_type=AgentType.MAINTAINER)
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == 0
+    three_runs(desk.engine, origin="self_dev")
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == 0
+
+
+@pytest.mark.parametrize("source", ["chat", "run"])
+def test_a_task_with_no_model_recorded_keeps_the_request_home(desk, source):
+    """Unsure = home (19-a's re-check): a task whose model is not recorded is
+    Local only, so its words never go to a cloud model in a draft."""
+    if source == "chat":
+        three_chats(desk.engine, provider="", model="")
+    else:
+        three_runs(desk.engine, provider="", model="")
+    assert R.detect(desk.platform, now=datetime.now().astimezone()) == 1
+    (cand,) = _cands(desk)
+    assert all(u["local_only"] is True for u in R.load_evidence(cand.evidence_json)["units"])
+    assert desk.platform.skill_learning._candidate_local_only(cand) is True
 
 
 def test_a_chat_that_handed_its_task_to_an_agent_counts_once(desk):
@@ -551,6 +642,25 @@ def test_put_back_is_refused_when_the_skill_was_changed_again_since(desk):
     assert path.read_bytes() == edited
 
 
+def test_two_improvements_in_the_same_second_keep_both_earlier_versions(desk, monkeypatch):
+    from iron_jarvis.skills import learning as L
+
+    moment = datetime(2026, 11, 20, 9, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(L, "utcnow", lambda: moment)
+    pid, path = _improvement(desk)
+    _approve(desk, pid)
+    second = SkillProposalRecord(kind="refine", skill_name="invoice-chaser", description="Chase overdue invoices.",
+                                 body_md=BETTER.replace("Note who paid.", "Note who paid and when."),
+                                 signature="refine::invoice-chaser")
+    with session_scope(desk.engine) as db:
+        db.add(second)
+        db.commit()
+        db.refresh(second)
+    assert desk.client.post(f"/skills/proposals/{second.id}/approve", json={}).status_code == 200
+    kept = sorted(p.read_bytes() for p in (path.parent / ".history").iterdir())
+    assert len(kept) == 2 and OWN in kept
+
+
 def test_an_improvement_whose_earlier_version_cannot_be_kept_changes_nothing(desk, monkeypatch):
     from iron_jarvis.tools import undo as U
 
@@ -571,11 +681,10 @@ def test_an_improvement_whose_earlier_version_cannot_be_kept_changes_nothing(des
 # --------------------------------------------------------------------------- #
 # the check itself
 # --------------------------------------------------------------------------- #
-def test_the_check_reads_figures_and_names_strictly():
+def test_the_check_reads_figures_strictly():
     record = ["total 1,250.00 for Hartleys on 3 March", "Client: Acme", "Done: The sheet is written."]
     md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. Write it.\n"
-    assert C.is_clean(md, record)  # list numbers are not figures; "The" after a colon is no name
+    assert C.is_clean(md, record)  # list numbers are not figures
     assert not C.is_clean(md + "Keep 250 rows.", record)
-    assert not C.is_clean(md + "Mind the March close.", record)
-    assert not C.is_clean(md + "Ask Acme.", record)  # a name after a colon is still a name
+    assert not C.is_clean(md + "Keep 3 rows.", record)
     assert not C.is_clean(md, ["x" * (C.RECORD_MAX + 1)])  # a record not read whole is never clean

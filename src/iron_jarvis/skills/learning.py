@@ -1407,8 +1407,6 @@ class SkillLearningEngine:
         copy the approval makes. The change's id. Raises ``ValueError``
         ("nothing was changed: …") when the earlier version cannot be kept.
         BLOCKING."""
-        import time
-
         from ..core.ids import new_id
         from ..core.models import PermissionMode, UndoJournal
         from ..tools import undo as U
@@ -1422,7 +1420,10 @@ class SkillLearningEngine:
             if existed:
                 history = target.parent / ".history"
                 history.mkdir(exist_ok=True)
-                (history / f"{time.strftime('%Y%m%d-%H%M%S')}-{SKILL_FILE}").write_bytes(before)
+                # The change's id in the name: two approvals in one second
+                # never overwrite each other's copy.
+                stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+                (history / f"{stamp}-{change_id}-{SKILL_FILE}").write_bytes(before)
             ref = U.save_preimage(home, change_id, before) if existed else None
             with session_scope(self.engine) as db:
                 db.add(ToolInvocation(

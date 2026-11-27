@@ -338,8 +338,10 @@ def times_line(evidence: dict[str, Any]) -> str:
 
 #: Release 10: said only of a draft whose final text passed every check
 #: (``skills/draft_check``: masked, scanned, no client named) AND holds no
-#: figure and no name from the work it was written from.
-CHECKED_LINE = "No names or figures from your work are in it."
+#: client name in any case, no contact detail and no figure of the work it
+#: was written from. Never "no names": a person's name in lower case cannot
+#: be found in general (the release-10 review).
+CHECKED_LINE = "No client names, contact details or figures from your work are in it."
 
 
 def checked_line(evidence: dict[str, Any]) -> str:
@@ -729,18 +731,23 @@ _CHUNK = 400
 def asked_for(origin: Any) -> bool:
     """Was a run of ``origin`` one the OWNER asked for as a task of its own?
     Untagged (the Sessions page, Spotlight, a custom agent's Run, ``ij run``,
-    a rerun of one of those), ``user…`` and ``project…`` (a project's task)
-    are. NOT counted: ``chat…`` (a chat handed its task over: that task is
+    a rerun of one of those), ``user…``, ``project…`` (a project's task) and
+    ``assignment…`` (a task queued from a project's page) are; never a
+    self-development run, tagged or not (``_run_ok``). NOT counted: ``chat…`` (a chat handed its task over: that task is
     already counted as the chat's own, once), ``job…`` (a mission's
     coordinator and helpers: the owner asked for the mission, not this
     run), and every unattended door (a schedule, a workflow, a rule, a
     watcher, a goal, the phone, another computer, autonomy, self-development:
     nobody asked for that run just then). Pure."""
     text = str(origin or "").strip().lower()
-    return not text or text.startswith(("user", "project"))
+    return not text or text.startswith(("user", "project", "assignment"))
 
 
 def _run_ok(sess: Any) -> bool:
+    from ..core.models import AgentType
+
+    if getattr(sess, "agent_type", None) in (AgentType.MAINTAINER, AgentType.MAINTAINER.value):
+        return False  # self-development, tagged or not: about the app, not the owner's work
     status = getattr(getattr(sess, "status", None), "value", str(getattr(sess, "status", "") or ""))
     if status != "completed" or not str(getattr(sess, "task", "") or "").strip():
         return False
