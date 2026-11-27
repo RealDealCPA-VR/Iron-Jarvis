@@ -16955,6 +16955,7 @@ async def run_chat_turn(
         made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
         coding=_harness is not None, escalate=bool(escalate),
         request=_last_user_text(getattr(body, "messages", None) or []), second=None if str(getattr(body, "pane_id", "") or "").strip() else _second,
+        answered_by=(route.provider, route.model),
     )
     if _checked is not None:
         out["checked"] = _checked

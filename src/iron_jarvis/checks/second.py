@@ -91,12 +91,16 @@ READ_S = 10.0
 
 #: The card's words (the plan's own). ``{model}`` and ``{account}`` are the
 #: EXACT model and account a yes stores.
-OFFER_WORDS = "Use {model} to double-check finished work? About one small request per task on {account}."
+OFFER_WORDS = (
+    "Use {model} to double-check finished work? It reads the request, the reply and the files' text. About one "
+    "small request per task on {account}."
+)
 
 #: The row's words: built by code, never the model's.
 PASSED_WORDS = "it found nothing wrong"
 LOOK_WORDS = "it found something that may be wrong"
 WHY_LOCAL = "this work stays on this PC, so nothing was sent"
+WHY_LOCAL_MODEL = "a model on this PC or your network did this work, so nothing was sent"
 WHY_STOPPED = "Emergency stop is on"
 WHY_OFF = "Several accounts is off"
 WHY_NOT_LISTED = "your accounts are not listed yet"
@@ -409,6 +413,24 @@ def _account_gate(platform: Any, choice: Choice) -> "tuple[Any, str]":
         return None, WHY_NOT_LISTED
 
 
+def answered_here(platform: Any, provider: Any, model: Any = "") -> bool:
+    """BLOCKING. Was the work done by a model on this PC or the owner's own
+    network (``providers/egress.stays_on_this_network``, by name and
+    address, never a probe)? Such work is kept home: its request, reply and
+    files are never sent to a cloud account for a double-check. True in
+    doubt (nothing is sent)."""
+    try:
+        from ..providers.egress import stays_on_this_network
+
+        p = " ".join(str(provider or "").split())
+        if not p:
+            return False
+        return bool(stays_on_this_network(p, getattr(platform, "providers", None),
+                                          getattr(platform, "config", None), str(model or "")))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _stopped(platform: Any) -> bool:
     try:
         from ..agents.orchestrator import emergency_stop_on
@@ -535,8 +557,14 @@ async def _ask(platform: Any, choice: Choice, pin: Any, message: str, *, thread_
 
 async def double_check(platform: Any, choice: Choice, *, request: str, reply: str, docs: Iterable[Any],
                        local_only: bool, thread_id: str = "", cap_s: "float | None" = None,
-                       clock: Callable[[], float] = time.monotonic) -> record.Check:
-    """The ONE row a double-check writes. Never raises (a cancel still does)."""
+                       clock: Callable[[], float] = time.monotonic, local_model: bool = False,
+                       still_home: "Callable[[], bool] | None" = None) -> record.Check:
+    """The ONE row a double-check writes. Never raises (a cancel still does).
+
+    *local_model*: the work was done by a model on this PC or the owner's
+    network: it is kept home like Local only work (nothing is sent).
+    *still_home*: asked again just before the request (BLOCKING, run off the
+    loop): a chat switched to Local only meanwhile sends nothing."""
     by = choice.model
 
     def row(result: str, detail: str) -> record.Check:
@@ -544,6 +572,8 @@ async def double_check(platform: Any, choice: Choice, *, request: str, reply: st
 
     if local_only:
         return row(record.NOT_CHECKED, WHY_LOCAL)
+    if local_model:
+        return row(record.NOT_CHECKED, WHY_LOCAL_MODEL)
     if await asyncio.to_thread(_stopped, platform):
         return row(record.NOT_CHECKED, WHY_STOPPED)
     pin, why = await asyncio.to_thread(_account_gate, platform, choice)
@@ -558,6 +588,8 @@ async def double_check(platform: Any, choice: Choice, *, request: str, reply: st
             read = await asyncio.wait_for(asyncio.to_thread(_file_texts, list(docs or ())), min(READ_S, cap))
             if read.total and not read.in_full:
                 return row(record.NOT_CHECKED, WHY_NONE_IN_FULL)
+            if still_home is not None and await asyncio.to_thread(still_home):
+                return row(record.NOT_CHECKED, WHY_LOCAL)
             text = await _ask(platform, choice, pin, prompt(request, reply, read.text), thread_id=thread_id)
     except asyncio.CancelledError:
         raise
@@ -632,7 +664,8 @@ def _spawn(coro: Any, spawn: "Callable[[Any], Any] | None") -> None:
 async def for_reply(platform: Any, *, turn: str, thread_id: str, ids: "list[str]", request: str, reply: str,
                     docs: "list[str]", local_only: bool, chat_of: "Callable[[str], str] | None" = None,
                     spawn: "Callable[[Any], Any] | None" = None,
-                    clock: Callable[[], float] = time.monotonic) -> "dict[str, Any] | None":
+                    clock: Callable[[], float] = time.monotonic,
+                    answered_by: "tuple[str, str] | None" = None) -> "dict[str, Any] | None":
     """After a reply that made or changed a file, when its line goes out:
     the once-only offer (``{"offer": {...}}``), or the double-check started
     (``{"token", "who"}``), or None. Never raises; never waits on the model."""
@@ -643,6 +676,7 @@ async def for_reply(platform: Any, *, turn: str, thread_id: str, ids: "list[str]
         if state != "on" or choice is None or not docs:
             return None
         engine = getattr(platform, "engine", None)
+        local_model = bool(answered_by) and await asyncio.to_thread(answered_here, platform, *answered_by)
         now = clock()
         _forget_old(now)
         token = uuid.uuid4().hex
@@ -654,8 +688,15 @@ async def for_reply(platform: Any, *, turn: str, thread_id: str, ids: "list[str]
                 if busy:
                     check = record.Check(record.DOUBLE_CHECK, record.NOT_CHECKED, WHY_BUSY, by=choice.model)
                 else:
+                    def still_home() -> bool:
+                        from .turn import _is_local_only
+
+                        chat = thread_id or (chat_of(turn) if chat_of is not None else "")
+                        return bool(chat) and _is_local_only(engine, chat)
+
                     check = await double_check(platform, choice, request=request, reply=reply, docs=docs,
-                                               local_only=local_only, thread_id=thread_id, clock=clock)
+                                               local_only=local_only, thread_id=thread_id, clock=clock,
+                                               local_model=local_model, still_home=still_home)
                 chat = thread_id or (chat_of(turn) if chat_of is not None else "")
                 mine: list[str] = []
                 await record.note(engine, [check], thread_id=chat, turn_id=turn, kept_home=local_only,
@@ -698,6 +739,8 @@ async def for_run(platform: Any, session: Any, docs: "Iterable[Any] | None", *, 
         _forget_old(now)
         busy = running() >= RUNS_MAX
         request = str(getattr(session, "task", "") or "")
+        local_model = await asyncio.to_thread(answered_here, platform, getattr(session, "provider", "") or "",
+                                              getattr(session, "model", "") or "")
         token = uuid.uuid4().hex
         _RUNS[token] = {"running": True, "ids": [], "at": now}
 
@@ -708,7 +751,8 @@ async def for_run(platform: Any, session: Any, docs: "Iterable[Any] | None", *, 
                 else:
                     check = await double_check(platform, choice, request=request, reply=reply, docs=made,
                                                local_only=bool(owner.get("kept_home")),
-                                               thread_id=str(owner.get("thread_id") or ""), clock=clock)
+                                               thread_id=str(owner.get("thread_id") or ""), clock=clock,
+                                               local_model=local_model)
                 await record.note(engine, [check], session_id=sid, thread_id=str(owner.get("thread_id") or ""),
                                   kept_home=bool(owner.get("kept_home")))
             except asyncio.CancelledError:

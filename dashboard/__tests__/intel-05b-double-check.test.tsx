@@ -144,7 +144,7 @@ import FIXTURE from "./fixtures/intel-05-checked.json";
  */
 
 const GOOD = FIXTURE.good;
-const OFFER_WORDS = "Use Sonnet 4.5 to double-check finished work? About one small request per task on “Work”.";
+const OFFER_WORDS = "Use Sonnet 4.5 to double-check finished work? It reads the request, the reply and the files' text. About one small request per task on “Work”.";
 const CHOICE = "acct-work|claude-cli|claude-sonnet-4-5";
 const VIEW_UNSET = {
   state: "unset",

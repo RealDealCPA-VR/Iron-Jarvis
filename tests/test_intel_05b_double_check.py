@@ -143,15 +143,28 @@ def _rows(platform, **where) -> list[CheckRecord]:
 
 
 def _file_turn(client, monkeypatch, lane, *, name="summary.xlsx", rows=GOOD_SHEET, final="Done: I saved summary.xlsx.",
-               message="make me a summary sheet of this", **extra):
+               message="make me a summary sheet of this", answered_by=("openai", "gpt-cloud"), **extra):
     """One reply that writes a real workbook. The reply's own model is the
     scripted fake; a double-check goes to the REAL router (its system prompt
     is the double-check's own), so the subscription doubles answer it."""
     platform = client.app.state.platform
     real = platform.router.complete
-    _scripted_router(platform, monkeypatch,
-                     [[ToolCall(id="c1", name="write_document", arguments={"path": name, "content": rows})]], final)
+    seen = _scripted_router(platform, monkeypatch,
+                            [[ToolCall(id="c1", name="write_document", arguments={"path": name, "content": rows})]],
+                            final)
     scripted = platform.router.complete
+    scripted_stream = platform.router.stream
+    # The reply's own model: a cloud one by default (the demo model counts as
+    # this PC, and work done on this PC or the owner's network is never sent).
+    answered = answered_by
+
+    async def stream(**kw):
+        async for frame in scripted_stream(**kw):
+            if frame.get("type") == "final":
+                frame = {**frame, "provider": answered[0], "model": answered[1]}
+            yield frame
+
+    monkeypatch.setattr(platform.router, "stream", stream)
 
     async def complete(**kw):
         if kw.get("system") == S.SYSTEM:
@@ -161,7 +174,10 @@ def _file_turn(client, monkeypatch, lane, *, name="summary.xlsx", rows=GOOD_SHEE
             from iron_jarvis.providers.router import RouteResult
 
             return RouteResult(LLMResponse(text="[]", usage={"input_tokens": 1, "output_tokens": 1}), "mock", "mock")
-        return await scripted(**kw)
+        got = await scripted(**kw)
+        from iron_jarvis.providers.router import RouteResult
+
+        return RouteResult(got.response, answered[0], answered[1])
 
     monkeypatch.setattr(platform.router, "complete", complete)
     body, frames = _post_turn(client, lane, {
@@ -233,7 +249,7 @@ def test_two_accounts_get_the_card_once_under_a_reply_that_made_a_file(client, m
     offer = body["double_check"]["offer"]
     assert offer == {
         "choice": "acct-work|claude-cli|claude-sonnet-4-5", "model": "Sonnet 4.5", "account": "Work",
-        "words": "Use Sonnet 4.5 to double-check finished work? About one small request per task on “Work”.",
+        "words": "Use Sonnet 4.5 to double-check finished work? It reads the request, the reply and the files' text. About one small request per task on “Work”.",
     }
     cfg = client.app.state.platform.config
     assert cfg.double_check is None and cfg.double_check_offered, "the card was not marked shown"
@@ -521,7 +537,7 @@ async def test_chat_turns_it_on_with_a_card_naming_the_model_and_the_account(tmp
     frames = await _drive_stream(app, _body("turn on the second model check"), allow)
     assert len(asked) == 1, asked
     said = json.dumps(asked[0], ensure_ascii=False)
-    assert "Use Sonnet 4.5 to double-check finished work? About one small request per task on “Work”." in said
+    assert "Use Sonnet 4.5 to double-check finished work? It reads the request, the reply and the files' text. About one small request per task on “Work”." in said
     assert "acct-work" not in said, "the card showed an account id"
     assert platform.config.double_check == "acct-work|claude-cli|claude-sonnet-4-5", _done(frames)
 
@@ -625,3 +641,55 @@ async def test_a_double_check_says_exactly_which_files_it_read_in_full(platform,
     before = len(log.calls)
     none = await S.double_check(platform, choice, request="r", reply="done", docs=[str(big)], local_only=False)
     assert (none.result, none.detail) == (R.NOT_CHECKED, S.WHY_NONE_IN_FULL) and len(log.calls) == before
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_work_a_model_on_this_pc_did_is_never_sent_to_the_cloud_account(client, monkeypatch, lane):
+    """Review 4: a reply answered by a model on this PC or the owner's
+    network (not switched Local only) sends nothing; the line says why."""
+    _accounts(client, monkeypatch, TWO)
+    _yes(client)
+    body = _file_turn(client, monkeypatch, lane, answered_by=("mock", "mock"))
+    got = _wait(client, body["double_check"]["token"])["checked"]
+    assert got["line"] == GOOD_LINE + f" Not checked: the double-check by Sonnet 4.5 ({S.WHY_LOCAL_MODEL})."
+    assert client.log.calls == []
+
+
+def test_the_card_and_the_row_say_what_the_model_reads(client, monkeypatch):
+    _accounts(client, monkeypatch, TWO)
+    words = client.get("/checks/double-check").json()["offer"]["words"]
+    assert words == ("Use Sonnet 4.5 to double-check finished work? It reads the request, the reply and the files' "
+                     "text. About one small request per task on “Work”.")
+    from iron_jarvis.settings import schema
+
+    assert "reads what was asked, the reply and the files' text" in schema.get("double_check").help
+
+
+def test_a_chat_switched_to_local_only_after_the_reply_sends_nothing(client, monkeypatch):
+    """Review 5: Local only is asked again just before the request."""
+    from iron_jarvis.providers import egress
+
+    _accounts(client, monkeypatch, TWO)
+    _yes(client)
+    client.log.hold_open = True
+    turned: list[bool] = []
+    real = egress.thread_local_only
+
+    def now_local(engine, thread_id):
+        return bool(turned) or real(engine, thread_id)
+
+    monkeypatch.setattr(egress, "thread_local_only", now_local)
+    real_texts = S._file_texts
+
+    def switch_then_read(docs):
+        turned.append(True)        # the person switches the chat to Local only while it starts
+        return real_texts(docs)
+
+    monkeypatch.setattr(S, "_file_texts", switch_then_read)
+    try:
+        body = _file_turn(client, monkeypatch, "post", thread_id="thread-switch")
+        got = _wait(client, body["double_check"]["token"])["checked"]
+    finally:
+        client.log.release.set()
+    assert got["line"].endswith(f"({S.WHY_LOCAL}).")
+    assert client.log.calls == []

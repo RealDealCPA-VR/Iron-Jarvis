@@ -407,9 +407,10 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Only when you have more than one model account. After a reply or a task that made or "
       "changed a file, one small request to the model you said yes to, on the account named with "
       "it, reads what was asked, the reply and the files' text, and says whether it found anything "
-      "wrong. Its answer is shown under that model's name, never as Iron Jarvis's own. Only that "
+      "wrong (and how many of the files it read in full). Its answer is shown under that model's name, never as Iron Jarvis's own. Only that "
       "model and that account are used; when the account is gone, turned off or at its limit, "
-      "nothing is sent and the line says so. Nothing is sent from a Local only chat. Off: Iron "
+      "nothing is sent and the line says so. Nothing is sent from a Local only chat, or for work a model "
+      "on this PC or your network did. Off: Iron "
       "Jarvis's own checks only. Not set: Iron Jarvis offers it once.",
       tier="ask", unset_ok=True, put=False, check=_double_check_value,
       aliases=("second model check", "double-check with a second model",

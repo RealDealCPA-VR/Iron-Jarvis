@@ -88,6 +88,7 @@ async def checked_for_turn(
     spawn: "Callable[[Callable[[], Any]], Any] | None" = None,
     request: str = "",
     second: "dict[str, Any] | None" = None,
+    answered_by: "tuple[str, str] | None" = None,
 ) -> "dict[str, Any] | None":
     """One chat reply's checks, written, and its line read back from the
     record (``record.payload``: ``{line, tone, checks, more, more_words}``),
@@ -115,7 +116,9 @@ async def checked_for_turn(
     (``{"offer": {...}}``) or the second model's double-check started in the
     background (``{"token", "who"}``); the lanes put it on the answer as
     ``double_check``. *request* is the person's message, which that model
-    reads (fenced as data). Only where the line goes out: never for a phone
+    reads (fenced as data); *answered_by* ``(provider, model)`` is the
+    reply's own model: work a model on this PC or the owner's network did is
+    never sent. Only where the line goes out: never for a phone
     reply, a coding session or a hand-off."""
     try:
         engine = getattr(platform, "engine", None)
@@ -144,7 +147,8 @@ async def checked_for_turn(
             return await asyncio.wait_for(
                 _checked(engine, turn, str(thread_id or "").strip(), docs if made else [], str(reply or ""),
                          until, deliverables, escalate, clock, files_wait,
-                         platform=platform, request=str(request or ""), second=second),
+                         platform=platform, request=str(request or ""), second=second,
+                         answered_by=answered_by),
                 cap,
             )
         except asyncio.TimeoutError:
@@ -162,7 +166,8 @@ async def checked_for_turn(
 async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", reply: str, until: Any,
                    deliverables: Any, escalate: bool, clock: Callable[[], float],
                    files_wait: float, *, platform: Any = None, request: str = "",
-                   second: "dict[str, Any] | None" = None) -> "dict[str, Any] | None":
+                   second: "dict[str, Any] | None" = None,
+                   answered_by: "tuple[str, str] | None" = None) -> "dict[str, Any] | None":
     """The work :func:`checked_for_turn` bounds. *docs* is empty for a reply
     that gets no line (it made no file, a coding session, a hand-off)."""
     # The checks of the made files come first in the record (and so in the
@@ -206,7 +211,8 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
         from . import second as _second
 
         extra = await _second.for_reply(platform, turn=turn, thread_id=thread_id, ids=mine, request=request,
-                                        reply=reply, docs=docs, local_only=home, chat_of=_chat_of)
+                                        reply=reply, docs=docs, local_only=home, chat_of=_chat_of,
+                                        answered_by=answered_by)
         if extra:
             second["double_check"] = extra
     return line

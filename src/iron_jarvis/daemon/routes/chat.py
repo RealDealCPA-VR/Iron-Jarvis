@@ -9593,6 +9593,7 @@ async def chat_stream(
             made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
             coding=_harness is not None, escalate=bool(escalate),
             request=_chat_turn._last_user_text(getattr(body, "messages", None) or []), second=None if str(getattr(body, "pane_id", "") or "").strip() else _second,
+            answered_by=(route_provider, route_model),
         )
         # v1.287.0: present ONLY when a note was left unread (see above).
         # v1.499.3: read as OWED (the notes closed above, handed over once) —
