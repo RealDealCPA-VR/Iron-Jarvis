@@ -5,70 +5,79 @@
     "tone": "quiet",
     "checks": [
       {
+        "check": "file_opens",
         "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_no_error_cells",
         "label": "\u201csummary.xlsx\u201d",
         "said": "no error cells",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_totals",
         "label": "\u201csummary.xlsx\u201d",
         "said": "3 totals add up",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
-        "label": "The reply",
-        "said": "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record",
+        "check": "required_file",
+        "label": "Required file \u201csummary.xlsx\u201d",
+        "said": "it is on disk (12 KB)",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       }
     ],
     "more": 0,
     "more_words": ""
   },
   "bad": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: C7 on \u201cSummary\u201d holds #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on \u201cSummary\u201d is worked out by a formula this check cannot follow).",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: C7 on \u201cSummary\u201d holds #DIV/0!. Not checked: the spreadsheet (it has too many cells to add its totals up here).",
     "tone": "warn",
     "checks": [
       {
+        "check": "sheet_no_error_cells",
         "label": "\u201csummary.xlsx\u201d",
         "said": "C7 on \u201cSummary\u201d holds #DIV/0!",
         "result": "failed",
         "result_words": "Problem",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_totals",
         "label": "\u201csummary.xlsx\u201d",
-        "said": "1 total could not be worked out by rule: D9 on \u201cSummary\u201d is worked out by a formula this check cannot follow",
+        "said": "it has too many cells to add its totals up here",
         "result": "not_checked",
         "result_words": "Not checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_totals",
         "label": "\u201csummary.xlsx\u201d",
         "said": "2 totals add up",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "step_check",
         "label": "Step 2",
         "said": "it passed its check",
         "result": "passed",
@@ -84,68 +93,76 @@
     "tone": "warn",
     "checks": [
       {
+        "check": "sheet_totals",
         "label": "\u201csummary.xlsx\u201d",
         "said": "B4 on \u201cSummary\u201d says 650 and the cells above it add up to 600",
         "result": "look",
         "result_words": "Worth a look",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "claims_match_record",
         "label": "The reply",
         "said": "it says a file was saved that no step wrote",
         "result": "look",
         "result_words": "Worth a look",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_no_error_cells",
         "label": "\u201csummary.xlsx\u201d",
         "said": "no error cells",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       }
     ],
     "more": 0,
     "more_words": ""
   },
   "both": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 on \u201cSummary\u201d holds #DIV/0!. Worth a look: D3 on \u201cSummary\u201d works out to an error. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on \u201cSummary\u201d is a formula).",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 on \u201cSummary\u201d holds #DIV/0!. Worth a look: D3 on \u201cSummary\u201d works out to an error. Not checked: the spreadsheet (the check ran out of time).",
     "tone": "warn",
     "checks": [
       {
+        "check": "sheet_no_error_cells",
         "label": "\u201csummary.xlsx\u201d",
         "said": "C7 on \u201cSummary\u201d holds #DIV/0!",
         "result": "failed",
         "result_words": "Problem",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_no_error_cells",
         "label": "\u201csummary.xlsx\u201d",
         "said": "D3 on \u201cSummary\u201d works out to an error",
         "result": "look",
         "result_words": "Worth a look",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "sheet_totals",
         "label": "\u201csummary.xlsx\u201d",
-        "said": "1 total could not be worked out by rule: D9 on \u201cSummary\u201d is a formula",
+        "said": "the check ran out of time",
         "result": "not_checked",
         "result_words": "Not checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       }
     ],
     "more": 0,
@@ -156,214 +173,244 @@
     "tone": "quiet",
     "checks": [
       {
+        "check": "file_opens",
         "label": "\u201cfile0.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile1.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile2.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile3.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile4.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile5.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile6.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile7.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile8.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile9.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile10.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile11.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile12.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile13.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile14.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile15.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile16.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile17.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile18.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile19.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile20.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile21.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile22.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile23.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile24.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile25.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile26.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile27.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile28.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       },
       {
+        "check": "file_opens",
         "label": "\u201cfile29.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
       }
     ],
     "more": 3,
@@ -374,11 +421,36 @@
     "tone": "quiet",
     "checks": [
       {
+        "check": "file_opens",
         "label": "\u201creport.pdf\u201d",
         "said": "the check ran out of time",
         "result": "not_checked",
         "result_words": "Not checked",
-        "who": "by rule"
+        "who": "by Iron Jarvis"
+      }
+    ],
+    "more": 0,
+    "more_words": ""
+  },
+  "quiet_not_checked": {
+    "line": "Checked by Iron Jarvis: the spreadsheet opens. Not checked: the spreadsheet (2 formulas have no saved result and could not be worked out here).",
+    "tone": "quiet",
+    "checks": [
+      {
+        "check": "sheet_no_error_cells",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "2 formulas have no saved result and could not be worked out here",
+        "result": "not_checked",
+        "result_words": "Not checked",
+        "who": "by Iron Jarvis"
+      },
+      {
+        "check": "file_opens",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "opens",
+        "result": "passed",
+        "result_words": "Checked",
+        "who": "by Iron Jarvis"
       }
     ],
     "more": 0,
@@ -394,7 +466,8 @@
           "said": "\u202eB4 sa\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069ys 650 and the cells above it add up to 600\u0000\t\n\u001b[31m",
           "result": "look",
           "result_words": "\u202eWorth\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069 a look\u0000\t\n\u001b[31m",
-          "who": "\u202eby ru\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069le\u0000\t\n\u001b[31m"
+          "who": "\u202eby Ir\u0000\u001b\u007f\u0085\u061c\u200e\u200f\u202a\u202e\u202c\u2066\u2067\u2068\u2069on Jarvis\u0000\t\n\u001b[31m",
+          "check": "sheet_totals"
         }
       ],
       "more": 2,
@@ -405,11 +478,12 @@
       "tone": "warn",
       "checks": [
         {
+          "check": "sheet_totals",
           "label": "summary.xlsx [31m",
           "said": "B4 says 650 and the cells above it add up to 600 [31m",
           "result": "look",
           "result_words": "Worth a look",
-          "who": "by rule [31m"
+          "who": "by Iron Jarvis [31m"
         }
       ],
       "more": 2,
@@ -424,39 +498,44 @@
       "more_words": "",
       "checks": [
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "look",
           "result_words": "Problem",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "look",
           "result_words": "Checked",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "failed",
           "result_words": "Checked",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "not_checked",
           "result_words": "Checked",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "passed",
           "result_words": "Problem",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         }
       ]
     },
@@ -465,45 +544,313 @@
       "tone": "warn",
       "checks": [
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "look",
           "result_words": "Worth a look",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "look",
           "result_words": "Worth a look",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "failed",
           "result_words": "Problem",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "not_checked",
           "result_words": "Not checked",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         },
         {
+          "check": "sheet_no_error_cells",
           "label": "a.xlsx",
-          "said": "B4 says 1 and the cells above it add up to 2",
+          "said": "C7 holds #DIV/0!",
           "result": "passed",
           "result_words": "Checked",
-          "who": "by rule"
+          "who": "by Iron Jarvis"
         }
       ],
       "more": 0,
       "more_words": ""
     }
   },
+  "allowlist": {
+    "raw": {
+      "line": "Checked by Iron Jarvis: the spreadsheet opens.",
+      "tone": "warn",
+      "more": 0,
+      "more_words": "",
+      "checks": [
+        {
+          "check": "claims_match_record",
+          "label": "item 0",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "document_not_empty",
+          "label": "item 1",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "file_opens",
+          "label": "item 2",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "pdf_pages",
+          "label": "item 3",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "required_file",
+          "label": "item 4",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "review",
+          "label": "item 5",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "sheet_no_error_cells",
+          "label": "item 6",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "sheet_totals",
+          "label": "item 7",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "step_check",
+          "label": "item 8",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "tests",
+          "label": "item 9",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "workflow_step",
+          "label": "item 10",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "label": "item 11",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "a_check_nobody_knows",
+          "label": "item 12",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": 7,
+          "label": "item 13",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        }
+      ]
+    },
+    "clean": {
+      "line": "Checked by Iron Jarvis: the spreadsheet opens.",
+      "tone": "warn",
+      "checks": [
+        {
+          "check": "claims_match_record",
+          "label": "item 0",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "document_not_empty",
+          "label": "item 1",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "file_opens",
+          "label": "item 2",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "pdf_pages",
+          "label": "item 3",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "required_file",
+          "label": "item 4",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "review",
+          "label": "item 5",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "sheet_no_error_cells",
+          "label": "item 6",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "sheet_totals",
+          "label": "item 7",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "step_check",
+          "label": "item 8",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "tests",
+          "label": "item 9",
+          "said": "it did not pass",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "workflow_step",
+          "label": "item 10",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "",
+          "label": "item 11",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "",
+          "label": "item 12",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        },
+        {
+          "check": "",
+          "label": "item 13",
+          "said": "it did not pass",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by Iron Jarvis"
+        }
+      ],
+      "more": 0,
+      "more_words": ""
+    }
+  },
+  "codes": {
+    "checks": [
+      "claims_match_record",
+      "document_not_empty",
+      "file_opens",
+      "pdf_pages",
+      "required_file",
+      "review",
+      "sheet_no_error_cells",
+      "sheet_totals",
+      "step_check",
+      "tests",
+      "workflow_step"
+    ],
+    "problem": [
+      "file_opens",
+      "required_file",
+      "sheet_no_error_cells",
+      "tests"
+    ]
+  },
+  "who": "by Iron Jarvis",
   "result_words": {
     "passed": "Checked",
     "failed": "Problem",

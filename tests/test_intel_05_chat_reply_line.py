@@ -80,7 +80,8 @@ def test_a_spreadsheet_with_an_error_cell_fails_and_the_line_says_which_cell(cli
     ), checked["line"]
     assert checked["tone"] == "warn"
     failed = [c for c in checked["checks"] if c["result"] == "failed"]
-    assert len(failed) == 1 and failed[0]["label"] == "“summary.xlsx”" and failed[0]["who"] == "by rule"
+    assert len(failed) == 1 and failed[0]["label"] == "“summary.xlsx”" and failed[0]["who"] == "by Iron Jarvis"
+    assert failed[0]["check"] == R.SHEET_ERRORS
     assert checked["checks"][0] == failed[0], "the problem is not first in the list"
     # The record holds the same finding, under this reply and no other owner.
     rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_ERRORS]
@@ -98,13 +99,125 @@ def test_totals_that_add_up_are_counted_and_pressing_the_line_lists_three_checks
     assert checked["tone"] == "quiet" and checked["more"] == 0
     of_the_file = [(c["said"], c["result"], c["who"]) for c in checked["checks"] if c["label"] == "“summary.xlsx”"]
     assert of_the_file == [
-        ("opens", "passed", "by rule"), ("no error cells", "passed", "by rule"), ("2 totals add up", "passed", "by rule"),
+        ("opens", "passed", "by Iron Jarvis"), ("no error cells", "passed", "by Iron Jarvis"),
+        ("2 totals add up", "passed", "by Iron Jarvis"),
     ]
-    # The check-again loop's own look at the reply is in the same record and
-    # list, after the three checks of the file: the reply says it saved
-    # summary.xlsx, and the words say no more than what was read.
-    assert [(c["label"], c["said"]) for c in checked["checks"]][3:] == [
-        ("The reply", "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record")]
+    # Nothing else: the reply says it saved summary.xlsx (a step did), and NO row says its claims were checked.
+    assert len(checked["checks"]) == 3 and "The reply" not in [c["label"] for c in checked["checks"]]
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_reply_that_says_it_saved_a_file_nothing_wrote_is_never_told_its_claims_are_in_the_record(
+        client, monkeypatch, lane):
+    """Decision 1, through the real lane (the reviewer's run): one file
+    written, a command run, and the reply says it saved TWO files. The line's
+    list read "The reply: the files it says it saved or changed ... are in
+    Iron Jarvis's record (Checked)". There is no such row."""
+    platform = client.app.state.platform
+    _scripted_router(platform, monkeypatch, [
+        [ToolCall(id="c1", name="write_document", arguments={"path": "summary.xlsx", "content": GOOD_SHEET})],
+        [ToolCall(id="c2", name="shell", arguments={"command": "echo hello"})],
+    ], "Done: I saved summary.xlsx and I also saved backup-copy.docx to your folder.")
+    body, _ = _post_turn(client, lane, {"messages": [{"role": "user", "content": "make me a summary sheet of this"}],
+                                        "tools": ["write_document", "shell"], "approval_mode": "yolo"})
+    assert body["documents"], body.get("reply")
+    checked = body["checked"]
+    assert checked["line"] == "Checked by Iron Jarvis: the spreadsheet opens, no error cells, 2 totals add up."
+    passed = [(c["label"], c["said"]) for c in checked["checks"] if c["result"] == "passed"]
+    assert passed == [("“summary.xlsx”", "opens"), ("“summary.xlsx”", "no error cells"), ("“summary.xlsx”", "2 totals add up")]
+    said = " ".join(c["said"] for c in checked["checks"])
+    assert "record" not in said and "backup-copy" not in said
+    assert not [r for r in _rows(platform) if r.check == R.CLAIMS and r.result == R.PASSED]
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_word_file_the_apps_own_tool_just_edited_is_never_a_problem_for_the_name_of_its_main_part(
+        client, monkeypatch, lane):
+    """Decision 2, through the real lane (the reviewer's run): a .docx whose
+    main part is ``word/document2.xml`` (Word Online saves it so), changed by
+    the app's own ``docx_edit``. The line read "a problem in the document: it
+    does not open: a part of the file is missing"."""
+    import zipfile
+    from pathlib import Path
+
+    platform = client.app.state.platform
+    _scripted_router(platform, monkeypatch, [[ToolCall(id="c1", name="write_document", arguments={
+        "path": "letter.docx", "content": "Dear Sam,\n\nThe meeting is on Monday.\n"})]], "Done: I saved letter.docx.")
+    body, _ = _post_turn(client, lane, {"messages": [{"role": "user", "content": "write the letter"}],
+                                        "tools": ["write_document"], "approval_mode": "yolo"})
+    path = Path(body["documents"][0])
+    other = path.with_suffix(".tmp")
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(other, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename in ("[Content_Types].xml", "_rels/.rels"):
+                data = data.replace(b"word/document.xml", b"word/document2.xml")
+            zout.writestr({"word/document.xml": "word/document2.xml",
+                           "word/_rels/document.xml.rels": "word/_rels/document2.xml.rels"}.get(info.filename, info.filename), data)
+    other.replace(path)
+    _scripted_router(platform, monkeypatch, [[ToolCall(id="c2", name="docx_edit", arguments={
+        "path": "letter.docx", "operations": [{"op": "replace", "find": "Monday", "replace": "Tuesday"}]})]],
+        "Done: I changed Monday to Tuesday in letter.docx.")
+    body, _ = _post_turn(client, lane, {"messages": [{"role": "user", "content": "change Monday to Tuesday in letter.docx"}],
+                                        "tools": ["docx_edit"], "approval_mode": "yolo"})
+    assert body["checked"]["line"] == "Checked by Iron Jarvis: the document opens, has text.", body["checked"]["line"]
+    assert body["checked"]["tone"] == "quiet"
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_local_only_chats_own_reply_keeps_its_checks_home_after_the_chat_is_switched_off(
+        client, monkeypatch, lane):
+    """Decision 7. PRIVACY, through the real lane and the real tool. A reply
+    made a file in a chat that is Local only: its rows hold the file's name,
+    a sheet's name and figures. The chat was then switched off Local only,
+    and "what did you check?" handed them to the (now cloud) model. A reply's
+    rows are marked kept home when its chat is Local only at the write, and
+    read like a kept-home run's: only while the chat is Local only itself."""
+    import json
+    import types
+
+    from iron_jarvis.checks.tool import NOTHING, ChecksListTool
+    from iron_jarvis.core.models import ChatThreadRecord
+    from iron_jarvis.providers.egress import set_thread_local_only, thread_local_only
+
+    platform = client.app.state.platform
+    engine = platform.engine
+    home, plain = f"chat_home_{lane}", f"chat_plain_{lane}"
+    with session_scope(engine) as db:
+        db.add(ChatThreadRecord(id=home, title="home", setup_json=json.dumps({"local_only": True})))
+        db.add(ChatThreadRecord(id=plain, title="plain", setup_json="{}"))
+        db.commit()
+
+    def asked(chat: str) -> str:
+        ctx = types.SimpleNamespace(engine=engine, thread_id=chat, session_id="chat", turn_id="turn_asking")
+        got = asyncio.run(ChecksListTool().execute({}, ctx))
+        assert got.ok
+        return got.output
+
+    # A reply in the Local only chat: the page gets its line, and the rows are kept home.
+    body, _ = _write_turn(client, monkeypatch, lane, WRONG_SHEET, name="client-payroll.xlsx",
+                          final="Done: I saved client-payroll.xlsx.", thread_id=home, turn_id=f"turn_home_{lane}")
+    assert "B4 says 1,700" in body["checked"]["line"], body["checked"]["line"]
+    mine = [r for r in _rows(platform) if r.turn_id == f"turn_home_{lane}"]
+    assert mine and {(r.thread_id, r.kept_home) for r in mine} == {(home, True)}
+    assert "client-payroll.xlsx" in asked(home) and "1,700" in asked(home)
+    # Switched OFF Local only: the rows are still the chat's own, and no reader hands them over.
+    assert set_thread_local_only(engine, home, False) is False and not thread_local_only(engine, home)
+    assert asked(home) == NOTHING
+    # Switched back ON: they are read again.
+    assert set_thread_local_only(engine, home, True) is True
+    assert "client-payroll.xlsx" in asked(home)
+
+    # THE OTHER DIRECTION: a reply in a chat that is not Local only is not kept home, whatever the chat is later.
+    _write_turn(client, monkeypatch, lane, WRONG_SHEET, name="plan.xlsx", final="Done: I saved plan.xlsx.",
+                thread_id=plain, turn_id=f"turn_plain_{lane}")
+    theirs = [r for r in _rows(platform) if r.turn_id == f"turn_plain_{lane}"]
+    assert theirs and {(r.thread_id, r.kept_home) for r in theirs} == {(plain, False)}
+    assert "plan.xlsx" in asked(plain)
+    assert set_thread_local_only(engine, plain, True) is True
+    assert "plan.xlsx" in asked(plain)
+    assert set_thread_local_only(engine, plain, False) is False
+    assert "plan.xlsx" in asked(plain)
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -121,7 +234,8 @@ def test_a_total_that_differs_is_worth_a_look_with_both_figures_never_a_problem(
     assert checked["tone"] == "warn" and "Problem" not in checked["line"]
     first = checked["checks"][0]
     assert (first["label"], first["said"], first["result"], first["result_words"], first["who"]) == (
-        "“summary.xlsx”", "B4 says 1,700 and the cells above it add up to 1,500", "look", "Worth a look", "by rule")
+        "“summary.xlsx”", "B4 says 1,700 and the cells above it add up to 1,500", "look", "Worth a look",
+        "by Iron Jarvis")
     assert not [c for c in checked["checks"] if c["result"] == "failed"]
     rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_TOTALS]
     assert [(r.result, r.detail) for r in rows] == [(R.LOOK, "B4 says 1,700 and the cells above it add up to 1,500")]
@@ -320,7 +434,7 @@ def test_a_chat_named_before_its_first_reply_ends_gets_that_replys_rows(client, 
     body, _ = _write_turn(client, monkeypatch, lane, GOOD_SHEET, turn_id=turn)
     assert body["checked"]["line"].startswith("Checked by Iron Jarvis:")
     assert _owners(platform, turn) == {(f"thread_pre_{lane}", turn)}, "rows were left with no chat"
-    assert len(R.for_thread(platform.engine, f"thread_pre_{lane}")) >= 4
+    assert len(R.for_thread(platform.engine, f"thread_pre_{lane}")) == 3
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -357,7 +471,7 @@ def test_a_chat_named_after_its_first_reply_ended_gets_that_replys_rows(client, 
     r = client.post(f"/chat/turns/{turn}/thread", json={"thread_id": thread})
     assert r.status_code == 200, r.text
     homed = R.for_thread(platform.engine, thread)
-    assert {row["turn_id"] for row in homed} == {turn} and len(homed) >= 4
+    assert {row["turn_id"] for row in homed} == {turn} and len(homed) == 3
     assert _owners(platform, turn) == {(thread, turn)}
 
 

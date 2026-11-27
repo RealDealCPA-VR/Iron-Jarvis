@@ -5,8 +5,10 @@
  * a file there is ONE quiet line, in the daemon's own words from its record
  * of checks: "Checked by Iron Jarvis: the spreadsheet opens, no error cells,
  * 3 totals add up." Pressing it lists the checks, each with its result and
- * who checked. A failed check reads in the warn tone. A reply that made no
- * file shows no line.
+ * who checked ("by Iron Jarvis", or a model's name). A failed check reads in
+ * the warn tone. A reply that made no file shows no line. "Problem" is held
+ * to the daemon's short list by each item's own check code, here too; and the
+ * quiet line's tick is drawn only when nothing on it is "Not checked".
  *
  * What carries weight here, each from the daemon's REAL payload (the fixture
  * is written by tests/test_intel_05_record.py from `checks/record.payload`):
@@ -143,6 +145,8 @@ import {
   decodeChecked,
   isWarnResult,
   RESULT_WORDS,
+  CHECK_CODES,
+  PROBLEM_CHECKS,
   seenText,
 } from "@/lib/checked";
 import FIXTURE from "./fixtures/intel-05-checked.json";
@@ -151,6 +155,10 @@ const GOOD = FIXTURE.good;
 const BAD = FIXTURE.bad;
 const MANY = FIXTURE.many;
 const NOT_CHECKED = FIXTURE.not_checked;
+/** A quiet line on which one thing passed and another was not checked. */
+const QUIET_NOT_CHECKED = FIXTURE.quiet_not_checked;
+/** One item that says "failed" for every check code (and none, and an unknown one), and what the daemon keeps. */
+const ALLOWLIST = FIXTURE.allowlist;
 /** A total Iron Jarvis added up itself and found different: "worth a look". */
 const LOOK = FIXTURE.look;
 /** A problem the file holds AND something worth a look, with what was not checked. */
@@ -221,7 +229,7 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
       more: -4,
       more_words: "and -4 more checks",
       checks: [
-        { label: "a.txt", said: "opens", result: "passed", result_words: "Checked", who: "by rule" },
+        { label: "a.txt", said: "opens", result: "passed", result_words: "Checked", who: "by Iron Jarvis" },
         { label: "", said: "x", result: "passed" },
         { label: "b.txt", said: "x", result: "wonderful" },
         "junk",
@@ -243,19 +251,21 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
     const mark = decodeChecked(LOOK)!;
     expect(mark.tone).toBe("warn");
     expect(mark.checks[0]).toEqual({
+      check: "sheet_totals",
       label: Q("summary.xlsx"),
       said: `B4 on ${Q("Summary")} says 650 and the cells above it add up to 600`,
       result: "look",
       resultWords: "Worth a look",
-      who: "by rule",
+      who: "by Iron Jarvis",
     });
     // What was read out of the reply's prose is worth a look too, never a problem.
     expect(mark.checks[1]).toEqual({
+      check: "claims_match_record",
       label: "The reply",
       said: "it says a file was saved that no step wrote",
       result: "look",
       resultWords: "Worth a look",
-      who: "by rule",
+      who: "by Iron Jarvis",
     });
     expect(mark.checks.filter((c) => c.result === "failed")).toHaveLength(0);
     expect(decodeChecked(BOTH)!.checks.map((c) => c.result)).toEqual(["failed", "look", "not_checked", "passed"]);
@@ -281,8 +291,48 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
     render(<CheckedLine mark={mark} />);
     fireEvent.click(screen.getByTestId("checked-line-press"));
     const rows = screen.getAllByTestId("checked-item");
-    expect(rows[0].textContent).toBe("a.xlsx: B4 says 1 and the cells above it add up to 2 (Worth a look, by rule)");
+    expect(rows[0].textContent).toBe("a.xlsx: C7 holds #DIV/0! (Worth a look, by Iron Jarvis)");
     expect(rows.map((r) => r.textContent).filter((t) => t!.includes("(Problem,"))).toHaveLength(1);
+  });
+
+  it("holds Problem to the daemon's short list by each item's own check code", () => {
+    // The two lists are the daemon's own (the shared fixture is written from them).
+    expect([...CHECK_CODES].sort()).toEqual(FIXTURE.codes.checks);
+    expect([...PROBLEM_CHECKS].sort()).toEqual(FIXTURE.codes.problem);
+    // Every item of the raw payload says "failed" under the word "Problem".
+    expect(ALLOWLIST.raw.checks.every((c) => c.result === "failed" && c.result_words === "Problem")).toBe(true);
+    expect(ALLOWLIST.raw.checks.length).toBe(CHECK_CODES.length + 3);
+    const mark = decodeChecked(ALLOWLIST.raw)!;
+    // The page keeps exactly what the daemon keeps: the code, the result, the word.
+    expect(mark.checks.map((c) => [c.check, c.result, c.resultWords])).toEqual(
+      ALLOWLIST.clean.checks.map((c) => [c.check, c.result, c.result_words]),
+    );
+    const problems = mark.checks.filter((c) => c.result === "failed");
+    expect(problems.map((c) => c.check).sort()).toEqual([...PROBLEM_CHECKS].sort());
+    expect(problems).toHaveLength(4);
+    // No code, a code nobody knows, a code that is not text: never a Problem.
+    for (const check of [undefined, "", "a_check_nobody_knows", 7, null, "review", "sheet_totals"]) {
+      const one = decodeChecked({ line: "x", checks: [{ check, label: "a", said: "b", result: "failed" }] })!;
+      expect([one.checks[0].result, one.checks[0].resultWords]).toEqual(["look", "Worth a look"]);
+    }
+    const kept = decodeChecked({ line: "x", checks: [{ check: "tests", label: "a", said: "b", result: "failed" }] })!;
+    expect([kept.checks[0].check, kept.checks[0].result]).toEqual(["tests", "failed"]);
+    // A saved reply keeps the code, so the hold survives a reopened chat.
+    expect(decodeChecked(checkedForSave(mark))).toEqual(mark);
+    render(<CheckedLine mark={mark} />);
+    fireEvent.click(screen.getByTestId("checked-line-press"));
+    const rows = screen.getAllByTestId("checked-item");
+    expect(rows.filter((r) => r.getAttribute("data-result") === "failed")).toHaveLength(4);
+    expect(rows.filter((r) => r.textContent!.includes("(Problem,"))).toHaveLength(4);
+  });
+
+  it("says who checked in the daemon's words: Iron Jarvis, never 'rule'", () => {
+    expect(FIXTURE.who).toBe("by Iron Jarvis");
+    for (const raw of [GOOD, BAD, LOOK, BOTH]) {
+      const who = decodeChecked(raw)!.checks.map((c) => c.who);
+      expect(who.join(" ")).not.toMatch(/\brule\b/);
+      expect(who).toContain("by Iron Jarvis");
+    }
   });
 
   it("strips the characters nobody sees from every text, as the daemon does (the same inputs)", () => {
@@ -344,12 +394,13 @@ describe("the line", () => {
     const rows = within(list).getAllByTestId("checked-item");
     // The plan's do-nothing check: three checks of the file (and the reply's own).
     expect(rows.map((r) => r.textContent)).toEqual([
-      `${Q("summary.xlsx")}: opens (Checked, by rule)`,
-      `${Q("summary.xlsx")}: no error cells (Checked, by rule)`,
-      `${Q("summary.xlsx")}: 3 totals add up (Checked, by rule)`,
-      "The reply: the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record " +
-        "(Checked, by rule)",
+      `${Q("summary.xlsx")}: opens (Checked, by Iron Jarvis)`,
+      `${Q("summary.xlsx")}: no error cells (Checked, by Iron Jarvis)`,
+      `${Q("summary.xlsx")}: 3 totals add up (Checked, by Iron Jarvis)`,
+      `Required file ${Q("summary.xlsx")}: it is on disk (12 KB) (Checked, by Iron Jarvis)`,
     ]);
+    // Nothing says a reply's own claims were checked: there is no such row.
+    expect(rows.map((r) => r.textContent).join(" ")).not.toContain("The reply");
     expect(rows.filter((r) => r.textContent!.startsWith(Q("summary.xlsx")))).toHaveLength(3);
     fireEvent.click(press);
     expect(screen.queryByTestId("checked-list")).toBeNull();
@@ -365,7 +416,7 @@ describe("the line", () => {
     fireEvent.click(screen.getByTestId("checked-line-press"));
     const rows = screen.getAllByTestId("checked-item");
     expect(rows[0].getAttribute("data-result")).toBe("failed");
-    expect(rows[0].textContent).toBe(`${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by rule)`);
+    expect(rows[0].textContent).toBe(`${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by Iron Jarvis)`);
     expect(rows[1].getAttribute("data-result")).toBe("not_checked");
     expect(rows.at(-1)!.textContent).toBe("Step 2: it passed its check (Checked, by Claude Sonnet 4.5)");
   });
@@ -385,14 +436,14 @@ describe("the line", () => {
     let rows = screen.getAllByTestId("checked-item");
     expect(rows[0].getAttribute("data-result")).toBe("look");
     expect(rows[0].textContent).toBe(
-      `${Q("summary.xlsx")}: B4 on ${Q("Summary")} says 650 and the cells above it add up to 600 (Worth a look, by rule)`,
+      `${Q("summary.xlsx")}: B4 on ${Q("Summary")} says 650 and the cells above it add up to 600 (Worth a look, by Iron Jarvis)`,
     );
     expect(rows[0].querySelector("span span")!.className).toContain("text-tone-warn");
     expect(rows[0].querySelector("svg")!.getAttribute("class")).toContain("text-tone-warn");
     expect(rows.map((r) => r.textContent).join(" ")).not.toContain("Problem");
     // A reply that says a file was saved that no step wrote: worth a look as well, in the same colour.
     expect(rows[1].getAttribute("data-result")).toBe("look");
-    expect(rows[1].textContent).toBe("The reply: it says a file was saved that no step wrote (Worth a look, by rule)");
+    expect(rows[1].textContent).toBe("The reply: it says a file was saved that no step wrote (Worth a look, by Iron Jarvis)");
     // What passed beside them stays quiet.
     expect(rows[2].getAttribute("data-result")).toBe("passed");
     expect(rows[2].querySelector("span span")!.className).not.toContain("text-tone-warn");
@@ -401,11 +452,33 @@ describe("the line", () => {
     fireEvent.click(screen.getByTestId("checked-line-press"));
     rows = screen.getAllByTestId("checked-item");
     expect(rows.map((r) => r.getAttribute("data-result"))).toEqual(["failed", "look", "not_checked", "passed"]);
-    expect(rows[0].textContent).toBe(`${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by rule)`);
+    expect(rows[0].textContent).toBe(`${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by Iron Jarvis)`);
     expect(rows[1].textContent).toBe(
-      `${Q("summary.xlsx")}: D3 on ${Q("Summary")} works out to an error (Worth a look, by rule)`,
+      `${Q("summary.xlsx")}: D3 on ${Q("Summary")} works out to an error (Worth a look, by Iron Jarvis)`,
     );
     expect(rows[2].querySelector("span span")!.className).not.toContain("text-tone-warn");
+  });
+
+  it("the quiet line's tick is drawn only when nothing on it is Not checked", () => {
+    const mark = (raw: unknown) => {
+      cleanup();
+      render(<CheckedLine mark={decodeChecked(raw)} />);
+      return [screen.queryByTestId("checked-line-tick") !== null, screen.queryByTestId("checked-line-neutral") !== null];
+    };
+    // Everything passed, and the list holds every check: a tick.
+    expect(mark(GOOD)).toEqual([true, false]);
+    // One thing passed and another was not checked: the neutral mark, never a tick.
+    expect(QUIET_NOT_CHECKED.tone).toBe("quiet");
+    expect(QUIET_NOT_CHECKED.line).toContain("Not checked:");
+    expect(mark(QUIET_NOT_CHECKED)).toEqual([false, true]);
+    // Nothing passed at all.
+    expect(mark(NOT_CHECKED)).toEqual([false, true]);
+    // More checks than the list holds: what is only counted is not known to have passed.
+    expect(MANY.more).toBeGreaterThan(0);
+    expect(mark(MANY)).toEqual([false, true]);
+    // A warning line draws neither: its own mark stands.
+    expect(mark(BAD)).toEqual([false, false]);
+    expect(mark(LOOK)).toEqual([false, false]);
   });
 
   it("what could not be checked is said quietly, and a long list says how many more", () => {
@@ -567,7 +640,7 @@ describe("a task's result", () => {
     expect(screen.getByTestId("checked-line-words").textContent).toBe(BAD.line);
     fireEvent.click(screen.getByTestId("checked-line-press"));
     expect(screen.getAllByTestId("checked-item")[0].textContent).toBe(
-      `${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by rule)`,
+      `${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by Iron Jarvis)`,
     );
     unmount();
     // The quiet form under a run's settled row draws it too.
@@ -580,7 +653,7 @@ describe("a task's result", () => {
       expect(screen.getByTestId("checked-line-words").textContent).toBe(LOOK.line);
       expect(screen.getByTestId("checked-line").getAttribute("data-tone")).toBe("warn");
       fireEvent.click(screen.getByTestId("checked-line-press"));
-      expect(screen.getAllByTestId("checked-item")[0].textContent).toContain("(Worth a look, by rule)");
+      expect(screen.getAllByTestId("checked-item")[0].textContent).toContain("(Worth a look, by Iron Jarvis)");
       card.unmount();
     }
     render(<RunResultCard result={RESULT} />);

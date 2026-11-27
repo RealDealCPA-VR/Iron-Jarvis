@@ -19,6 +19,7 @@ from iron_jarvis.capability_search import index as CI
 from iron_jarvis.checks import record as R
 from iron_jarvis.checks import tool as CT
 from iron_jarvis.checks.record import Check, CheckRecord
+from iron_jarvis.checks.tool import ChecksListTool
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.models import ToolInvocation
 from iron_jarvis.core.trust import REMOTE_RUN_DENY, REMOTE_RUN_KEEP, remote_run_keeps
@@ -33,7 +34,7 @@ SHEET = [
     Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.xlsx"),
     Check(R.SHEET_ERRORS, R.FAILED, "C7 on Summary holds #DIV/0!", file="summary.xlsx"),
     Check(R.SHEET_TOTALS, R.PASSED, "2 totals add up", file="summary.xlsx"),
-    Check(R.CLAIMS, R.PASSED, "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record"),
+    Check(R.REQUIRED_FILE, R.PASSED, "it is on disk (12 KB)", file="summary.xlsx"),
 ]
 OTHER = [Check(R.FILE_OPENS, R.FAILED, "it is empty", file="payroll-private.xlsx")]
 
@@ -67,10 +68,11 @@ async def test_it_answers_from_the_record_for_the_chat_it_was_asked_in(platform,
     res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_mine", turn_id="turn_9"))
     assert res.ok, res.error
     assert "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up." in res.output
-    assert "- “summary.xlsx”: C7 on Summary holds #DIV/0! (Problem, by rule)" in res.output
-    assert ("- The reply: the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's "
-            "record (Checked, by rule)") in res.output
-    assert "matches what it did" not in res.output
+    assert "- “summary.xlsx”: C7 on Summary holds #DIV/0! (Problem, by Iron Jarvis)" in res.output
+    assert "- Required file “summary.xlsx”: it is on disk (12 KB) (Checked, by Iron Jarvis)" in res.output
+    # Who checked is never "by rule" (the product has a Rules page), and nothing says a reply's claims were checked.
+    assert "by rule" not in res.output and "matches what it did" not in res.output and "in its record" not in res.output
+    assert [c["check"] for c in res.data["checks"]] == [R.SHEET_ERRORS, R.FILE_OPENS, R.SHEET_TOTALS, R.REQUIRED_FILE]
     assert "payroll-private" not in res.output, "another chat's check was read"
     assert [c["label"] for c in res.data["checks"]][0] == "“summary.xlsx”"
     assert all("payroll" not in str(c) for c in res.data["checks"])
@@ -87,7 +89,7 @@ async def test_what_is_worth_a_look_is_answered_in_its_own_words_never_as_a_prob
     problems and what was not checked."""
     R.write(platform.engine, [
         Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.xlsx"),
-        Check(R.SHEET_TOTALS, R.NOT_CHECKED, "1 total could not be worked out by rule: C9 is a formula", file="summary.xlsx"),
+        Check(R.SHEET_TOTALS, R.NOT_CHECKED, "the check ran out of time", file="summary.xlsx"),
         Check(R.SHEET_TOTALS, R.FAILED, "B4 says 650 and the cells above it add up to 600", file="summary.xlsx"),
         Check(R.SHEET_ERRORS, R.FAILED, "C7 holds #DIV/0!", file="summary.xlsx"),
     ], thread_id="chat_look", turn_id="turn_look")
@@ -97,12 +99,12 @@ async def test_what_is_worth_a_look_is_answered_in_its_own_words_never_as_a_prob
     assert lines[1].endswith(
         "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 holds #DIV/0!. "
         "Worth a look: B4 says 650 and the cells above it add up to 600. "
-        "Not checked: the spreadsheet (1 total could not be worked out by rule: C9 is a formula).")
+        "Not checked: the spreadsheet (the check ran out of time).")
     assert lines[2:6] == [
-        "- “summary.xlsx”: C7 holds #DIV/0! (Problem, by rule)",
-        "- “summary.xlsx”: B4 says 650 and the cells above it add up to 600 (Worth a look, by rule)",
-        "- “summary.xlsx”: 1 total could not be worked out by rule: C9 is a formula (Not checked, by rule)",
-        "- “summary.xlsx”: opens (Checked, by rule)",
+        "- “summary.xlsx”: C7 holds #DIV/0! (Problem, by Iron Jarvis)",
+        "- “summary.xlsx”: B4 says 650 and the cells above it add up to 600 (Worth a look, by Iron Jarvis)",
+        "- “summary.xlsx”: the check ran out of time (Not checked, by Iron Jarvis)",
+        "- “summary.xlsx”: opens (Checked, by Iron Jarvis)",
     ]
     assert [c["result"] for c in res.data["checks"]] == ["failed", "look", "not_checked", "passed"]
 
@@ -117,6 +119,41 @@ async def test_a_chat_with_no_checks_says_so_and_an_unsaved_chat_reads_only_its_
     assert (await _ask(platform, _ctx(platform, tmp_path))).output == CT.NOTHING
     mine = await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_unsaved"))
     assert "summary.xlsx" in mine.output and "payroll" not in mine.output
+    # What the tool says of itself when there is nothing: no word about a reply's claims being checked.
+    assert CT.NOTHING == (
+        "Iron Jarvis's record holds no check for this chat yet. When a reply makes or changes a file, Iron Jarvis "
+        "looks at what that file holds when the reply ends.")
+    assert "it says it saved" not in ChecksListTool().description and "in its record" not in ChecksListTool().description
+
+
+async def test_an_unsaved_chat_reads_only_rows_that_have_no_chat_yet(platform, tmp_path):
+    """Decision 11. A turn's id is the caller's own choice. A chat that is
+    not saved yet asked "what did you check?" under an id a SAVED chat had
+    used, and was handed that chat's file names. It reads only the rows of
+    that id that have no chat yet (its own reply's)."""
+    R.write(platform.engine, OTHER, thread_id="chat_other", turn_id="one-id")       # another chat, the same id
+    asked = await _ask(platform, _ctx(platform, tmp_path, turn_id="one-id"))
+    assert asked.ok and asked.output == CT.NOTHING and "payroll" not in asked.output
+    R.write(platform.engine, SHEET[:1], turn_id="one-id")                           # its own reply's row: no chat yet
+    mine = await _ask(platform, _ctx(platform, tmp_path, turn_id="one-id"))
+    assert "“summary.xlsx”: opens" in mine.output and "payroll" not in mine.output
+    assert [c["label"] for c in mine.data["checks"]] == ["“summary.xlsx”"]
+    # ... and the saved chat still reads its own, and only its own.
+    theirs = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_other", turn_id="one-id"))
+    assert "payroll-private" in theirs.output and "summary.xlsx" not in theirs.output
+
+
+async def test_an_unsaved_local_only_replys_rows_are_read_only_by_a_reply_that_is_local_only(platform, tmp_path):
+    """A new chat's first reply, sent Local only, wrote its rows kept home.
+    The same turn asked again with Local only off reads none of them."""
+    from iron_jarvis.providers import egress
+
+    R.write(platform.engine, SHEET[:1], turn_id="turn_new_home", kept_home=True)
+    with egress.local_only_scope(True):
+        inside = await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_new_home"))
+    assert "summary.xlsx" in inside.output
+    outside = await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_new_home"))
+    assert outside.output == CT.NOTHING
 
 
 async def test_a_run_is_read_only_when_it_was_started_from_the_calling_chat(platform, tmp_path):

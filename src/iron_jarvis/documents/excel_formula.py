@@ -1299,14 +1299,32 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
         need(2)
         start = _date_of(_scalar(args[0]))
         year, month = _add_months(start, int(_as_num(args[1])))
-        last = _month_end(year, month)
-        day = last if name == "EOMONTH" else min(start.day, last)
-        return to_serial(_dt.datetime(year, month, day))
+        try:
+            last = _month_end(year, month)
+            day = last if name == "EOMONTH" else min(start.day, last)
+            serial = to_serial(_dt.datetime(year, month, day))
+        except (ValueError, OverflowError):
+            serial = -1.0
+        if serial < 0:
+            # A month before the calendar starts (or past its end) came out
+            # as a clean negative number. Excel documents #NUM! for EOMONTH;
+            # for EDATE it documents nothing, so that one is "cannot be
+            # worked out" (the same rule as DATE above).
+            if name == "EOMONTH":
+                raise ExcelError("#NUM!", "not a valid date")
+            raise FormulaError("EDATE: that month is outside the dates a spreadsheet holds")
+        return serial
     if name in ("PMT", "FV", "PV"):
         need(3, 5)
         rate, nper, third = _as_num(args[0]), _as_num(args[1]), _as_num(args[2])
         fourth = _as_num(args[3]) if n >= 4 and args[3] is not None else 0.0
-        due = 1.0 if n == 5 and _as_num(args[4]) != 0 else 0.0
+        when = _as_num(args[4]) if n == 5 and args[4] is not None else 0.0
+        if when not in (0.0, 1.0):
+            # Payments are due at the end (0) or the start (1) of a period.
+            # Excel documents no other value: "cannot be worked out", never
+            # a clean number read as if 1 had been written.
+            raise FormulaError(f"{name}: the last argument is 0 or 1")
+        due = when
         if nper == 0 and name == "PMT":
             raise ExcelError("#NUM!", "PMT needs at least one period")
         if rate == 0:
@@ -1335,6 +1353,10 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
     if name == "SYD":
         need(4)
         cost, salvage, life, per = (_as_num(a) for a in args)
+        if life <= 0 or per < 1 or per > life:
+            # The same range DDB below checks. Excel documents no error for
+            # SYD here: "cannot be worked out", never a clean number.
+            raise FormulaError("SYD needs a period between 1 and the life")
         return (cost - salvage) * (life - per + 1) * 2 / (life * (life + 1))
     if name == "DDB":
         need(4, 5)

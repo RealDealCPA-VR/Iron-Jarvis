@@ -34,9 +34,8 @@ TOOL_NAME = "checks_list"
 #: newest reply is always whole).
 MAX_ROWS = 60
 NOTHING = (
-    "Iron Jarvis's record holds no check for this chat yet. It checks a reply when the reply ends: whether "
-    "the files it says it saved or changed, and what it says it sent, are in its record, and, when it made or "
-    "changed a file, what that file holds."
+    "Iron Jarvis's record holds no check for this chat yet. When a reply makes or changes a file, Iron Jarvis "
+    "looks at what that file holds when the reply ends."
 )
 OTHER_RUN = (
     "That run was not started from this chat, so its checks are not read here. Open that run to see what was "
@@ -102,7 +101,12 @@ def _owner_rows(engine: Any, ctx: ToolContext, run: str) -> "tuple[list[dict[str
     if thread:
         rows, older = newest_replies(_turn.home_rows(record.for_thread(engine, thread, limit=record.MAX_READ), local))
         return rows, "", older
-    rows = record.for_turn(engine, str(getattr(ctx, "turn_id", "") or ""))
+    # A chat that is not saved yet: the rows its own reply wrote, which
+    # have NO chat yet. A turn's id is the caller's own choice, so a row of
+    # that id that sits under a chat is another chat's, and is not read.
+    # (Kept-home rows only while this reply itself is Local only.)
+    rows = [r for r in record.for_turn(engine, str(getattr(ctx, "turn_id", "") or "")) if not r.get("thread_id")]
+    rows = _turn.home_rows(rows, _turn.reply_is_local_only(engine, ""))
     return rows, "", len(rows) >= record.MAX_READ
 
 
@@ -133,8 +137,7 @@ class ChecksListTool(Tool):
     name = TOOL_NAME
     description = (
         "Say what Iron Jarvis itself checked on the work in THIS chat: whether a file a reply made opens, a "
-        "spreadsheet's error cells and whether its totals add up, whether a document has text, a PDF's pages, "
-        "whether the files a reply says it saved or changed (and what it says it sent) are in its record, "
+        "spreadsheet's error cells and whether a total adds up, whether a document has text, a PDF's pages, "
         "required files, tests and reviews, what is only worth a look, and what could NOT be checked and why. "
         "Use it for \"what did you check?\", \"did you check the totals?\", \"how do you know "
         "it is right?\". It reads Iron Jarvis's own record only, runs no check again and changes nothing. "

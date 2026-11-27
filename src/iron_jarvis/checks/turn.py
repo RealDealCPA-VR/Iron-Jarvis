@@ -4,9 +4,12 @@ and get their line back.
 BOTH CHAT LANES make the same call at the same place (MIRROR NOTE:
 ``daemon/chat_turn.run_chat_turn`` and ``daemon/routes/chat.py``'s stream
 lane): :func:`checked_for_turn`, once the reply and its notes have settled.
-It writes the reply's existing checks (the check-again verdict, the required
-files), checks what the files the reply's own tools wrote say, writes those
-too, then READS THE RECORD BACK and builds the line from the rows it holds.
+It writes the reply's existing checks (a claim the check-again loop left
+open, the required files), checks what the files the reply's own tools wrote
+say, writes those too, then READS THE RECORD BACK and builds the line from
+the rows it holds. A reply of a chat that is Local only when it is written
+marks its rows ``kept_home`` (:func:`reply_is_local_only`): after the chat
+is switched off Local only, no reader for it hands them to a model.
 The answer carries the line as ``checked`` only when a file was made or
 changed; a reply that made none shows no line and writes no content row.
 
@@ -160,7 +163,11 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
             rows.append(claims)
     if not rows:
         return None
-    await record.note(engine, rows, thread_id=thread_id, turn_id=turn)
+    # The rows hold file names, sheet names and figures: a reply of a chat
+    # that is Local only NOW keeps them home, whatever the chat is later.
+    home = await asyncio.to_thread(reply_is_local_only, engine, thread_id)
+    await record.note(engine, rows, thread_id=thread_id, turn_id=turn, kept_home=home)
+    chat = thread_id
     if not thread_id:
         # A NEW chat's first reply: the page names its chat with a link, at
         # any moment (before this reply ends, while its rows are being
@@ -173,11 +180,28 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
     if not docs:
         return None
     kept = await asyncio.to_thread(record.for_turn, engine, turn)
-    if thread_id:
-        # A turn's id is the caller's own choice. Two chats that send one id
-        # are never read as one reply: this chat's line holds this chat's rows.
-        kept = [r for r in kept if r.get("thread_id") == thread_id]
+    # A turn's id is the caller's own choice. Two chats that send one id are
+    # never read as one reply: this chat's line holds this chat's rows (a
+    # chat not saved yet: the rows that have no chat, or were just homed).
+    kept = [r for r in kept if r.get("thread_id") in ({thread_id} if thread_id else {"", chat})]
     return record.payload(kept) if record.has_content(kept) else None
+
+
+def reply_is_local_only(engine: Any, thread_id: str) -> bool:
+    """BLOCKING. Is the reply in flight a Local only one: the turn's own
+    Local only scope is on (the request said so, or its saved chat does:
+    ``providers/egress.current_scope``), or its saved chat *thread_id* is
+    Local only NOW? Its rows are then marked ``kept_home``. True when it
+    cannot be told (in doubt, the words stay home)."""
+    try:
+        from ..providers import egress
+
+        if bool(egress.current_scope().on):
+            return True
+        return bool(thread_id) and bool(egress.thread_local_only(engine, thread_id))
+    except Exception:  # noqa: BLE001
+        log.debug("a reply's Local only setting could not be read", exc_info=True)
+        return True
 
 
 def draws_no_line() -> bool:
@@ -209,7 +233,8 @@ def _checked_later(engine: Any, turn: str, thread_id: str, docs: "list[str]", un
                 rows.append(claims)
         if not rows:
             return 0
-        written = record.write(engine, rows, thread_id=thread_id, turn_id=turn)
+        written = record.write(engine, rows, thread_id=thread_id, turn_id=turn,
+                               kept_home=reply_is_local_only(engine, thread_id))
         if not thread_id:
             chat = _chat_of(turn)
             if chat:
@@ -250,18 +275,24 @@ def _live_thread() -> str:
 
 
 async def note_finish(platform: Any, finish: Any, *, turn_id: str = "", thread_id: str = "",
-                      session_id: str = "") -> None:
+                      session_id: str = "", ended: str = "") -> None:
     """A coding reply's finish check (its tests, its review), written to the
-    record. MIRROR NOTE: both chat lanes, where they add ``finish``. The
-    reply waits :data:`RECORD_WAIT_S` at most on it."""
+    record. MIRROR NOTE: both chat lanes, where they add ``finish``. *ended*
+    is the finish check's own answer to how a failed test run ended
+    (``FinishCheck.tests_ended``): only a command that ran to its end and
+    reported failure is a problem. The reply waits :data:`RECORD_WAIT_S` at
+    most on it."""
     try:
-        rows = existing.finish_checks(finish)
+        rows = existing.finish_checks(finish, str(ended or ""))
         if rows and (turn_id or session_id):
-            await asyncio.wait_for(
-                record.note(getattr(platform, "engine", None), rows, thread_id=str(thread_id or ""),
-                            turn_id=str(turn_id or ""), session_id=str(session_id or "")),
-                RECORD_WAIT_S,
-            )
+            engine = getattr(platform, "engine", None)
+
+            async def write() -> None:
+                home = await asyncio.to_thread(reply_is_local_only, engine, str(thread_id or ""))
+                await record.note(engine, rows, thread_id=str(thread_id or ""), turn_id=str(turn_id or ""),
+                                  session_id=str(session_id or ""), kept_home=home)
+
+            await asyncio.wait_for(write(), RECORD_WAIT_S)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — a timeout included: the reply goes on
@@ -468,5 +499,5 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
         return None
 
 
-__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "not_covered", "note_finish", "run_payload",
-           "settle_run"]
+__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "not_covered", "note_finish", "reply_is_local_only",
+           "run_payload", "settle_run"]

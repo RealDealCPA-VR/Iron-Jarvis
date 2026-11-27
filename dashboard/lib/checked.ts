@@ -14,17 +14,39 @@
  * Rides the chat reply (the done frame's and the POST answer's `checked`,
  * saved on the message) and a run's result (`GET /sessions/{id}/result`).
  *
- * FOUR results. `failed` ("Problem") is a short list of facts (a file that
- * is not a valid file of its kind, a cell whose saved value is an error, a
- * test that failed, a required file that is not there). `look` ("Worth a
- * look") is everything Iron Jarvis inferred, read out of the reply or was
- * told by a model: no verdict. Both read in the warning colour; which
- * RESULT a check gets is the daemon's decision, never the page's.
+ * FOUR results. `failed` ("Problem") is a short list of facts (a file
+ * Iron Jarvis's own reader could not open, a cell whose type is an error,
+ * a test that ran to its end and failed, a required file that is not
+ * there). `look` ("Worth a look") is everything Iron Jarvis inferred, read
+ * out of the reply or was told by a model: no verdict. Both read in the
+ * warning colour; which RESULT a check gets is the daemon's decision,
+ * never the page's, with ONE hold the page keeps too: each item carries
+ * its check's code, and an item whose code is not on the short list
+ * (`PROBLEM_CHECKS`, the daemon's own) can never draw as "Problem". It
+ * draws as "Worth a look".
  */
 
 export type CheckedResult = "passed" | "failed" | "look" | "not_checked";
 
 const RESULTS: readonly CheckedResult[] = ["passed", "failed", "look", "not_checked"];
+
+/** Every check the daemon can write, by its code (`checks/record.CHECKS`),
+ *  and the short list that may be a "Problem" (`PROBLEM_CHECKS`). A shared
+ *  fixture holds both equal to the daemon's. */
+export const CHECK_CODES: readonly string[] = [
+  "file_opens",
+  "sheet_no_error_cells",
+  "sheet_totals",
+  "document_not_empty",
+  "pdf_pages",
+  "claims_match_record",
+  "required_file",
+  "tests",
+  "review",
+  "step_check",
+  "workflow_step",
+];
+export const PROBLEM_CHECKS: readonly string[] = ["file_opens", "sheet_no_error_cells", "tests", "required_file"];
 
 /** The word beside a check, by its result: the daemon's own four words
  *  (`checks/record._RESULT_WORDS`; a shared fixture holds the two equal).
@@ -45,6 +67,10 @@ export function isWarnResult(result: CheckedResult): boolean {
 export const CHECKED_LIST_MAX = 30;
 
 export interface CheckedItem {
+  /** The check's code (`file_opens`, `tests`, ...); "" when the payload
+   *  named none, or one nobody knows. Never drawn: it holds "Problem" to
+   *  the short list. */
+  check: string;
   /** What the check is about: a file's name, "The reply", "Step 2". */
   label: string;
   /** What it found, in the daemon's words ("C7 holds #DIV/0!"). */
@@ -53,7 +79,7 @@ export interface CheckedItem {
   /** "Checked" | "Problem" | "Worth a look" | "Not checked": read from
    *  `result` (`RESULT_WORDS`), never from the payload. */
   resultWords: string;
-  /** "by rule", or "by <the model's name>". */
+  /** "by Iron Jarvis", or "by <the model's name>". */
   who: string;
 }
 
@@ -96,10 +122,15 @@ export function decodeChecked(raw: unknown): CheckedMark | null {
   for (const it of Array.isArray(o.checks) ? o.checks : []) {
     if (!it || typeof it !== "object") continue;
     const c = it as Record<string, unknown>;
-    const result = RESULTS.find((r) => r === c.result);
+    const said = RESULTS.find((r) => r === c.result);
     const label = text(c.label, 240);
-    if (!result || !label) continue;
+    if (!said || !label) continue;
+    const check = typeof c.check === "string" && CHECK_CODES.includes(c.check) ? c.check : "";
+    // "Problem" is the short list's: an item with no code, a code nobody
+    // knows, or a code off the list draws as "Worth a look".
+    const result: CheckedResult = said === "failed" && !PROBLEM_CHECKS.includes(check) ? "look" : said;
     checks.push({
+      check,
       label,
       said: text(c.said, 400),
       result,
@@ -125,6 +156,7 @@ export function checkedForSave(mark: CheckedMark): Record<string, unknown> {
     line: mark.line,
     tone: mark.tone,
     checks: mark.checks.map((c) => ({
+      check: c.check,
       label: c.label,
       said: c.said,
       result: c.result,

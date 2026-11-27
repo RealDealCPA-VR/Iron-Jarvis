@@ -9479,6 +9479,7 @@ async def chat_stream(
             await _note_finish(
                 platform, done_frame["finish"], turn_id=_usage_turn,
                 thread_id=str(getattr(body, "thread_id", "") or ""), session_id=_tool_session,
+                ended=_finish.tests_ended(),
             )
         # THE CODING-SESSION TEAM (v1.403.0): {lead, workers, reviewer, pieces,
         # lead_did} — LAST, and present ONLY for a turn of a session with a

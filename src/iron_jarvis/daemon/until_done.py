@@ -370,28 +370,6 @@ def find_problems(f: Facts) -> list[Problem]:
     return out
 
 
-def named_claims(f: Facts) -> int:
-    """How many things the answer SAYS it saved, changed or sent, whether or
-    not a step did: the files it names as saved or changed (the reading
-    :func:`find_problems` uses, asked as if no tool had run, so every claim
-    counts), and one for a claimed send. For the record of checks only
-    (``checks/existing.claims_check``): nothing in the loop reads it. Never
-    raises; 0 in any doubt."""
-    try:
-        from . import chat_turn as CT
-        from .change_claims import claimed_send_note
-
-        reply = str(f.reply or "")
-        saved, changed = CT._claimed_write_names(reply, [], custom_tools=(), ran_writer=False)
-        count = len(set(saved) | set(changed))
-        if claimed_send_note(reply, [], history=list(f.history or ())):
-            count += 1
-        return count
-    except Exception:  # noqa: BLE001
-        log.debug("until-done: the answer's claims could not be counted", exc_info=True)
-        return 0
-
-
 def _missing_named(f: Facts, workspace: Any) -> list[str]:
     """BLOCKING. The files the reply names that are not in the folder, for the
     side question — only when the turn holds a file writer, no tool wrote or
@@ -458,16 +436,6 @@ class UntilDone:
     #: v1.498.0 (an agent run, which asks the side question in its own
     #: transcript): the answer it had, given back when the model says KEEP.
     side_draft: str = ""
-    #: The intelligence plan, release 5 (``checks/existing.claims_check``):
-    #: how many times the readings LOOKED at an answer, and why the last
-    #: answer was not looked at ("" = it was). Facts for the record of
-    #: checks only: nothing in the loop reads them.
-    looked: int = 0
-    skipped: str = ""
-    #: How many things the answer last looked at SAYS it saved, changed or
-    #: sent (:func:`named_claims`). 0 = it named none: the record then has no
-    #: "its claims are in the record" row to write.
-    claims: int = 0
 
     async def check(
         self,
@@ -493,22 +461,16 @@ class UntilDone:
         import asyncio
 
         if low_trust or truncated:
-            self.skipped = "low_trust" if low_trust else "truncated"
             return ""
         if self.declined or said_no(facts.request):
             self.ended = self.ended or DECLINED
-            self.skipped = "declined"
             return ""
         reply = str(facts.reply or "")
         if self.notes and _BLOCKED_LINE_RX.search(reply):
             self.ended = BLOCKED
             self.open = []
-            self.skipped = "blocked"
             return ""
         problems = await asyncio.to_thread(find_problems, facts)
-        self.looked += 1
-        self.skipped = ""
-        self.claims = await asyncio.to_thread(named_claims, facts)
         gave_up = False
         worked = [t for t in facts.tools_used if t not in NOT_WORK]
         if not self.gave_up_fired and worked and set(facts.armed or ()):

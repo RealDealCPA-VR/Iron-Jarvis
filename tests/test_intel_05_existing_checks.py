@@ -50,45 +50,61 @@ async def test_the_check_again_verdict_is_one_row_and_the_loop_does_what_it_did(
     # Read out of the reply's prose: worth a look, never a problem.
     assert existing.claims_check(until) == Check(
         R.CLAIMS, R.LOOK, "it says a file was saved that no step wrote")
-    assert until.claims == 1, "the answer names one file it says it saved"
 
     # The next answer no longer claims it: the loop ends "done", says nothing.
     assert await until.check(_facts("I could not save it; here is the text instead."), round_index=1, rounds=8) == ""
     assert (until.ended, until.open, until.verdict()) == ("done", [], "")
-    # ... and it names nothing it saved, changed or sent: there is nothing to say was checked.
-    assert until.claims == 0 and existing.claims_check(until) is None
+    # ... and nothing is open: NO row. Never "its claims are in the record".
+    assert existing.claims_check(until) is None
 
 
-def test_the_good_side_of_the_claims_check_says_no_more_than_what_is_read():
-    """It read "what it says matches what it did" under replies that said
-    they deleted a file, ran the tests, printed two copies, booked a meeting:
-    none of that is read. The words now say what IS read, and the row is
-    written only when the reply named such a thing."""
-    from iron_jarvis.daemon.until_done import named_claims
+async def test_the_claims_check_has_no_passed_row_ever():
+    """Decision 1. It read "the files it says it saved or changed ... are in
+    Iron Jarvis's record" under replies that claimed a file NOTHING wrote
+    (5 of the reviewer's 7): the loop finding nothing open also means its
+    reading gave up. The pass path is gone: a row is written ONLY for a
+    claim the loop itself raised and left open, and it is worth a look."""
+    from iron_jarvis.daemon import until_done
 
-    assert existing.CLAIMS_PASSED == (
-        "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record")
-    assert "matches what it did" not in existing.CLAIMS_PASSED
-    named = UntilDone(chat=True, looked=1, claims=2)
-    assert existing.claims_check(named) == Check(R.CLAIMS, R.PASSED, existing.CLAIMS_PASSED)
-    assert existing.claims_check(UntilDone(chat=True, looked=1, claims=0)) is None
-    assert existing.claims_check(UntilDone(chat=True, looked=0, claims=3)) is None
-    # What counts as naming something: a file it says it saved or changed, a thing it says it sent.
-    counts = {
-        "I saved summary.xlsx to your Documents folder.": 1,
-        "I updated summary.xlsx and left report.docx unchanged.": 1,
-        "I saved notes.md and budget.xlsx.": 2,
-        "I emailed the report to Ann.": 1,
-        "I saved summary.xlsx and deleted the old budget.xlsx as you asked.": 1,
-        "Here is the answer: 42.": 0,
-        "I ran the tests and all 42 pass.": 0,
-        "I booked the meeting with Ann for Tuesday at 10.": 0,
-        "": 0,
-    }
-    for reply, want in counts.items():
-        assert named_claims(_facts(reply)) == want, reply
-    line = R.payload([{"check": R.CLAIMS, "result": R.PASSED, "detail": existing.CLAIMS_PASSED, "file": "", "by": "rule"}])
-    assert [(c["label"], c["said"]) for c in line["checks"]] == [("The reply", existing.CLAIMS_PASSED)]
+    assert not hasattr(existing, "CLAIMS_PASSED") and not hasattr(existing, "SKIPPED_WORDS")
+    assert not hasattr(until_done, "named_claims")
+    fresh = UntilDone(chat=True)
+    assert not any(hasattr(fresh, gone) for gone in ("claims", "looked", "skipped"))
+    # The reviewer's seven replies, each through the real loop: none is ever a pass.
+    cases = [
+        dict(reply="Done. I saved the summary to report.docx.", tools_used=[], armed={"write_document"}),
+        dict(reply="Done. I saved the summary to report.docx.", tools_used=[], armed={"calculate"}),
+        dict(reply="Done. I saved the summary to report.docx.", tools_used=[], armed=set()),
+        dict(reply="Done. I saved the summary to report.docx.", tools_used=["shell"], armed={"write_document", "shell"}),
+        dict(reply="Done. I saved the summary to report.docx.", tools_used=["browser_click"],
+             armed={"write_document", "browser_click"}),
+        dict(reply="Done. I saved notes.md and report.docx.", tools_used=["write_file"], armed={"write_file"}, written=None),
+        dict(reply="I updated notes.md with the new figures.", tools_used=[], armed={"calculate"}),
+    ]
+    silent = 0
+    for kw in cases:
+        until = UntilDone(chat=True)
+        await until.check(Facts(chat=True, **kw), round_index=0, rounds=8)
+        row = existing.claims_check(until)
+        assert row is None or (row.check, row.result) == (R.CLAIMS, R.LOOK), kw
+        assert bool(row) is bool(set(until.open) & set(existing.OPEN_WORDS)), kw
+        silent += row is None
+    assert silent >= 5, "the replies the loop's reading gives up on get no row: nothing is claimed of them"
+    # Only a CLAIM the loop left open writes a row; its other open problems are not claims of the reply.
+    assert set(existing.OPEN_WORDS) == {"claimed_file", "changed_file", "claimed_change", "claimed_sent"}
+    for kind, said in existing.OPEN_WORDS.items():
+        held = UntilDone(chat=True)
+        held.open = [kind]
+        assert existing.claims_check(held) == Check(R.CLAIMS, R.LOOK, said)
+    for other in ("asked_file", "figures", "deliverables", "something_new"):
+        held = UntilDone(chat=True)
+        held.open = [other]
+        assert existing.claims_check(held) is None, other
+    both = UntilDone(chat=True)
+    both.open = ["figures", "claimed_sent", "claimed_file", "claimed_sent"]
+    assert existing.claims_check(both) == Check(
+        R.CLAIMS, R.LOOK, "it says something was sent that no step sent; it says a file was saved that no step wrote")
+    assert existing.claims_check(None) is None and existing.claims_check(object()) is None
 
 
 async def test_a_reply_still_unfinished_keeps_its_line_and_reads_failed():
@@ -104,24 +120,20 @@ async def test_a_reply_still_unfinished_keeps_its_line_and_reads_failed():
     assert existing.claims_check(until).result == R.LOOK
 
 
-@pytest.mark.parametrize("kw,why", [
-    ({"low_trust": True}, "it read content from outside, so it was not checked against what it did"),
-    ({"truncated": True}, "it was cut off at its length limit, so it was not checked against what it did"),
-])
-async def test_a_reply_the_loop_did_not_look_at_reads_not_checked_with_the_reason(kw, why):
+@pytest.mark.parametrize("kw", [{"low_trust": True}, {"truncated": True}])
+async def test_a_reply_the_loop_did_not_look_at_writes_no_row(kw):
+    """With no passed row there is nothing a person would take as checked:
+    a reply the loop did not look at says nothing here (it read "Not
+    checked: the reply ...", beside replies whose silence meant a pass)."""
     until = UntilDone(chat=True)
     assert await until.check(_facts("Done. I saved report.docx."), round_index=0, rounds=8, **kw) == ""
-    assert (until.looked, until.notes) == (0, 0)
-    assert existing.claims_check(until) == Check(R.CLAIMS, R.NOT_CHECKED, why)
+    assert until.notes == 0 and existing.claims_check(until) is None
 
 
-async def test_a_declined_step_stands_and_reads_not_checked():
+async def test_a_declined_step_stands_and_writes_no_row():
     until = UntilDone(chat=True, declined=True)
     assert await until.check(_facts("Done. I saved report.docx."), round_index=0, rounds=8) == ""
-    assert until.ended == "declined"
-    row = existing.claims_check(until)
-    assert (row.result, row.detail) == (
-        R.NOT_CHECKED, "a step was declined or no tools were wanted, so it was not checked against what it did")
+    assert until.ended == "declined" and existing.claims_check(until) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -156,7 +168,50 @@ async def test_each_required_file_is_one_row_and_the_note_is_the_same(tmp_path):
     # A PROBLEM only for the fact that it is not on disk; one that is there and empty is worth a look.
     assert by_name["summary.xlsx"] == (R.FAILED, "not on disk")
     assert by_name["FINAL_REPORT.md"] == (R.LOOK, "the file is empty")
-    assert by_name["change_log.md"][0] == R.PASSED and by_name["change_log.md"][1].endswith("opens")
+    # One that is there says ONLY that, with its size: never "opens" (decision 4).
+    import re
+
+    assert by_name["change_log.md"][0] == R.PASSED
+    assert re.fullmatch(r"it is on disk \(1[34] bytes\)", by_name["change_log.md"][1]), by_name["change_log.md"]
+
+
+def test_a_required_file_that_is_there_never_says_opens(tmp_path):
+    """Decision 4. The older check opens nothing of most kinds and said
+    "opens" of each: 8 of the reviewer's 8 junk files read "12 KB, opens"."""
+    import zipfile
+
+    from iron_jarvis.deliverables.check import FileState, check_file
+
+    junk = {
+        "old.xls": b"\xd0\xcf\x11\xe0 this is not a workbook at all, just bytes " * 20,
+        "letter.doc": b"plain bytes, not a Word file " * 30,
+        "photo.png": b"\x89PNG\r\n\x1a\n" + b"cut short",
+        "scan.pdf": b"%PDF-1.7\ngarbage garbage garbage\n%%EOF\n",
+        "data.bin": b"\x00\x01\x02" * 100,
+        "notes": b"no extension at all",
+    }
+    states = []
+    for name, data in junk.items():
+        path = tmp_path / name
+        path.write_bytes(data)
+        states.append(FileState(name, path, *check_file(path)))
+    for name, part in (("deck.pptx", "ppt/presentation.xml"), ("sheet.ods", "content.xml")):
+        path = tmp_path / name
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr(part, b"<broken")
+        states.append(FileState(name, path, *check_file(path)))
+    assert {s.status for s in states} == {"ok"}, "the older check no longer calls these done: read the test again"
+    assert all("opens" in s.detail for s in states), "the older check's own word, which the record must not copy"
+    rows = existing.required_file_checks(states)
+    assert len(rows) == 8 and {c.result for c in rows} == {R.PASSED}
+    for c in rows:
+        assert c.detail.startswith("it is on disk (") and c.detail.endswith(")") and "open" not in c.detail, c
+    assert {c.detail for c in rows if c.file == "data.bin"} == {"it is on disk (300 bytes)"}
+    big = FileState("report.docx", tmp_path / "report.docx", "ok", "12 KB, opens", 12 * 1024)
+    assert [c.detail for c in existing.required_file_checks([big])] == ["it is on disk (12 KB)"]
+    shown = R.payload([{"check": c.check, "result": c.result, "detail": c.detail, "file": c.file, "by": c.by}
+                       for c in rows])
+    assert "opens" not in shown["line"] and "opens" not in " ".join(i["said"] for i in shown["checks"])
 
 
 async def test_the_required_files_reach_the_record_with_the_replys_other_checks(platform, tmp_path):
@@ -406,11 +461,16 @@ async def test_the_finish_checks_tests_and_review_are_rows_from_its_own_record(p
     rec = await fc.record()
     assert rec["tests"] == F.TESTS_FAILED and rec["review"]["verdict"] == F.VERDICT_CHANGES
 
-    assert existing.finish_checks(rec) == [
-        Check(R.TESTS, R.FAILED, "they failed"),            # a test command that ran and failed: a fact
+    # A test command that ran to its END and reported failure: a fact, so a problem.
+    assert fc.tests_ended() == "failed"
+    assert existing.finish_checks(rec, fc.tests_ended()) == [
+        Check(R.TESTS, R.FAILED, "they failed"),
         Check(R.REVIEW, R.LOOK, "it asked for changes", by="Sonnet 4.5"),    # a model's opinion: worth a look
     ]
-    await T.note_finish(platform, rec, turn_id="turn_code", thread_id="build_thread", session_id="build_thread")
+    # Nobody said how the run ended: never a problem on the verdict's word alone.
+    assert existing.finish_checks(rec)[0] == Check(R.TESTS, R.NOT_CHECKED, existing.TESTS_UNREAD)
+    await T.note_finish(platform, rec, turn_id="turn_code", thread_id="build_thread", session_id="build_thread",
+                        ended=fc.tests_ended())
     got = _rows(platform.engine, turn_id="turn_code")
     assert [(r.check, r.result, r.by, r.session_id, r.thread_id) for r in got] == [
         (R.TESTS, R.FAILED, "rule", "build_thread", "build_thread"),
@@ -418,8 +478,64 @@ async def test_the_finish_checks_tests_and_review_are_rows_from_its_own_record(p
     ]
 
 
+async def _finish_after(call_name: str, result) -> "tuple":
+    """A real finish check that has taken ONE test run's result: ``(its
+    record, how that run ended)``."""
+    from types import SimpleNamespace
+
+    from iron_jarvis.harness import finish as F
+
+    fc = F.FinishCheck(engine=None, home=None, event_bus=None, session_id="build:x", folder=Path("."),
+                       mark=0, request="fix it")
+    run = F._Run(command="pytest", args={}, source="yours")
+    fc._by_id["ij-finish-1"] = run
+    fc.runs = [run]
+    await fc.take(SimpleNamespace(id="ij-finish-1", name=call_name), result, "out", refused=False)
+    return await fc.record(), fc.tests_ended()
+
+
+async def test_a_test_run_that_did_not_finish_is_not_a_failed_test_run(platform):
+    """Decision 6. The finish check calls a run it stopped at its time, and
+    a command with no exit status, "failed" (its own line, unchanged). On
+    the record of checks only a command that RAN TO ITS END and reported
+    failure is a problem; the others are "not checked", each with its
+    reason. Each case goes through the real finish check."""
+    from types import SimpleNamespace as NS
+
+    cases = [
+        # (the tool, its result, how the run ended, the row)
+        ("shell", NS(ok=False, data={"returncode": 1}, error="exit 1", output=""), "failed",
+         Check(R.TESTS, R.FAILED, "they failed")),
+        ("process_start", NS(ok=True, data={"id": "p1", "running": False, "exit_code": 2}, error=None, output=""),
+         "failed", Check(R.TESTS, R.FAILED, "they failed")),
+        ("shell", NS(ok=False, data={"returncode": None, "timed_out": True}, error="it took too long", output=""),
+         "timed_out", Check(R.TESTS, R.NOT_CHECKED, "they did not finish in their time")),
+        ("shell", NS(ok=False, data={"returncode": 1, "timed_out": True}, error="it took too long", output=""),
+         "timed_out", Check(R.TESTS, R.NOT_CHECKED, "they did not finish in their time")),
+        ("shell", NS(ok=False, data={"returncode": None}, error="the program could not be started", output=""),
+         "no_exit", Check(R.TESTS, R.NOT_CHECKED, "they could not be run")),
+        ("process_start", NS(ok=True, data={"id": "p1", "running": False, "exit_code": None}, error=None, output=""),
+         "no_exit", Check(R.TESTS, R.NOT_CHECKED, "they could not be run")),
+        ("shell", NS(ok=False, data={"returncode": 0}, error="odd", output=""), "unread",
+         Check(R.TESTS, R.NOT_CHECKED, "how the run ended could not be read")),
+    ]
+    for n, (tool_name, result, ended, row) in enumerate(cases):
+        rec, got = await _finish_after(tool_name, result)
+        assert rec["tests"] == "failed", (n, rec)       # the older check's own verdict, unchanged
+        assert got == ended, (n, got)
+        assert existing.finish_checks(rec, got) == [row], n
+        await T.note_finish(platform, rec, turn_id=f"turn_end_{n}", session_id="build_end", ended=got)
+        assert [(r.check, r.result, r.detail) for r in _rows(platform.engine, turn_id=f"turn_end_{n}")] == [
+            (row.check, row.result, row.detail)], n
+    # A run that passed has no ending to say.
+    rec, got = await _finish_after("shell", NS(ok=True, data={"returncode": 0}, error=None, output=""))
+    assert (rec["tests"], got) == ("passed", "") and existing.finish_checks(rec, got) == [Check(R.TESTS, R.PASSED, "they passed")]
+    assert (existing.TESTS_TIMED_OUT, existing.TESTS_NO_EXIT) == ("they did not finish in their time", "they could not be run")
+
+
 @pytest.mark.parametrize("record,want", [
     ({"tests": "passed"}, [Check(R.TESTS, R.PASSED, "they passed")]),
+    ({"tests": "failed"}, [Check(R.TESTS, R.NOT_CHECKED, "how the run ended could not be read")]),
     ({"tests": "not_run", "why": "this reply is in low trust, so the check runs no command"},
      [Check(R.TESTS, R.NOT_CHECKED, "this reply is in low trust, so the check runs no command")]),
     # A reason the finish check's own code did not write (a command's raw
@@ -479,6 +595,8 @@ def test_both_chat_lanes_write_the_finish_check_where_they_add_its_key():
         after = text[at:at + 1200]
         assert "await _note_finish(" in after and f"platform, {key}, turn_id=_usage_turn" in after, name
         assert "session_id=_tool_session" in after, name
+        # ... and says how a failed test run ended (only one that ran to its end is a problem).
+        assert "ended=_finish.tests_ended()," in after, name
 
 
 # --------------------------------------------------------------------------- #
@@ -605,12 +723,12 @@ def test_a_run_that_carried_on_and_put_its_file_right_leaves_no_finding_behind(p
     takes the Total row out (the file is now right). The card showed the old
     finding for ever: only the same check of the same file was replaced, and
     a file with no total writes no totals row at all."""
-    p = _sheet(tmp_path / "budget.xlsx", [["Item", "Amount"], ["Rent", 100], ["Food", 200], ["Fun", 300], ["Total", 650]])
+    p = _sheet(tmp_path / "budget.xlsx", [["Item", "Amount"], ["Rent", 100], ["Food", 200], ["Fun", 310], ["Total", 650]])
     assert T.settle_run(platform.engine, "ses_1", [str(p)], thread_id="th_1") == 3
     assert T.run_payload(platform.engine, "ses_1", [str(p)])["line"] == (
         "Checked by Iron Jarvis: the spreadsheet opens, no error cells. "
-        "Worth a look: B5 says 650 and the cells above it add up to 600.")
-    _sheet(p, [["Item", "Amount"], ["Rent", 100], ["Food", 200], ["Fun", 300]])
+        "Worth a look: B5 says 650 and the cells above it add up to 610.")
+    _sheet(p, [["Item", "Amount"], ["Rent", 100], ["Food", 200], ["Fun", 310]])
     assert T.settle_run(platform.engine, "ses_1", [str(p)], thread_id="th_1") == 2
     after = T.run_payload(platform.engine, "ses_1", [str(p)])
     assert after["line"] == "Checked by Iron Jarvis: the spreadsheet opens, no error cells." and after["tone"] == "quiet"
@@ -736,9 +854,10 @@ async def test_a_reply_never_waits_on_the_record_while_another_writer_holds_the_
 
     made = tmp_path / "notes.md"
     made.write_text("hello\n", encoding="utf-8")
-    until = UntilDone(chat=True, looked=1, claims=1)     # a reply that named a file it saved: it has a row to write
+    until = UntilDone(chat=True)
+    until.open = ["claimed_file"]                        # a claim the loop left open: the reply has a row to write
     engine = platform.engine
-    assert R.write(engine, [Check(R.CLAIMS, R.PASSED, "x")], turn_id="warm") == 1    # the day's tidy-up has run
+    assert R.write(engine, [Check(R.CLAIMS, R.LOOK, "x")], turn_id="warm") == 1    # the day's tidy-up has run
 
     order: list[str] = []
     ended = threading.Semaphore(0)
@@ -893,25 +1012,28 @@ def test_a_required_file_that_does_not_open_is_said_in_plain_words(tmp_path):
     status, why, _size = check_file(broken)
     assert status == "unreadable" and ("(" in why or "package" in why or "Office" in why), why
     states = [
-        FileState("OUTPUT/summary.xlsx", broken, status, why),
-        FileState("OUTPUT/odd.docx", tmp_path / "odd.docx", "unreadable", "it does not open (BadZipFile: File is not a zip file)"),
+        FileState("OUTPUT/summary.xlsx", broken, status, why, _size),
+        FileState("OUTPUT/odd.docx", tmp_path / "odd.docx", "unreadable", "it does not open (BadZipFile: File is not a zip file)",
+                  2048),
         FileState("OUTPUT/late.pdf", tmp_path / "late.pdf", "unchecked", "not checked (the check ran out of time)"),
         FileState("OUTPUT/x.bin", tmp_path / "x.bin", "unreadable", "it cannot be checked (PermissionError)"),
         FileState("OUTPUT/gone.md", tmp_path / "gone.md", "missing", "not on disk"),
     ]
     got = {Path(c.file).name: (c.result, c.detail) for c in existing.required_file_checks(states)}
-    # The older check's "does not open" is its own reader's answer (it reads a cut piece of a large
-    # file): worth a look. A PROBLEM only for the fact that the file is not on disk.
-    assert got["summary.xlsx"][0] == R.LOOK and got["summary.xlsx"][1].startswith("it does not open")
-    assert got["odd.docx"] == (R.LOOK, "it does not open")
+    # The older check's "does not open", and its reason, are its own guess (it looks for an Office file's
+    # parts by their names, and reads a cut piece of a large file): neither is copied. What is said is the
+    # fact: the file is there, and that check could not open it. Worth a look; a PROBLEM only for the fact
+    # that the file is not on disk.
+    assert got["summary.xlsx"] == (R.LOOK, "it is on disk (32 bytes), and the check of required files could not open it")
+    assert got["odd.docx"] == (R.LOOK, "it is on disk (2 KB), and the check of required files could not open it")
     assert got["late.pdf"] == (R.NOT_CHECKED, "not checked (the check ran out of time)")
-    assert got["x.bin"] == (R.LOOK, "it does not open")
+    assert got["x.bin"] == (R.LOOK, "the check of required files could not read it")
     assert got["gone.md"] == (R.FAILED, "not on disk")
     assert existing.NOT_ON_DISK == {"missing", "folder"}
     folder = existing.required_file_checks([FileState("OUTPUT/out", tmp_path, "folder", "a folder is there, not a file")])
     assert [(c.result, c.detail) for c in folder] == [(R.FAILED, "a folder is there, not a file")]
     for _result, detail in got.values():
-        for word in ("BadZip", "Error", "xl/", "package"):
+        for word in ("BadZip", "Error", "xl/", "package", "does not open", "Office file", "missing"):
             assert word not in detail, detail
 
 
@@ -1112,7 +1234,7 @@ async def test_a_local_only_chat_reads_its_own_kept_home_runs_checks_and_only_wh
     assert {(r.thread_id, r.kept_home) for r in files} == {("chat_home", True)}
     assert {(r.thread_id, r.kept_home) for r in _rows(platform.engine, session_id=row.id)} == {("chat_home", True)}
     asked = await asyncio.to_thread(_asked, platform.engine, "chat_home")
-    assert asked.ok and "“hello.txt”: opens (Checked, by rule)" in asked.output
+    assert asked.ok and "“hello.txt”: opens (Checked, by Iron Jarvis)" in asked.output
     by_run = await asyncio.to_thread(_asked, platform.engine, "chat_home", run=row.id)
     assert by_run.ok and "hello.txt" in by_run.output
     # THE OTHER END: the chat is switched off Local only afterwards. The rows are still its own, and the
@@ -1221,8 +1343,10 @@ async def test_a_reply_that_answers_a_phone_does_not_wait_for_its_checks_and_the
     assert T.draws_no_line() is False
     with phone_surface():
         assert T.draws_no_line() is True
+        open_claim = UntilDone(chat=True)
+        open_claim.open = ["claimed_file"]
         got = await T.checked_for_turn(platform, turn_id="turn_phone", thread_id="th_phone", made_docs=[str(made)],
-                                       until=UntilDone(chat=True, looked=1, claims=1), spawn=later.append)
+                                       until=open_claim, spawn=later.append)
     assert got is None and len(later) == 1
     assert _rows(platform.engine, turn_id="turn_phone") == [], "the checks ran before the reply went out"
     assert later[0]() == 3
@@ -1246,19 +1370,70 @@ async def test_a_reply_that_answers_a_phone_does_not_wait_for_its_checks_and_the
 
 
 # --------------------------------------------------------------------------- #
-# S9: an agent run at low trust says its answer was not checked
+# An agent run's answer: a row only for a claim the loop left open
 # --------------------------------------------------------------------------- #
-async def test_an_agent_run_at_low_trust_writes_its_answer_as_not_checked(platform, orchestrator):
-    """The check-again loop never looks at a low-trust run's answer. That is
-    said on the record as "not checked", with the reason; never left out,
-    and never a pass."""
-    inner = _TextOnly(["The page says the meeting moved to Friday."], provider="local-r5lt")
-    platform.providers.register("local-r5lt", lambda model=None: inner)
-    session = await orchestrator.create_session(
-        "Read this note and tell me what it says", AgentType.BUILDER, provider="local-r5lt", trust="low")
-    done = await orchestrator.run_session(session.id)
-    assert done.status is SessionStatus.COMPLETED, done.summary
-    (claims,) = _rows(platform.engine, session_id=session.id, check=R.CLAIMS)
-    assert (claims.result, claims.detail, claims.by) == (
-        R.NOT_CHECKED, existing.SKIPPED_WORDS["low_trust"], "rule")
-    assert claims.run_id, "the row does not name the run"
+async def test_an_agent_run_writes_no_row_about_an_answer_the_loop_raised_nothing_on(platform, orchestrator):
+    """A run's answer has no passed row either, and a low-trust run (the
+    loop never looks at its answer) has no "not checked" row: with no pass
+    to be mistaken for, nothing is said. Through a real run each."""
+    for provider, trust in (("local-r5lt", "low"), ("local-r5nt", "")):
+        inner = _TextOnly(["The page says the meeting moved to Friday."], provider=provider)
+        platform.providers.register(provider, lambda model=None, inner=inner: inner)
+        kw = {"trust": trust} if trust else {}
+        session = await orchestrator.create_session(
+            "Read this note and tell me what it says", AgentType.BUILDER, provider=provider, **kw)
+        done = await orchestrator.run_session(session.id)
+        assert done.status is SessionStatus.COMPLETED, done.summary
+        assert _rows(platform.engine, session_id=session.id, check=R.CLAIMS) == [], trust
+
+
+# --------------------------------------------------------------------------- #
+# Decision 10: the card a kept-home run leaves in a chat that is not Local only
+# --------------------------------------------------------------------------- #
+async def test_the_card_a_local_only_run_delivers_carries_its_checked_line_only_into_a_local_only_chat(
+        platform, orchestrator):
+    """PRIVACY, through the real delivery of a real run. A Local only run
+    reports as itself (an agent's line with its result card). The card's
+    ``checked`` names the run's files, sheets and figures: into a chat that
+    is not Local only it is delivered WITHOUT it, into one that is, with it.
+    (Removing that strip from ``chat_delivery.deliver_session_line`` turned
+    no test red.)"""
+    import asyncio
+
+    from iron_jarvis.agents import chat_delivery
+    from iron_jarvis.core.models import ChatThreadRecord, Session
+
+    _saved_chat(platform, "chat_card_first", local_only=True)
+    _saved_chat(platform, "chat_card_open", local_only=False)
+    _saved_chat(platform, "chat_card_home", local_only=True)
+    row = await _run_that_keeps_its_words_home(platform, orchestrator, "local-r5-card", "chat_card_first")
+
+    def aimed_at(chat: str):
+        """The same finished run, as a Local only run asked in *chat* that reports as itself."""
+        with session_scope(platform.engine) as db:
+            kept = db.get(Session, row.id)
+            options = json.loads(kept.options_json or "{}")
+            options.pop(chat_delivery.REPORT_OPTION, None)
+            options["local_only"] = True
+            options[chat_delivery.CHAT_THREAD_OPTION] = chat
+            kept.options_json = json.dumps(options)
+            db.add(kept)
+            db.commit()
+        session = orchestrator.get_session(row.id)
+        assert chat_delivery.keeps_words_home(session) and chat_delivery.report_from_of(session) is None
+        return session
+
+    def last_line(chat: str) -> dict:
+        with session_scope(platform.engine) as db:
+            return json.loads(db.get(ChatThreadRecord, chat).messages_json or "[]")[-1]
+
+    # The run's own card (read on this PC) has the line.
+    assert chat_delivery.delivery_result(platform.engine, row.id)["checked"]["line"] == (
+        "Checked by Iron Jarvis: the document opens, has text.")
+    for chat, carried in (("chat_card_open", False), ("chat_card_home", True)):
+        got = await asyncio.to_thread(chat_delivery.deliver_session_line, platform.engine, aimed_at(chat))
+        assert got["ok"] and got["appended"] == 1, got
+        line = last_line(chat)
+        assert line["sessionId"] == row.id and line["receipt"]["found"] is True, line
+        assert ("checked" in line["receipt"]) is carried, f"{chat}: the delivered card's checked line"
+        assert ("hello.txt" in json.dumps(line["receipt"].get("checked", ""))) is carried

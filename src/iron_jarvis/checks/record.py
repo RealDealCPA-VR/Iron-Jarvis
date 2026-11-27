@@ -5,8 +5,9 @@ One row per check: when, what it belongs to (a saved chat, a chat turn, an
 agent run's session, a coding session, a workflow run and its step: whichever
 apply), the check's code, the file's NAME where it is about a file, the
 result (``passed`` | ``failed`` | ``look`` | ``not_checked``), a detail in
-plain words ("C7 on “Summary” holds #DIV/0!") and who checked (``rule``, or
-the checking model's name).
+plain words ("C7 on “Summary” holds #DIV/0!") and who checked (``rule`` for
+Iron Jarvis's own check, said "by Iron Jarvis"; or the checking model's
+name).
 
 FOUR OUTCOMES. Every phrase a person reads must be literally true by
 construction, the good ones too:
@@ -15,21 +16,24 @@ construction, the good ones too:
   Jarvis did ("opens": it opened the file with its own reader), never what
   another program will show.
 * ``failed`` ("Problem") is an ALLOWLIST of facts (:data:`PROBLEM_CHECKS`),
-  not a default: a file of a kind Iron Jarvis really opens that is not a
-  valid file of that kind; a cell whose SAVED value is an error; a test
-  command that ran and failed; a required file that is not on disk.
+  not a default: a file of a kind Iron Jarvis really opens that its own
+  reader could not open; a cell whose TYPE is an error; a test command that
+  ran to its end and reported failure; a required file that is not on disk.
 * ``look`` ("Worth a look"): everything Iron Jarvis inferred, read out of
   prose or was told by a model, said with no verdict: a typed total that
   differs from the list above it, a formula it works out to an error, a
-  document in which it found no text or that is empty, a reply that says a
-  file was saved that no step wrote, a judging model's or a reviewer's
+  document in which it found no text or that is empty, a claim of the reply
+  the check-again loop found no step for, a judging model's or a reviewer's
   failed check (never its words).
 * ``not_checked``: it could not be checked, with the reason. Where Iron
   Jarvis cannot tell at all, there is no row.
 
 A row whose check is not on the allowlist can never be stored, read, shown
 or answered as ``failed``, whoever wrote it: the record turns it into
-``look`` at the write (:func:`_clean`) and at every read (:func:`_result`).
+``look`` at the write (:func:`_clean`) and at every read (:func:`_result`),
+and a payload's item carries its check's code so the same holds for a
+payload that is saved or decoded (:func:`clean_checked`, the page's
+``decodeChecked``).
 
 NAMES A MODEL CHOSE (a file's, a folder's, a step's) are shown inside curly
 quotes and cut to a sane length (:func:`quoted`), so a name can never read
@@ -80,8 +84,11 @@ LOOK = "look"
 NOT_CHECKED = "not_checked"
 RESULTS = (PASSED, FAILED, LOOK, NOT_CHECKED)
 
-#: ``by`` for a check a rule made (no model).
+#: ``by`` for a check Iron Jarvis made itself, by rule (no model). It is
+#: SAID "by Iron Jarvis" (:func:`who_words`): "by rule" read like the
+#: product's own Rules page.
 BY_RULE = "rule"
+BY_IRON_JARVIS = "by Iron Jarvis"
 
 # The checks, by code. The first five are made by :mod:`.content` on a file a
 # reply or a run made; the rest are the checks the app already made, which
@@ -106,11 +113,11 @@ CHECKS = CONTENT_CHECKS | {CLAIMS, REQUIRED_FILE, TESTS, REVIEW, STEP_CHECK, WOR
 #: ("Problem"): each holds a fact, never an inference, a reading of prose or
 #: a model's opinion.
 #:
-#: * ``file_opens``: a file of a kind Iron Jarvis really opens that is not a
-#:   valid file of that kind (not a package, a part missing, the wrong first
-#:   bytes, a PDF with no end);
-#: * ``sheet_no_error_cells``: a cell whose SAVED value is an error;
-#: * ``tests``: a test command that ran and failed;
+#: * ``file_opens``: a file of a kind Iron Jarvis really opens that the
+#:   reader the app's own tools use could not open ("Iron Jarvis could not
+#:   open “letter.docx”");
+#: * ``sheet_no_error_cells``: a cell whose TYPE is an error;
+#: * ``tests``: a test command that ran to its end and reported failure;
 #: * ``required_file``: a required file that is not on disk.
 #:
 #: A ``failed`` row of ANY other check is said, stored and answered as
@@ -271,31 +278,6 @@ def seen_text(value: Any) -> str:
 _ENGINE_TAIL_RX = re.compile(r"\s*\([A-Z][A-Za-z0-9_.]*(?::[^)]*)?\)?\s*$")
 
 
-def open_words(why: Any) -> str:
-    """Why a file does not open, in plain words. The older check's own
-    reason (``deliverables/check._opens``) may name an exception ("BadZipFile:
-    File is not a zip file") or a part of the package ("xl/workbook.xml"):
-    neither is shown to a person."""
-    low = " ".join(str(why or "").split()).lower()
-    if "not a valid office file" in low:
-        return "it does not open: it is not a real Office file"
-    if "package has no" in low:
-        return "it does not open: a part of the file is missing"
-    if "no sheets" in low:
-        return "it does not open: the workbook has no sheets"
-    if "does not start like" in low:
-        return "it does not open: it is not the kind of file its name says"
-    if "no end marker" in low:
-        return "it does not open: the PDF was cut off"
-    if "not utf-8" in low:
-        return "its text could not be read"
-    if "only blank space" in low:
-        return "it has no text"
-    if "cannot be read" in low:
-        return "it could not be read"
-    return "it does not open"
-
-
 def plain_words(text: Any) -> str:
     """A reason an older check built, without an exception's name at its
     end ("it cannot be checked (OSError)" reads "it cannot be checked")."""
@@ -362,7 +344,9 @@ def write(
 ) -> int:
     """Write *checks* for one owner (a chat turn, or a session). A row this
     owner already holds for the same check, file and step is replaced, so a
-    file checked again (a run that carried on) is said once.
+    file checked again (a run that carried on) is said once. A REPLY's owner
+    is its turn AND its chat: a turn's id is the caller's own choice, and
+    two chats that send one id never replace each other's rows.
 
     *replace_content* (a run that is settled again): EVERY check of a made
     file this owner holds is removed first, in the same transaction, even
@@ -371,8 +355,9 @@ def write(
     longer one of the run's files does not stay behind.
 
     *kept_home*: the rows belong to a run whose words stay on this PC (a
-    Local only run). They are marked, and every reader for a chat that is
-    not Local only leaves them out.
+    Local only run), or to a reply of a chat that was Local only when it
+    was written. They are marked, and every reader for a chat that is not
+    Local only leaves them out.
 
     Returns how many rows were written; never raises."""
     try:
@@ -390,16 +375,20 @@ def write(
         if not (owned or all(c.run_id for c in rows)):
             return 0
         _prune_daily(engine, clock)
+        # A reply's rows are its turn's AND its chat's. (A run's rows are its
+        # session's whatever chat they sit under: a run that is settled again
+        # may have another answer to "is its chat Local only now?".)
+        mine = [CheckRecord.thread_id == tid] if turn else []
         with session_scope(engine) as db:
             if replace:
                 db.exec(sa_delete(CheckRecord).where(
-                    CheckRecord.turn_id == turn, CheckRecord.session_id == sid,
+                    CheckRecord.turn_id == turn, CheckRecord.session_id == sid, *mine,
                     CheckRecord.check.in_(sorted(CONTENT_CHECKS)),  # type: ignore[attr-defined]
                     *([CheckRecord.run_id == rid] if rid else []),
                 ))
             for key in {(c.check, c.file, c.folder, c.step, c.run_id or rid) for c in rows}:
                 db.exec(sa_delete(CheckRecord).where(
-                    CheckRecord.turn_id == turn, CheckRecord.session_id == sid,
+                    CheckRecord.turn_id == turn, CheckRecord.session_id == sid, *mine,
                     CheckRecord.check == key[0], CheckRecord.file == key[1], CheckRecord.folder == key[2],
                     CheckRecord.step == key[3], CheckRecord.run_id == key[4],
                 ))
@@ -597,10 +586,11 @@ def friendly_model(name: Any) -> str:
 
 
 def who_words(by: Any) -> str:
-    """"by rule", or "by <the model's name>" (a model id in the words people
-    say, :func:`friendly_model`; the row keeps the name it was given)."""
+    """"by Iron Jarvis" for its own check, or "by <the model's name>" (a
+    model id in the words people say, :func:`friendly_model`; the row keeps
+    the name it was given)."""
     name = " ".join(str(by or "").split())
-    return "by rule" if not name or name == BY_RULE else f"by {friendly_model(name)}"
+    return BY_IRON_JARVIS if not name or name == BY_RULE else f"by {friendly_model(name)}"
 
 
 def _subject(row: dict[str, Any], one_file: bool) -> str:
@@ -717,11 +707,13 @@ _ORDER = {FAILED: 0, LOOK: 1, NOT_CHECKED: 2, PASSED: 3}
 
 
 def payload(rows: Iterable[dict[str, Any]], *, limit: int = MAX_LISTED) -> "dict[str, Any] | None":
-    """What a page draws: ``{line, tone, checks: [{label, said, result,
-    result_words, who}], more, more_words}``; None for no rows. The list has
-    the problems first, then what is worth a look, then what was not
-    checked, then what passed; ``more`` counts the checks past *limit*
-    (``more_words`` says so: "and 3 more checks", "" when none). Pure."""
+    """What a page draws: ``{line, tone, checks: [{check, label, said,
+    result, result_words, who}], more, more_words}``; None for no rows. The
+    list has the problems first, then what is worth a look, then what was
+    not checked, then what passed; ``more`` counts the checks past *limit*
+    (``more_words`` says so: "and 3 more checks", "" when none). Each item
+    carries its check's CODE, so whoever saves or decodes the payload can
+    hold "Problem" to the allowlist (:func:`clean_checked`). Pure."""
     rows = [r for r in rows if isinstance(r, dict) and r.get("result") in RESULTS]
     if not rows:
         return None
@@ -733,8 +725,8 @@ def payload(rows: Iterable[dict[str, Any]], *, limit: int = MAX_LISTED) -> "dict
         "tone": tone,
         "checks": [
             {
-                "label": _label(r), "said": str(r.get("detail") or ""), "result": _result(r),
-                "result_words": _RESULT_WORDS[_result(r)], "who": who_words(r.get("by")),
+                "check": str(r.get("check") or ""), "label": _label(r), "said": str(r.get("detail") or ""),
+                "result": _result(r), "result_words": _RESULT_WORDS[_result(r)], "who": who_words(r.get("by")),
             }
             for r in shown
         ],
@@ -771,12 +763,17 @@ def clean_checked(raw: Any) -> "dict[str, Any] | None":
             label = _text(item.get("label"), 240)
             if not label:
                 continue
+            # "Problem" is the allowlist's, read from the item's own check
+            # code: an item with no code, a code nobody knows, or a code off
+            # the list can never come out "Problem" (it is "Worth a look").
+            code = item.get("check") if isinstance(item.get("check"), str) and item.get("check") in CHECKS else ""
+            result = _result({"check": code, "result": item["result"]})
             # The result's WORD is this module's, read from the result: a
             # payload that says "look" under the word "Checked" is not kept
             # as it came (the page's decoder does the same).
             checks.append({
-                "label": label, "said": _text(item.get("said"), 400), "result": item["result"],
-                "result_words": _RESULT_WORDS[item["result"]], "who": _text(item.get("who"), 140),
+                "check": code, "label": label, "said": _text(item.get("said"), 400), "result": result,
+                "result_words": _RESULT_WORDS[result], "who": _text(item.get("who"), 140),
             })
             if len(checks) >= MAX_LISTED:
                 break
@@ -804,6 +801,6 @@ __all__ = [
     "FOLDER_MAX", "LINE_LOOK", "LOOK", "PROBLEM_CHECKS", "path_key", "quoted", "seen_text", "shown_name",
     "STEP_CHECK", "TESTS", "WORKFLOW_STEP", "apart", "as_dict", "clean_checked", "drop_thread", "ensure_table",
     "file_name", "for_session", "for_thread", "for_turn", "friendly_model", "has_content", "home_turn",
-    "kind_words", "line_for",
-    "new_check_id", "note", "open_words", "payload", "plain_words", "prune", "who_words", "write",
+    "kind_words", "line_for", "BY_IRON_JARVIS",
+    "new_check_id", "note", "payload", "plain_words", "prune", "who_words", "write",
 ]

@@ -5,14 +5,17 @@
  * task's result) that made or changed a file, saying what Iron Jarvis itself
  * checked: "Checked by Iron Jarvis: the spreadsheet opens, no error cells,
  * 3 totals add up." Pressing it opens the list: each check, what it found,
- * its result, and who checked ("by rule", or the model's name).
+ * its result, and who checked ("by Iron Jarvis", or the model's name).
  *
  * Every word comes from the daemon's one record of checks (lib/checked
  * decodes it; this component composes none). A problem, and something
  * "worth a look" (what Iron Jarvis worked out itself and found different),
  * read in the warn tone; a pass, and what could not be checked, quietly. The
  * two keep their own words in the list ("Problem", "Worth a look"): the
- * colour is shared, the claim is not. Never a notice,
+ * colour is shared, the claim is not. The quiet line's TICK is drawn only
+ * when nothing on it is "Not checked" (and no check is left uncounted in
+ * the list): a line that says something was not checked opens with the
+ * neutral mark, never with a tick. Never a notice,
  * never the bell: it is drawn where the reply already is, and a reply that
  * made no file gets none (the caller renders nothing for a null mark).
  *
@@ -34,16 +37,21 @@ export const CheckedLine = memo(function CheckedLine({ mark }: { mark: CheckedMa
   const listId = useId();
   if (!mark) return null;
   const warn = mark.tone === "warn";
-  const passed = mark.checks.some((c) => c.result === "passed");
+  // A tick says "checked, and nothing was left out": some check passed, none
+  // reads "Not checked", and the list holds every check (none is only counted).
+  const ticked =
+    mark.checks.some((c) => c.result === "passed") &&
+    !mark.checks.some((c) => c.result === "not_checked") &&
+    mark.more === 0;
   const canOpen = mark.checks.length > 0;
   const line = (
     <>
       {warn ? (
         <TriangleAlert size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-tone-warn" />
-      ) : passed ? (
-        <Check size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-tone-success" />
+      ) : ticked ? (
+        <Check size={13} aria-hidden="true" data-testid="checked-line-tick" className="mt-0.5 shrink-0 text-tone-success" />
       ) : (
-        <CircleDashed size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
+        <CircleDashed size={13} aria-hidden="true" data-testid="checked-line-neutral" className="mt-0.5 shrink-0" />
       )}
       <span data-testid="checked-line-words" className="min-w-0 text-left [overflow-wrap:anywhere]">
         {mark.line}

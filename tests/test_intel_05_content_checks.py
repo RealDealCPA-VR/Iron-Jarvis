@@ -6,15 +6,18 @@ Real files (an .xlsx written by openpyxl and by the app's own writer, a
 WHICH WORD A FINDING GETS is fixed by what kind of knowledge it is, and
 these tests hold it:
 
-* "Problem" (``failed``) only for what the file itself holds or is: it does
-  not open, a document is empty or has no text, a cell's SAVED value is an
-  error.
+* "Problem" (``failed``) only for a fact: the reader the app's own tools
+  use could not open the file ("Iron Jarvis could not open “x.docx”"), or a
+  cell's TYPE is an error.
 * "Worth a look" (``look``) for what Iron Jarvis worked out itself: a typed
-  total that differs from the list above it, a formula with no saved result
-  that works out to an error or names a function Excel may not know, a page
-  count the reply states that differs from the file's. Never ``failed``:
-  over the whole table of sheet shapes, and over the reviewer's truthful
-  replies about PDFs, no check of that kind ever reads "Problem".
+  total that differs from the ONE shape of list above it, a formula with no
+  saved result (or one the workbook does not stand by) that works out to an
+  error or names a function Excel may not know, a document that is empty or
+  in which no text was found. Never ``failed``: over the whole table of
+  sheet shapes no check of that kind ever reads "Problem".
+* A phrase is said only where it is true by construction for EVERY file. A
+  total that is not the one shape (a subtotal anywhere, a gap, a formula in
+  the list, a second total in the column) gets NO row at all.
 
 A check that breaks, a file that is too large, and a reply that runs out of
 time read "not checked", never "passed". Nothing here calls a model.
@@ -124,43 +127,127 @@ def test_a_cell_is_named_in_plain_words_with_its_sheet_only_when_there_are_sever
     assert "Summary!" not in " ".join(c.detail for c in got)
 
 
-def _saved_error_file(tmp_path: Path) -> Path:
-    """A REAL file whose formula B1 holds a saved error result and whose B2
-    holds a saved number (what a spreadsheet program writes; no stub)."""
+_FULL_CALC = b' fullCalcOnLoad="1"'
+
+
+def _repack(src: Path, out: Path, change) -> Path:
+    """*src* (a package) written again as *out*, each part's bytes put
+    through ``change(name, data)``."""
     import zipfile
 
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            zout.writestr(item, change(item.filename, zin.read(item.filename)))
+    return out
+
+
+def _stands_by(src: Path, out: Path) -> Path:
+    """*src* as a spreadsheet program saves it: the workbook no longer asks
+    for a full recalculation on load, so it STANDS BY its saved results.
+    (openpyxl, and so the app's own writer, always asks for one.)"""
+    def change(name: str, data: bytes) -> bytes:
+        if name == "xl/workbook.xml":
+            assert _FULL_CALC in data, "the writer no longer asks for a recalculation: read the test again"
+            return data.replace(_FULL_CALC, b"")
+        return data
+
+    return _repack(src, out, change)
+
+
+def _saved_error_file(tmp_path: Path, stands_by: bool = True) -> Path:
+    """A REAL file whose formula B1 holds a saved error result and whose B2
+    holds a saved number (what a spreadsheet program writes; no stub).
+    *stands_by* False: the same file from a writer that asks for a full
+    recalculation on load (its saved results are placeholders)."""
     plain = tmp_path / "plain.xlsx"
     wb = Workbook()
     ws = wb.active
     ws.title = "S"
     ws["A1"], ws["B1"], ws["B2"] = "x", "=1/0", "=2+2"
     wb.save(plain)
-    out = tmp_path / "saved.xlsx"
-    with zipfile.ZipFile(plain) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == "xl/worksheets/sheet1.xml":
-                text = data.decode("utf-8")
-                for empty in ("<v></v>", "<v />", "<v/>"):
-                    text = text.replace(f'<c r="B1"><f>1/0</f>{empty}</c>', '<c r="B1" t="e"><f>1/0</f><v>#DIV/0!</v></c>')
-                    text = text.replace(f'<c r="B2"><f>2+2</f>{empty}</c>', '<c r="B2"><f>2+2</f><v>4</v></c>')
-                assert "#DIV/0!" in text, text[:400]
-                data = text.encode("utf-8")
-            zout.writestr(item, data)
-    return out
+
+    def change(name: str, data: bytes) -> bytes:
+        if name != "xl/worksheets/sheet1.xml":
+            return data
+        text = data.decode("utf-8")
+        for empty in ("<v></v>", "<v />", "<v/>"):
+            text = text.replace(f'<c r="B1"><f>1/0</f>{empty}</c>', '<c r="B1" t="e"><f>1/0</f><v>#DIV/0!</v></c>')
+            text = text.replace(f'<c r="B2"><f>2+2</f>{empty}</c>', '<c r="B2"><f>2+2</f><v>4</v></c>')
+        assert "#DIV/0!" in text, text[:400]
+        return text.encode("utf-8")
+
+    asks = _repack(plain, tmp_path / "asks.xlsx", change)
+    return _stands_by(asks, tmp_path / "saved.xlsx") if stands_by else asks
 
 
 def test_a_formula_whose_saved_result_is_an_error_is_a_problem_the_file_holds(tmp_path):
     """What the file itself holds: a saved error value is a "Problem". The
-    file here is real (its saved results are in it), read by the ONE load."""
+    file here is real (its saved results are in it, and it stands by them),
+    read by the ONE load."""
     p = _saved_error_file(tmp_path)
     book = content._load(p)
     assert book.values["S"] == {(1, 2): "#DIV/0!", (2, 2): 4}, "the one load did not read the saved results"
+    assert book.errors["S"] == {(1, 2): "#DIV/0!"}
     got = content.check_files([str(p)])
     assert _by(got, SHEET_ERRORS) == [Check(SHEET_ERRORS, FAILED, "B1 holds #DIV/0!", file="saved.xlsx")]
     line, tone = line_for(_rows(got))
     assert line == "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: B1 holds #DIV/0!."
     assert tone == "warn"
+
+
+def test_a_workbook_that_asks_to_be_worked_out_again_has_no_saved_result_to_trust(tmp_path):
+    """Decision 5. A writer that cannot work formulas out says so in the
+    file (a full recalculation on load) and saves a placeholder as every
+    result. The SAME cells then hold no "saved result": the saved error is
+    not a problem the file holds, and a saved 4 is not "no error cells".
+    Each formula is worked out here."""
+    p = _saved_error_file(tmp_path, stands_by=False)
+    assert content._recalculates(p) and not content._recalculates(_saved_error_file(tmp_path))
+    book = content._load(p)
+    assert book.values["S"] == {} and book.errors["S"] == {}, "a placeholder was read as a saved result"
+    assert content._formula_counts(book) == (2, 2)
+    got = content.check_files([str(p)])
+    assert _by(got, SHEET_ERRORS) == [Check(SHEET_ERRORS, LOOK, "B1 works out to an error", file="asks.xlsx")]
+    assert not [c for c in got if c.result == FAILED]
+    # In doubt (the setting cannot be read), the saved results are not trusted.
+    assert content._recalculates(tmp_path / "not-there.xlsx") is True
+    # The slower read gives the same answer.
+    from openpyxl import load_workbook
+
+    wb = load_workbook(str(p), read_only=True)
+    try:
+        slow = content._read_twice(wb, p, content._never_late, False)
+    finally:
+        wb.close()
+    assert slow.values["S"] == {} and slow.errors["S"] == {}
+
+
+def test_a_writer_that_saves_zero_for_every_formula_never_reads_no_error_cells(tmp_path):
+    """The reviewer's file, from XlsxWriter (it ships with the app): every
+    formula is saved as 0, D3 divides by zero and D4 names no function. The
+    line read "no error cells, 1 total adds up"."""
+    import zipfile
+
+    import xlsxwriter
+
+    p = tmp_path / "report.xlsx"
+    wb = xlsxwriter.Workbook(str(p))
+    ws = wb.add_worksheet()
+    for r, row in enumerate([["Item", "Sold", "Days", "Per day"], ["A", 100, 4, "=B2/C2"], ["B", 50, 0, "=B3/C3"],
+                             ["C", 10, 2, "=SUMM(B4:C4)"], ["Total", "=SUM(B2:B4)", None, None]]):
+        for c, v in enumerate(row):
+            if v is not None:
+                ws.write(r, c, v)
+    wb.close()
+    with zipfile.ZipFile(p) as z:
+        sheet = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert "<f>B3/C3</f><v>0</v>" in sheet, "the writer no longer saves a placeholder 0: read the test again"
+    got = content.check_files([str(p)])
+    said = {c.result: c.detail for c in _by(got, SHEET_ERRORS)}
+    assert said == {LOOK: "D3 works out to an error",
+                    NOT_CHECKED: "1 formula has no saved result and could not be worked out here"}
+    line = line_for(_rows(got))[0]
+    assert "no error cells" not in line and "work out," not in line and "works out," not in line
 
 
 # --------------------------------------------------------------------------- #
@@ -177,9 +264,12 @@ def test_a_formula_the_apps_own_writer_could_not_save_a_result_for_is_worth_a_lo
     warnings: list[str] = []
     write_document(p, DIVIDES, warnings=warnings)
     assert warnings and "D3" in warnings[0] and "#DIV/0!" in warnings[0], warnings
-    book = content._load(p)
-    assert book.values["Sheet"].get((2, 4)) == 25 and book.values["Sheet"].get((3, 4)) is None, (
-        "the file should hold a saved result for D2 and none for D3")
+    # The writer saves the result it worked out for D2 and none for D3, and
+    # asks for a recalculation on load: neither is a saved result to trust.
+    kept = content._load(_stands_by(p, tmp_path / "kept.xlsx"))
+    assert kept.values["Sheet"].get((2, 4)) == 25 and kept.values["Sheet"].get((3, 4)) is None, (
+        "the file should hold a result for D2 and none for D3")
+    assert content._load(p).values["Sheet"] == {}
     got = content.check_files([str(p)])
     # Iron Jarvis worked it out itself: the file holds no error value.
     assert _by(got, SHEET_ERRORS) == [Check(SHEET_ERRORS, LOOK, "D3 works out to an error", file="summary.xlsx")]
@@ -247,8 +337,6 @@ def test_a_cell_of_blank_space_is_text_to_a_formula_never_an_empty_cell(tmp_path
     assert ("Summary", 1, 2) in book.spaces and (1, 2) not in book.formulas["Summary"]
     assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [Check(
         SHEET_ERRORS, NOT_CHECKED, "1 formula has no saved result and could not be worked out here", file="t.xlsx")]
-    # ... and it is no number Iron Jarvis knows: a total over it is not judged.
-    assert book.known("Summary", 1, 2) is None
 
 
 def test_a_date_that_cannot_exist_is_not_worked_out_to_a_clean_number(tmp_path):
@@ -325,7 +413,7 @@ def test_a_function_with_its_prefix_and_the_apps_own_writer_are_not_flagged(tmp_
     own = tmp_path / "own.xlsx"
     write_document(own, [["a", 5], ["t", "=IFNA(B1,0)"]])     # the writer adds the prefix itself
     assert _by(content.check_files([str(own)]), SHEET_ERRORS) == [
-        Check(SHEET_ERRORS, PASSED, "no error cells", file="own.xlsx")]
+        Check(SHEET_ERRORS, PASSED, "its formula works out", file="own.xlsx")]
 
 
 def test_a_formula_that_cannot_be_worked_out_is_not_checked_and_the_line_never_says_no_error_cells(tmp_path):
@@ -343,10 +431,11 @@ def test_a_formula_that_cannot_be_worked_out_is_not_checked_and_the_line_never_s
 
 
 def test_the_good_phrase_is_one_of_two_true_ones_never_a_loose_one(tmp_path):
-    """ "no error cells" is said when every formula has a SAVED result and
-    none is an error. When Iron Jarvis worked formulas out ITSELF it says so,
-    with the count: "its 3 formulas work out". Never "no error cells" over a
-    cell whose result nobody saved."""
+    """ "no error cells" is said when every formula has a SAVED result the
+    workbook stands by and none is an error. When Iron Jarvis worked
+    formulas out ITSELF it says so, with the count: "its 3 formulas work
+    out". Never "no error cells" over a cell whose result nobody saved, or
+    over a result the workbook asks to have worked out again."""
     rows = [["Item", "Qty", "Each", "Amount"], ["a", 2, 5, "=B2*C2"], ["b", 3, 7, "=B3*C3"],
             ["Share", None, None, "=IFERROR(D2/0,0)"]]
     p = _xlsx(tmp_path / "t.xlsx", rows)
@@ -358,12 +447,19 @@ def test_the_good_phrase_is_one_of_two_true_ones_never_a_loose_one(tmp_path):
     one = _xlsx(tmp_path / "one.xlsx", [["a", 2], ["b", "=B1*2"]])
     assert _by(content.check_files([str(one)]), SHEET_ERRORS) == [
         Check(SHEET_ERRORS, PASSED, "its formula works out", file="one.xlsx")]
-    # The app's own writer saves each result: every formula has one, so the other true phrase.
+    # The app's own writer saves the results IT worked out and asks for a recalculation on load: they are
+    # not saved results to trust, so the phrase is still the evaluator's.
     own = tmp_path / "own.xlsx"
     write_document(own, rows)
-    assert content._formula_counts(content._load(own)) == (3, 0)
+    assert content._formula_counts(content._load(own)) == (3, 3)
     assert _by(content.check_files([str(own)]), SHEET_ERRORS) == [
-        Check(SHEET_ERRORS, PASSED, "no error cells", file="own.xlsx")]
+        Check(SHEET_ERRORS, PASSED, "its 3 formulas work out", file="own.xlsx")]
+    # The same cells in a file that STANDS BY its saved results (what a spreadsheet program saves): the other
+    # true phrase.
+    kept = _stands_by(own, tmp_path / "kept.xlsx")
+    assert content._formula_counts(content._load(kept)) == (3, 0)
+    assert _by(content.check_files([str(kept)]), SHEET_ERRORS) == [
+        Check(SHEET_ERRORS, PASSED, "no error cells", file="kept.xlsx")]
     # No formula at all: every cell is a saved value.
     plain = _xlsx(tmp_path / "plain.xlsx", BUDGET)
     assert _by(content.check_files([str(plain)]), SHEET_ERRORS) == [
@@ -374,25 +470,23 @@ def test_formulas_worked_out_here_are_counted_with_the_ones_whose_result_is_save
     """One formula with a saved result and one with none: "its 2 formulas
     work out" (EVERY formula of the workbook has a result that is not an
     error), never "its formula works out" and never "no error cells"."""
-    import zipfile
-
     plain = tmp_path / "plain.xlsx"
     wb = Workbook()
     ws = wb.active
     ws.title = "S"
     ws["A1"], ws["B1"], ws["B2"] = "x", "=2+2", "=B1*3"
     wb.save(plain)
-    out = tmp_path / "mixed.xlsx"
-    with zipfile.ZipFile(plain) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            data = zin.read(item.filename)
-            if item.filename == "xl/worksheets/sheet1.xml":
-                text = data.decode("utf-8")
-                for empty in ("<v></v>", "<v />", "<v/>"):
-                    text = text.replace(f'<c r="B1"><f>2+2</f>{empty}</c>', '<c r="B1"><f>2+2</f><v>4</v></c>')
-                assert "<v>4</v>" in text, text[:400]
-                data = text.encode("utf-8")
-            zout.writestr(item, data)
+
+    def change(name: str, data: bytes) -> bytes:
+        if name != "xl/worksheets/sheet1.xml":
+            return data
+        text = data.decode("utf-8")
+        for empty in ("<v></v>", "<v />", "<v/>"):
+            text = text.replace(f'<c r="B1"><f>2+2</f>{empty}</c>', '<c r="B1"><f>2+2</f><v>4</v></c>')
+        assert "<v>4</v>" in text, text[:400]
+        return text.encode("utf-8")
+
+    out = _stands_by(_repack(plain, tmp_path / "asks.xlsx", change), tmp_path / "mixed.xlsx")
     assert content._formula_counts(content._load(out)) == (2, 1)
     assert _by(content.check_files([str(out)]), SHEET_ERRORS) == [
         Check(SHEET_ERRORS, PASSED, "its 2 formulas work out", file="mixed.xlsx")]
@@ -579,8 +673,7 @@ class Shape:
     #: The cells said to be worth a look, as "B5" (Iron Jarvis added the list
     #: up itself and got another figure; never "wrong", never a problem).
     look: tuple = ()
-    #: How many totals could not be worked out by rule (not judged).
-    unknown: int = 0
+    #: (A total that is not judged gets NO row: there is nothing to count.)
     #: True for a sheet whose totals are all RIGHT (or that has none): the
     #: rule must never say one is worth a look.
     correct: bool = True
@@ -594,17 +687,18 @@ class Shape:
 HDR = ["Item", "Amount"]
 
 SHAPES: list[Shape] = [
+    # A total that is NOT the one shape gets no row at all: no good, no look. (It read "not checked" before.)
     # ---- the nine everyday shapes that read "Problem" in the first build (all CORRECT sheets) ----
     Shape("a blank cell inside the data",
-          [HDR, ["Rent", 100], ["Parking", None], ["Food", 300], ["Total", 400]], unknown=1),
+          [HDR, ["Rent", 100], ["Parking", None], ["Food", 300], ["Total", 400]]),
     Shape("groups separated by a blank row",
-          [HDR, ["Rent", 100], ["Food", 300], [None, None], ["Fuel", 50], ["Tolls", 20], ["Total", 470]], unknown=1),
+          [HDR, ["Rent", 100], ["Food", 300], [None, None], ["Fuel", 50], ["Tolls", 20], ["Total", 470]]),
     Shape("a summary list with a line called Total revenue",
           [["Metric", "Value"], ["Orders", 120], ["Customers", 45], ["Total revenue", 45000]]),
     Shape("a payee called Total Wine & More",
           [["Payee", "Amount"], ["Acme", 100], ["Total Wine & More", 250], ["Zed", 50]]),
     Shape("year columns typed as numbers",
-          [["Item", 2023, 2024], ["Rent", 100, 110], ["Food", 300, 310], ["Total", 400, 420]], unknown=2,
+          [["Item", 2023, 2024], ["Rent", 100, 110], ["Food", 300, 310], ["Total", 400, 420]],
           note="the year above the list cannot be told from an amount: not judged"),
     Shape("a running balance column with a total row",
           [["Month", "Amount", "Balance"], ["Jan", 100, 100], ["Feb", 50, 150], ["Total", 150, 150]], good=1),
@@ -614,7 +708,7 @@ SHAPES: list[Shape] = [
           [["Name", "Hours", "Hourly", "Amount"], ["A", 10, 50, 500], ["B", 20, 80, 1600],
            ["Total", 30, 70, 2100]], good=2),
     Shape("one number typed as text among numbers",
-          [HDR, ["a", 100], ["b", "200"], ["c", 300], ["Total", 600]], unknown=1,
+          [HDR, ["a", 100], ["b", "200"], ["c", 300], ["Total", 600]],
           note="what a person reads adds up, a spreadsheet's own SUM would leave the text out: not judged"),
     # ---- right, in plain shapes ----
     Shape("a plain list", [HDR, ["Rent", 1200], ["Food", 300], ["Travel", 150.5], ["Total", 1650.5]], good=1),
@@ -626,17 +720,20 @@ SHAPES: list[Shape] = [
     Shape("a grand total label", [HDR, ["a", 1], ["b", 2], ["Grand Total", 3]], good=1),
     Shape("the plain word in German", [["Posten", "Betrag"], ["a", 1], ["b", 2], ["Summe", 3]], good=1),
     Shape("the plain word in Italian", [["Voce", "Importo"], ["a", 1], ["b", 2], ["Totale", 3]], good=1),
-    Shape("one blank row before the total", [HDR, ["Rent", 100], ["Food", 300], [None, None], ["Total", 400]], unknown=1),
+    Shape("one blank row before the total", [HDR, ["Rent", 100], ["Food", 300], [None, None], ["Total", 400]]),
     Shape("subtotals and a grand total",
           [["Line", "Amount"], ["Sales", 1000], ["Other", 50], ["Subtotal", 1050], ["Fees", 20], ["Interest", 5],
-           ["Subtotal", 25], ["Grand total", 1075]], good=3),
-    Shape("the total row above the data", [["Total", 400], ["Rent", 100], ["Food", 300]], unknown=1),
+           ["Subtotal", 25], ["Grand total", 1075]],
+          note="three totals in one column: which cells each adds is a guess"),
+    Shape("the total row above the data", [["Total", 400], ["Rent", 100], ["Food", 300]]),
     Shape("two tables side by side",
           [["Item", "Amount", None, "Item", "Amount"], ["a", 1, None, "x", 10], ["b", 2, None, "y", 20],
            ["Total", 3, None, "Total", 30]], good=2),
     Shape("two tables one above the other",
-          [HDR, ["a", 1], ["b", 2], ["Total", 3], [None, None], HDR, ["c", 5], ["d", 6], ["Total", 11]], good=2),
-    Shape("a totals column of sums", [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 3], ["b", 10, 20, 30]], good=1),
+          [HDR, ["a", 1], ["b", 2], ["Total", 3], [None, None], HDR, ["c", 5], ["d", 6], ["Total", 11]],
+          note="two totals in one column: a sectioned sheet is not judged"),
+    Shape("a totals column of sums", [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 3], ["b", 10, 20, 30]],
+          note="a column HEADED by a total word is not judged (the check of it is gone)"),
     Shape("a totals column of quantity times price",
           [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, 7.5], ["ink", 2, 10, 20]]),
     Shape("a percent column in the total row",
@@ -654,51 +751,53 @@ SHAPES: list[Shape] = [
     Shape("rows labelled by a date",
           [["Date", "Amount"], [datetime(2024, 1, 1), 100], [datetime(2024, 1, 2), 300], ["Total", 400]], good=1),
     Shape("amounts written as currency text",
-          [HDR, ["a", "$100"], ["b", "$300"], ["Total", 400]], unknown=1),
+          [HDR, ["a", "$100"], ["b", "$300"], ["Total", 400]]),
     Shape("a profit and loss layout",
           [["", "2024"], ["Revenue", 1000], ["Total revenue", 1000], ["Cost of sales", -400], ["Gross profit", 600]]),
     Shape("an invoice with a subtotal, tax and a total",
           [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, 7.5], ["ink", 2, 10, 20], ["Subtotal", None, None, 27.5],
-           ["Tax", None, None, 2.2], ["Total", None, None, 29.7]], good=2),
+           ["Tax", None, None, 2.2], ["Total", None, None, 29.7]],
+          note="a subtotal and a total in one column"),
     Shape("a total that is a plain SUM of exactly the list",
           [HDR, ["a", 100], ["b", 300], ["Total", "=SUM(B2:B3)"]], good=1),
     Shape("a SUM total after a blank row",
-          [HDR, ["a", 100], ["b", 300], [None, None], ["Total", "=SUM(B2:B3)"]], unknown=1),
+          [HDR, ["a", 100], ["b", 300], [None, None], ["Total", "=SUM(B2:B3)"]]),
     Shape("a SUM total far below its list",
-          [HDR, ["a", 100], ["b", 300], [None, None], [None, None], [None, None], ["Total", "=SUM(B2:B3)"]], unknown=1),
+          [HDR, ["a", 100], ["b", 300], [None, None], [None, None], [None, None], ["Total", "=SUM(B2:B3)"]]),
     Shape("SUM subtotals and a grand total that adds them",
           [["Line", "Amount"], ["Sales", 1000], ["Other", 50], ["Subtotal", "=SUM(B2:B3)"], ["Fees", 20],
-           ["Interest", 5], ["Subtotal", "=SUM(B5:B6)"], ["Grand total", "=B4+B7"]], good=2, unknown=1),
+           ["Interest", 5], ["Subtotal", "=SUM(B5:B6)"], ["Grand total", "=B4+B7"]],
+          note="three totals in one column"),
     Shape("a list of formulas under a SUM",
           [["Item", "Qty", "Each", "Amount"], ["a", 2, 5, "=B2*C2"], ["b", 3, 7, "=B3*C3"],
-           ["Total", 5, None, "=SUM(D2:D3)"]], good=2),
+           ["Total", 5, None, "=SUM(D2:D3)"]], good=1,
+          note="the Qty column is typed (2 + 3 = 5); a list of formulas is not judged"),
     Shape("a totals column of SUM formulas",
-          [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, "=SUM(B2:C2)"], ["b", 10, 20, "=SUM(B3:C3)"]], good=1),
-    Shape("a SUBTOTAL formula", [HDR, ["a", 100], ["b", 300], ["Total", "=SUBTOTAL(9,B2:B3)"]], unknown=1),
-    Shape("an AVERAGE in a row called total", [HDR, ["a", 100], ["b", 300], ["Total", "=AVERAGE(B2:B3)"]], unknown=1),
+          [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, "=SUM(B2:C2)"], ["b", 10, 20, "=SUM(B3:C3)"]],
+          note="a column headed by a total word is not judged"),
+    Shape("a SUBTOTAL formula", [HDR, ["a", 100], ["b", 300], ["Total", "=SUBTOTAL(9,B2:B3)"]]),
+    Shape("an AVERAGE in a row called total", [HDR, ["a", 100], ["b", 300], ["Total", "=AVERAGE(B2:B3)"]]),
     # ---- the second review's everyday sheets: every one CORRECT, none may be worth a look ----
-    Shape("quantity times a unit price", [["Item", "Value"], ["Quantity", 5], ["Unit price", 20], ["Total", 100]],
-          unknown=1),
-    Shape("hours times a rate", [["Item", "Value"], ["Hours", 10], ["Rate", 50], ["Total", 500]], unknown=1),
+    Shape("quantity times a unit price", [["Item", "Value"], ["Quantity", 5], ["Unit price", 20], ["Total", 100]]),
+    Shape("hours times a rate", [["Item", "Value"], ["Hours", 10], ["Rate", 50], ["Total", 500]]),
     Shape("nights times a price per night",
-          [["Trip", "Cost"], ["Nights", 3], ["Price per night", 100], ["Total", 300]], unknown=1),
+          [["Trip", "Cost"], ["Nights", 3], ["Price per night", 100], ["Total", 300]]),
     Shape("a monthly payment times its months",
-          [["Loan", "Figure"], ["Monthly payment", 500], ["Months", 12], ["Total", 6000]], unknown=1),
+          [["Loan", "Figure"], ["Monthly payment", 500], ["Months", 12], ["Total", 6000]]),
     Shape("a count, an average and their total",
-          [["Statistic", "Value"], ["Count", 12], ["Average", 250], ["Total", 3000]], unknown=1),
+          [["Statistic", "Value"], ["Count", 12], ["Average", 250], ["Total", 3000]]),
     Shape("a count, the largest, the smallest and a total",
-          [["Statistic", "Value"], ["Invoices", 12], ["Largest", 900], ["Smallest", 40], ["Total", 3000]], unknown=1),
-    Shape("a price less a discount", [HDR, ["Price", 100], ["Discount", 20], ["Total", 80]], unknown=1),
-    Shape("income less expenses", [["Budget", "Amount"], ["Income", 5000], ["Expenses", 4200], ["Total", 800]],
-          unknown=1),
+          [["Statistic", "Value"], ["Invoices", 12], ["Largest", 900], ["Smallest", 40], ["Total", 3000]]),
+    Shape("a price less a discount", [HDR, ["Price", 100], ["Discount", 20], ["Total", 80]]),
+    Shape("income less expenses", [["Budget", "Amount"], ["Income", 5000], ["Expenses", 4200], ["Total", 800]]),
     Shape("a job less the deposit paid",
-          [HDR, ["Kitchen refit", 9000], ["Extras", 500], ["Less deposit paid", 2000], ["Total", 7500]], unknown=1),
+          [HDR, ["Kitchen refit", 9000], ["Extras", 500], ["Less deposit paid", 2000], ["Total", 7500]]),
     Shape("two heading rows, the second of years",
           [["Category", "Sales", None], ["Item", 2023, 2024], ["Rent", 100, 110], ["Food", 200, 210],
-           ["Total", 300, 320]], unknown=2),
+           ["Total", 300, 320]]),
     Shape("two heading rows, the second of quarters",
           [["Region", "Quarter", None], ["Name", 1, 2], ["North", 100, 110], ["South", 200, 210],
-           ["Total", 300, 320]], unknown=2),
+           ["Total", 300, 320]]),
     Shape("a growth column with an average in the total row",
           [["Region", "Sales", "Growth"], ["North", 100, 5], ["South", 200, 10], ["Total", 300, 7.5]], good=1),
     Shape("a cost each column with a blended figure",
@@ -707,84 +806,92 @@ SHAPES: list[Shape] = [
     Shape("scores with their average in a row called total",
           [["Student", "Score"], ["Ann", 80], ["Bob", 90], ["Total", 85]]),
     Shape("a subtotal, tax and a total",
-          [HDR, ["A", 100], ["B", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 324]], good=2),
+          [HDR, ["A", 100], ["B", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 324]],
+          note="a subtotal and a total in one column"),
     Shape("a subtotal, a discount typed positive and a total",
-          [HDR, ["A", 100], ["B", 200], ["Subtotal", 300], ["Discount", 30], ["Total", 270]], good=1, unknown=1),
+          [HDR, ["A", 100], ["B", 200], ["Subtotal", 300], ["Discount", 30], ["Total", 270]],
+          note="a subtotal and a total in one column"),
     Shape("rows of fractions of a cent under a total of the rounded rows",
-          [HDR, ["A", 33.335], ["B", 33.335], ["C", 33.335], ["Total", 100.02]], unknown=1),
+          [HDR, ["A", 33.335], ["B", 33.335], ["C", 33.335], ["Total", 100.02]]),
     Shape("thousands rounded in the total",
-          [["Item", "Amount (000s)"], ["A", 1.4], ["B", 1.4], ["Total", 3]], unknown=1),
+          [["Item", "Amount (000s)"], ["A", 1.4], ["B", 1.4], ["Total", 3]]),
     Shape("shares typed as whole numbers", [["Region", "Share of sales"], ["North", 40], ["South", 60], ["Total", 100]]),
     Shape("two sections and a grand total that is their difference",
           [["Line", "Amount"], ["Sales", 1000], ["Services", 500], ["Subtotal", 1500], ["Rent", 400], ["Wages", 600],
-           ["Subtotal", 1000], ["Grand total", 500]], good=2, unknown=1),
-    Shape("revenue less cost of sales", [["Line", "Amount"], ["Revenue", 1000], ["Cost of sales", 400], ["Total", 600]],
-          unknown=1),
-    Shape("a total in the first row", [["Total", 600], ["Rent", 100], ["Food", 200], ["Fun", 300]], unknown=1),
+           ["Subtotal", 1000], ["Grand total", 500]],
+          note="three totals in one column"),
+    Shape("revenue less cost of sales", [["Line", "Amount"], ["Revenue", 1000], ["Cost of sales", 400], ["Total", 600]]),
+    Shape("a total in the first row", [["Total", 600], ["Rent", 100], ["Food", 200], ["Fun", 300]]),
     Shape("a totals column with no total row",
           [["Item", "Qty", "Price", "Total"], ["W", 2, 10, 20], ["G", 3, 15, 45]]),
     Shape("a totals column and a total row",
-          [["Item", "Jan", "Feb", "Total"], ["A", 1, 2, 3], ["B", 4, 5, 9], ["Total", 5, 7, 12]], good=4),
+          [["Item", "Jan", "Feb", "Total"], ["A", 1, 2, 3], ["B", 4, 5, 9], ["Total", 5, 7, 12]], good=3,
+          note="the total ROW's three figures each equal the two typed cells above them; the column headed Total is not judged as a column"),
     Shape("a running column with the last value in the total row",
           [["Date", "Amount", "Running"], ["Mon", 10, 10], ["Tue", 20, 30], ["Total", 30, 30]], good=1),
     Shape("a rank column in the total row",
           [["Team", "Members", "Rank"], ["Red", 4, 1], ["Blue", 6, 2], ["Total", 10, 2]], good=1),
     Shape("an opening and a closing figure and their difference",
-          [["Cash", "Amount"], ["Opening", 1000], ["Closing", 1500], ["Total", 500]], unknown=1),
+          [["Cash", "Amount"], ["Opening", 1000], ["Closing", 1500], ["Total", 500]]),
     Shape("a long table whose metric column holds a total",
           [["Region", "Metric", "Value"], ["North", "Orders", 12], ["North", "Customers", 9],
-           ["North", "Total", 3000]], unknown=1),
+           ["North", "Total", 3000]]),
     Shape("weights and a weighted return",
           [["Asset", "Weight", "Return"], ["Stocks", 0.6, 8], ["Bonds", 0.4, 3], ["Total", 1, 6]], good=1),
-    Shape("ages with a head count in the total row", [["Name", "Age"], ["Ann", 30], ["Bob", 40], ["Total", 2]],
-          unknown=1),
+    Shape("ages with a head count in the total row", [["Name", "Age"], ["Ann", 30], ["Bob", 40], ["Total", 2]]),
     Shape("target, actual and variance",
           [["Month", "Target", "Actual", "Variance"], ["Jan", 100, 90, -10], ["Feb", 100, 120, 20],
            ["Total", 200, 210, 10]], good=2),
     Shape("a year-to-date column", [["Month", "Sales", "YTD"], ["Jan", 100, 100], ["Feb", 150, 250],
                                     ["Total", 250, 250]], good=1),
     Shape("distance and a consumption figure",
-          [["Trip", "Km", "L/100km"], ["A", 100, 6], ["B", 300, 8], ["Total", 400, 7.5]], good=1, unknown=1),
-    Shape("a total rounded up at an exact half", [HDR, ["a", 12.5], ["b", 8], ["Total", 21]], good=1),
-    Shape("a total rounded to even at an exact half", [HDR, ["a", 12.5], ["b", 8], ["Total", 20]], good=1),
-    Shape("a half at one decimal place, rounded up", [HDR, ["a", 0.25], ["b", 0.1], ["Total", 0.4]], good=1),
-    Shape("a half at one decimal place, rounded down", [HDR, ["a", 0.25], ["b", 0.1], ["Total", 0.3]], good=1),
-    Shape("a total written without its cents", [HDR, ["a", 600.20], ["b", 634.29], ["Total", 1234]], unknown=1),
-    Shape("a total written rounded", [HDR, ["a", 33.4], ["b", 66.9], ["Total", 100]], unknown=1),
+          [["Trip", "Km", "L/100km"], ["A", 100, 6], ["B", 300, 8], ["Total", 400, 7.5]], good=1),
+    Shape("a total rounded up at an exact half", [HDR, ["a", 12.5], ["b", 8], ["Total", 21]],
+          note="20.5 is not 21: equal only after rounding, so nothing is said"),
+    Shape("a total rounded to even at an exact half", [HDR, ["a", 12.5], ["b", 8], ["Total", 20]],
+          note="20.5 is not 20: equal only after rounding"),
+    Shape("a half at one decimal place, rounded up", [HDR, ["a", 0.25], ["b", 0.1], ["Total", 0.4]],
+          note="0.35 is not 0.4: equal only after rounding"),
+    Shape("a half at one decimal place, rounded down", [HDR, ["a", 0.25], ["b", 0.1], ["Total", 0.3]],
+          note="0.35 is not 0.3: equal only after rounding"),
+    Shape("a total written without its cents", [HDR, ["a", 600.20], ["b", 634.29], ["Total", 1234]]),
+    Shape("a total written rounded", [HDR, ["a", 33.4], ["b", 66.9], ["Total", 100]]),
     Shape("a rate column beside a rounded total",
-          [["Item", "Amount", "Rate"], ["a", 33.4, 0.2], ["b", 66.9, 0.4], ["Total", 100, 0.3]], unknown=1),
+          [["Item", "Amount", "Rate"], ["a", 33.4, 0.2], ["b", 66.9, 0.4], ["Total", 100, 0.3]]),
     Shape("a units row under the heading", [HDR, [None, "USD"], ["Rent", 100], ["Food", 200], ["Total", 300]], good=1),
     Shape("a head count above the list",
-          [["Name", "Hours"], ["Staff", 3], ["Ann", 10], ["Bob", 20], ["Cy", 30], ["Total", 60]], unknown=1),
+          [["Name", "Hours"], ["Staff", 3], ["Ann", 10], ["Bob", 20], ["Cy", 30], ["Total", 60]]),
     Shape("a tax column of fractions",
-          [["Item", "Amount", "Tax"], ["a", 100, 0.2], ["b", 200, 0.1], ["Total", 300, 0.13]], good=1, unknown=1),
-    Shape("a list with a not-available amount", [HDR, ["a", 100], ["b", "N/A"], ["Total", 100]], unknown=1),
+          [["Item", "Amount", "Tax"], ["a", 100, 0.2], ["b", 200, 0.1], ["Total", 300, 0.13]], good=1),
+    Shape("a list with a not-available amount", [HDR, ["a", 100], ["b", "N/A"], ["Total", 100]]),
     Shape("a title above the list", [["Budget", None], HDR, ["Rent", 100], ["Food", 200], ["Total", 300]], good=1),
-    # ---- a formula total that does NOT add the list above it: never "adds up", never "worth a look" ----
+    # ---- a formula total that does NOT add the list above it: no row ----
     Shape("a SUM that leaves the last row out",
-          [HDR, ["a", 100], ["b", 300], ["c", 50], ["Total", "=SUM(B2:B3)"]], unknown=1, correct=False),
+          [HDR, ["a", 100], ["b", 300], ["c", 50], ["Total", "=SUM(B2:B3)"]], correct=False),
     Shape("a SUM that starts one row late",
-          [HDR, ["a", 100], ["b", 300], ["c", 50], ["Total", "=SUM(B3:B4)"]], unknown=1, correct=False),
-    Shape("a total that is one cell", [HDR, ["a", 100], ["b", 300], ["Total", "=B2"]], unknown=1, correct=False),
+          [HDR, ["a", 100], ["b", 300], ["c", 50], ["Total", "=SUM(B3:B4)"]], correct=False),
+    Shape("a total that is one cell", [HDR, ["a", 100], ["b", 300], ["Total", "=B2"]], correct=False),
     Shape("a SUM of another column",
-          [["Item", "Amount", "Other"], ["a", 100, 1], ["b", 300, 2], ["Total", "=SUM(C2:C3)", 3]], good=1, unknown=1,
+          [["Item", "Amount", "Other"], ["a", 100, 1], ["b", 300, 2], ["Total", "=SUM(C2:C3)", 3]], good=1,
           correct=False),
     Shape("a grand total whose SUM covers only the last group",
           [["Line", "Amount"], ["Sales", 1000], ["Other", 50], ["Subtotal", "=SUM(B2:B3)"], ["Fees", 20],
-           ["Interest", 5], ["Grand total", "=SUM(B5:B6)"]], good=1, unknown=1, correct=False),
+           ["Interest", 5], ["Grand total", "=SUM(B5:B6)"]], correct=False,
+          note="a subtotal and a grand total in one column"),
     Shape("a SUM that takes a year heading in",
-          [["Item", 2023], ["a", 100], ["b", 300], ["Total", "=SUM(B1:B3)"]], unknown=1, correct=False),
+          [["Item", 2023], ["a", 100], ["b", 300], ["Total", "=SUM(B1:B3)"]], correct=False),
     Shape("a SUM under a year typed as a number",
-          [["Item", 2023], ["a", 100], ["b", 300], ["Total", "=SUM(B2:B3)"]], unknown=1),
+          [["Item", 2023], ["a", 100], ["b", 300], ["Total", "=SUM(B2:B3)"]]),
     Shape("a totals column whose SUM leaves a month out",
-          [["Name", "Jan", "Feb", "Mar", "Total"], ["a", 1, 2, 3, "=SUM(B2:C2)"]], unknown=1, correct=False),
+          [["Name", "Jan", "Feb", "Mar", "Total"], ["a", 1, 2, 3, "=SUM(B2:C2)"]], correct=False),
     Shape("a totals column of products",
           [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, "=B2*C2"], ["ink", 2, 10, "=B3*C3"]]),
     # ---- a typed total that differs from a clean list, and nothing else explains it: WORTH A LOOK ----
     Shape("a total that differs under a clean list",
           [HDR, ["Rent", 1200], ["Food", 300], ["Travel", 150.5], ["Total", 1700]], look=("B5",), correct=False),
-    Shape("650 against 600", [HDR, ["Rent", 100], ["Food", 200], ["Fun", 300], ["Total", 650]], look=("B5",),
-          correct=False),
+    Shape("650 against 600", [HDR, ["Rent", 100], ["Food", 200], ["Fun", 300], ["Total", 650]],
+          correct=False,
+          note="300 = 100 + 200: a row that equals the rows above it may be a subtotal, so the list is not judged"),
     Shape("one total that adds up and one that differs",
           [["Item", "A", "B"], ["x", 1, 10], ["y", 2, 20], ["Total", 3, 31]], good=1, look=("C4",), correct=False),
     Shape("three totals that differ",
@@ -792,106 +899,108 @@ SHAPES: list[Shape] = [
           look=("B4", "C4", "D4"), correct=False),
     Shape("a subtotal that differs", [HDR, ["a", 1], ["b", 2], ["Subtotal", 99]], look=("B4",), correct=False),
     Shape("a total that differs in the lower of two tables",
-          [HDR, ["a", 1], ["b", 2], ["Total", 3], [None, None], HDR, ["c", 5], ["d", 6], ["Total", 12]],
-          good=1, look=("B9",), correct=False),
+          [HDR, ["a", 1], ["b", 2], ["Total", 3], [None, None], HDR, ["c", 5], ["d", 6], ["Total", 12]], correct=False,
+          note="two totals in one column"),
     Shape("a total that differs by more than rounding",
           [HDR, ["a", 600.20], ["b", 634.29], ["Total", 1236]], look=("B4",), correct=False),
-    # ---- a difference in any looser shape: "could not be worked out", never "worth a look" ----
+    # ---- a difference in any looser shape: no row, never "worth a look" ----
     Shape("a mismatch after a blank row",
-          [HDR, ["Rent", 100], ["Food", 300], [None, None], ["Total", 999]], unknown=1, correct=False),
-    Shape("a mismatch with no heading", [["Rent", 100], ["Food", 300], ["Total", 999]], unknown=1, correct=False),
-    Shape("a mismatch under one row", [HDR, ["Rent", 100], ["Total", 999]], unknown=1, correct=False),
+          [HDR, ["Rent", 100], ["Food", 300], [None, None], ["Total", 999]], correct=False),
+    Shape("a mismatch with no heading", [["Rent", 100], ["Food", 300], ["Total", 999]], correct=False),
+    Shape("a mismatch under one row", [HDR, ["Rent", 100], ["Total", 999]], correct=False),
     Shape("a mismatch where the rows are numbered, not named",
-          [["No", "Amount"], [1, 100], [2, 300], ["Total", 999]], unknown=1, correct=False),
+          [["No", "Amount"], [1, 100], [2, 300], ["Total", 999]], correct=False),
     Shape("a mismatch with a blank cell inside",
-          [HDR, ["Rent", 100], ["Parking", None], ["Food", 300], ["Total", 999]], unknown=1, correct=False),
+          [HDR, ["Rent", 100], ["Parking", None], ["Food", 300], ["Total", 999]], correct=False),
     Shape("a mismatch under a list with a blank cell higher up",
-          [HDR, ["a", 100], ["b", None], ["c", 300], ["d", 200], ["Total", 999]], unknown=1, correct=False),
+          [HDR, ["a", 100], ["b", None], ["c", 300], ["d", 200], ["Total", 999]], correct=False),
     Shape("a total that leaves out a number typed as text",
-          [HDR, ["a", 100], ["b", "200"], ["c", 300], ["Total", 400]], unknown=1, correct=False,
+          [HDR, ["a", 100], ["b", "200"], ["c", 300], ["Total", 400]], correct=False,
           note="a spreadsheet's SUM says 400, a person reading the list says 600: not judged"),
     Shape("a mismatch under a dash in the middle of the list",
-          [HDR, ["a", 100], ["b", "-"], ["c", 300], ["d", 200], ["Total", 999]], unknown=1, correct=False),
+          [HDR, ["a", 100], ["b", "-"], ["c", 300], ["d", 200], ["Total", 999]], correct=False),
     Shape("a mismatch with a number typed as text",
-          [HDR, ["a", 100], ["b", "200"], ["c", 300], ["Total", 999]], unknown=1, correct=False),
+          [HDR, ["a", 100], ["b", "200"], ["c", 300], ["Total", 999]], correct=False),
     Shape("a mismatch under a year typed as text",
-          [["Item", "2023"], ["a", 1], ["b", 2], ["Total", 99]], unknown=1, correct=False),
+          [["Item", "2023"], ["a", 1], ["b", 2], ["Total", 99]], correct=False),
     Shape("a mismatch over subtotals",
           [["Line", "Amount"], ["Sales", 1000], ["Other", 50], ["Subtotal", 1050], ["Fees", 20], ["Interest", 5],
-           ["Subtotal", 25], ["Grand total", 999]], good=2, unknown=1, correct=False),
+           ["Subtotal", 25], ["Grand total", 999]], correct=False,
+          note="three totals in one column"),
     Shape("a typed total over a list of formulas",
           [["Item", "Qty", "Each", "Amount"], ["a", 2, 5, "=B2*C2"], ["b", 3, 7, "=B3*C3"],
-           ["Total", 5, None, 99]], good=1, unknown=1, correct=False),
-    Shape("a mismatch over an error value", [HDR, ["a", 100], ["b", "#N/A"], ["Total", 100]], unknown=1,
+           ["Total", 5, None, 99]], good=1, correct=False),
+    Shape("a mismatch over an error value", [HDR, ["a", 100], ["b", "#N/A"], ["Total", 100]],
           correct=False),
     Shape("a totals column that is neither a sum nor a product",
           [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, 99]], correct=False),
     Shape("a mismatch in a list with a row called Discount",
-          [HDR, ["Price", 100], ["Discount", 20], ["Total", 999]], unknown=1, correct=False,
+          [HDR, ["Price", 100], ["Discount", 20], ["Total", 999]], correct=False,
           note="a row that is taken away: the total is not the plain sum, so a difference is not judged"),
     Shape("a mismatch in a list with a rate row",
-          [HDR, ["Net pay", 2000], ["Tax rate", 20], ["Total", 5000]], unknown=1, correct=False,
+          [HDR, ["Net pay", 2000], ["Tax rate", 20], ["Total", 5000]], correct=False,
           note="a row that says it is a rate: the total is not the plain sum of the rows"),
     Shape("a mismatch in a list with a count and a largest row",
-          [["Statistic", "Value"], ["Invoices", 12], ["Largest", 900], ["Smallest", 40], ["Total", 99999]],
-          unknown=1, correct=False),
+          [["Statistic", "Value"], ["Invoices", 12], ["Largest", 900], ["Smallest", 40], ["Total", 99999]], correct=False),
     Shape("a mismatch under a second heading row of years",
           [["Category", "Sales", "Sales"], ["Item", 2023, 2024], ["Rent", 100, 110], ["Food", 200, 210],
-           ["Total", 999, 998]], unknown=2, correct=False),
+           ["Total", 999, 998]], correct=False),
     Shape("a mismatch above every row, under a second heading row of years",
           [["Category", "Sales", "Sales"], ["Item", 2023, 2024], ["Rent", 100, 110], ["Food", 200, 210],
-           ["Total", 9999, 9998]], unknown=2, correct=False,
+           ["Total", 9999, 9998]], correct=False,
           note="no other reading gives 9999: only the heading row of years keeps it from being judged"),
     Shape("a mismatch in a long table's total row",
           [["Region", "Metric", "Value"], ["North", "Orders", 12], ["North", "Customers", 9],
-           ["North", "Total", 999]], unknown=1, correct=False),
+           ["North", "Total", 999]], correct=False),
     # ---- a figure beside words that are not, WHOLE, a total word: not judged at all ----
     Shape("a figure beside Total due that differs", [HDR, ["a", 1], ["b", 2], ["Total due", 99]], correct=False),
     Shape("a figure beside Totals by region", [["Totals by region", 99], ["North", 1], ["South", 2]]),
     Shape("a rate total that is not the sum of the rates",
           [["Item", "Rate"], ["a", 0.2], ["b", 0.4], ["Total", 0.3]]),
     # ---- the third review's sheets (scratch probes r5rev3_correct / _batch2 / _more) ----
-    # An unlabelled subtotal: a row that equals the rows above it, with rows after it.
+    # A subtotal of ANY kind in the list (by a word, or a row that equals the rows above it): no row.
     *[Shape(f"an invoice whose subtotal is called {label}",
-            [HDR, ["Widget", 20], ["Gadget", 35], [label, 55], ["VAT", 11], ["Total", 66]], good=1)
+            [HDR, ["Widget", 20], ["Gadget", 35], [label, 55], ["VAT", 11], ["Total", 66]],
+            note="55 = 20 + 35: a subtotal, whatever it is called. The list is not judged")
       for label in ("Net", "Net amount", "Net total", "Total before tax", "Subtotal (ex VAT)", "Items total", "Goods")],
     Shape("an invoice with a net amount, tax and shipping",
           [["Item", "Qty", "Unit price", "Amount"], ["Widget", 2, 10, 20], ["Gadget", 1, 35, 35], ["Bracket", 3, 4, 12],
            ["Net amount", None, None, 67], ["Sales tax", None, None, 5.36], ["Shipping", None, None, 9],
-           ["Total", None, None, 81.36]], good=1),
+           ["Total", None, None, 81.36]],
+          note="a row called Net amount: a subtotal by its word"),
     Shape("an unlabelled subtotal and a total that fits neither reading",
-          [HDR, ["Widget", 20], ["Gadget", 35], ["Net", 55], ["VAT", 11], ["Total", 70]], unknown=1, correct=False,
+          [HDR, ["Widget", 20], ["Gadget", 35], ["Net", 55], ["VAT", 11], ["Total", 70]], correct=False,
           note="it reads two ways (with and without the subtotal): not judged, never a look"),
     Shape("a last row that happens to equal the rows above it",
-          [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 650]], look=("B5",), correct=False,
-          note="300 = 100 + 200, with no row after it: a row like any other, and the total differs"),
+          [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 650]], correct=False,
+          note="300 = 100 + 200: it may be a subtotal, so nothing is said (it read 'worth a look')"),
     Shape("a last row that equals the rows above it, under a total that repeats it",
-          [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 300]], unknown=1, correct=False,
+          [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 300]], correct=False,
           note="never 'adds up': the list adds up to 600 (the largest row explains 300: not judged)"),
     Shape("the best two of three scores", [["Quiz", "Score"], ["Quiz 1", 8], ["Quiz 2", 6], ["Quiz 3", 9], ["Total", 17]]),
     Shape("a variance column in points",
           [["Region", "Plan", "Actual", "Variance"], ["North", 100, 105, 5], ["South", 100, 97, -3],
            ["West", 100, 101, 1], ["Total", 300, 303, 1]], good=2),
     Shape("revenue rows, then materials taken away",
-          [HDR, ["Sales", 900], ["Other income", 100], ["Revenue", 1000], ["Materials", 400], ["Total", 600]], unknown=1),
+          [HDR, ["Sales", 900], ["Other income", 100], ["Revenue", 1000], ["Materials", 400], ["Total", 600]]),
     Shape("hours and minutes under one total", [["Part", "Time"], ["Hours", 2], ["Minutes", 30], ["Total", 150]],
           look=("B4",), unknowable=True, note="2 h 30 min is 150 minutes: nothing on the sheet says so"),
     Shape("a salary less thirteen bills",
           [HDR, ["Salary", 3000]] + [[f"Bill {i}", 100 + i] for i in range(1, 13)]
-          + [["Total", 3000 - sum(100 + i for i in range(1, 13))]], unknown=1),
+          + [["Total", 3000 - sum(100 + i for i in range(1, 13))]]),
     Shape("a change in staff by month", [["Month", "Change in staff"], ["Jan", 5], ["Feb", -2], ["Mar", 4], ["Total", 7]]),
     Shape("temperatures with their mean in the total row",
-          [["City", "Low", "High"], ["Oslo", -5, 2], ["Rome", 6, 14], ["Total", 0.5, 8]], unknown=2,
+          [["City", "Low", "High"], ["Oslo", -5, 2], ["Rome", 6, 14], ["Total", 0.5, 8]],
           note="a figure between the smallest and the largest row, of mixed signs"),
     Shape("goals for, against and the difference",
           [["Team", "For", "Against", "Diff"], ["Reds", 10, 4, 6], ["Blues", 3, 9, -6], ["Total", 13, 13, 0]], good=3),
     Shape("a survey's counts and fractions",
           [["Answer", "Count", "Fraction"], ["Yes", 60, 0.6], ["No", 40, 0.4], ["Total", 100, 1]], good=2),
     Shape("shares and a weighted cost",
-          [["Lot", "Shares", "Cost basis"], ["Lot 1", 10, 50], ["Lot 2", 30, 70], ["Total", 40, 65]], good=1, unknown=1),
-    Shape("gross less a fee", [HDR, ["Gross", 1000], ["Fee", 30], ["Total", 970]], unknown=1),
+          [["Lot", "Shares", "Cost basis"], ["Lot 1", 10, 50], ["Lot 2", 30, 70], ["Total", 40, 65]], good=1),
+    Shape("gross less a fee", [HDR, ["Gross", 1000], ["Fee", 30], ["Total", 970]]),
     Shape("ticket sales and a sponsor less the venue",
-          [HDR, ["Ticket sales", 1000], ["Sponsor", 500], ["Venue", 400], ["Total", 1100]], unknown=1),
+          [HDR, ["Ticket sales", 1000], ["Sponsor", 500], ["Venue", 400], ["Total", 1100]]),
     Shape("a mileage total a cent off its rounded rows",
           [["Trip", "Miles", "Rate", "Amount"], ["Client A", 11.1, 0.67, 7.44], ["Client B", 11.1, 0.67, 7.44],
            ["Client C", 11.1, 0.67, 7.44], ["Total", 33.3, None, 22.31]], good=1, look=("D5",), unknowable=True,
@@ -902,81 +1011,111 @@ SHAPES: list[Shape] = [
           [["Month", "Unique customers"], ["Jan", 100], ["Feb", 120], ["Total", 180]], look=("B4",), unknowable=True),
     Shape("a budget in sections under section titles",
           [["Category", "Budget"], ["Housing", None], ["Rent", 1200], ["Utilities", 150], ["Subtotal", 1350],
-           ["Food", None], ["Groceries", 400], ["Dining", 120], ["Subtotal", 520], ["Grand total", 1870]], unknown=3,
+           ["Food", None], ["Groceries", 400], ["Dining", 120], ["Subtotal", 520], ["Grand total", 1870]],
           note="a title row has no amount: a blank in the list, so nothing is judged"),
     Shape("a bank register with a column for each way",
           [["Description", "Withdrawal", "Deposit", "Balance"], ["Opening balance", None, None, 1000],
            ["Rent", 500, None, 500], ["Salary", None, 2000, 2500], ["Groceries", 120, None, 2380],
-           ["Total", 620, 2000, 2380]], unknown=2),
+           ["Total", 620, 2000, 2380]]),
     Shape("years as numbers in the heading row",
           [["Category", 2023, 2024, "Change"], ["Hardware", 100, 150, 50], ["Software", 200, 180, -20],
-           ["Total", 300, 330, 30]], unknown=2),
-    # A total that equals only PART of its list.
+           ["Total", 300, 330, 30]]),
+    # A total and a subtotal in one column: nothing is said of either (each read "adds up" or "worth a look").
     Shape("a total that forgot the tax row",
-          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 300]],
-          good=1, look=("B6",), correct=False, note="it equals the subtotal; the list adds up to 324"),
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 300]], correct=False,
+          note="a subtotal and a total in one column: not judged, so never a look"),
     Shape("a total that counts its subtotal twice",
-          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 624]],
-          good=1, look=("B6",), correct=False, note="every cell above it added: the list adds up to 324"),
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 624]], correct=False,
+          note="a subtotal and a total in one column"),
     Shape("a wrong total between a small row and the subtotal",
-          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 250]],
-          good=1, look=("B6",), correct=False,
-          note="250 is not between the plain rows (24 to 200): the subtotal is not one of them"),
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 250]], correct=False,
+          note="a subtotal and a total in one column"),
     Shape("a total after a subtotal that is itself off",
-          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 310], ["Tax", 24], ["Total", 334]],
-          good=1, look=("B4",), correct=False,
-          note="the total is its subtotal plus the row after it (it adds up); the subtotal is the one to look at"),
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 310], ["Tax", 24], ["Total", 334]], correct=False,
+          note="a subtotal and a total in one column"),
     Shape("a total with its tax row added",
-          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 324]], good=2),
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 324]],
+          note="a subtotal and a total in one column"),
     Shape("a grand total that left the shipping out",
           [HDR, ["Rent", 1200], ["Power", 150], ["Subtotal", 1350], ["Food", 400], ["Dining", 120], ["Subtotal", 520],
-           ["Shipping", 50], ["Grand total", 1870]], good=2, look=("B9",), correct=False,
-          note="it equals the subtotals alone; with the shipping it is 1,920"),
+           ["Shipping", 50], ["Grand total", 1870]], correct=False,
+          note="three totals in one column"),
     Shape("a grand total that is only the row after the subtotal",
-          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Shipping", 50], ["Grand total", 50]],
-          good=1, look=("B6",), correct=False),
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Shipping", 50], ["Grand total", 50]], correct=False,
+          note="a subtotal and a grand total in one column"),
     Shape("a total over the rows after a word in the list",
-          [HDR, ["A", 100], ["B", "TBD"], ["C", 50], ["D", 25], ["Total", 75]], unknown=1, correct=False,
+          [HDR, ["A", 100], ["B", "TBD"], ["C", 50], ["D", 25], ["Total", 75]], correct=False,
           note="75 is C + D: never 'adds up' over part of a list"),
     Shape("a total with a word in the list above it",
-          [HDR, ["A", 100], ["B", "TBD"], ["C", 50], ["D", 25], ["Total", 175]], unknown=1),
+          [HDR, ["A", 100], ["B", "TBD"], ["C", 50], ["D", 25], ["Total", 175]]),
     Shape("a total over the rows after a blank row",
-          [HDR, ["A", 100], ["B", 200], [None, None], ["C", 50], ["D", 25], ["Total", 75]], unknown=1, correct=False),
+          [HDR, ["A", 100], ["B", 200], [None, None], ["C", 50], ["D", 25], ["Total", 75]], correct=False),
     Shape("a total between its smallest and its largest row",
-          [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 250]], unknown=1, correct=False,
+          [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 250]], correct=False,
           note="admitted: an average reads the same"),
     Shape("a number typed as text inside a SUM total's list",
-          [HDR, ["A", 100], ["B", "200"], ["C", 300], ["Total", "=SUM(B2:B4)"]], unknown=1),
+          [HDR, ["A", 100], ["B", "200"], ["C", 300], ["Total", "=SUM(B2:B4)"]]),
     Shape("a totals column that adds a quantity to a price",
           [["Item", "Qty", "Price", "Total"], ["A", 3, 5, 8], ["B", 2, 10, 12]], correct=False,
           note="should be 15 and 20: a column beside a price is never said to add up"),
     Shape("a wrong total under thirteen rows",
           [HDR] + [[f"Row {i}", 10] for i in range(1, 14)] + [["Total", 150]], look=("B15",), correct=False),
     Shape("a wrong total over rows that are formulas",
-          [HDR, ["A", "=50*2"], ["B", 200], ["Total", 350]], unknown=1, correct=False,
+          [HDR, ["A", "=50*2"], ["B", 200], ["Total", 350]], correct=False,
           note="the rows are worked out, not typed: a difference is not judged"),
     Shape("a SUM total over a row the evaluator refuses",
           [["Item", "Jan", "Feb", "Both"], ["A", 50, "n/a", "=B2+C2"], ["B", 50, 0, "=B3+C3"],
-           ["Total", None, None, "=SUM(D2:D3)"]], unknown=1,
+           ["Total", None, None, "=SUM(D2:D3)"]],
           note="D2 is #VALUE! in Excel: no fallback figure is ever read for it"),
     Shape("a typed total over a row the evaluator refuses",
           [["Item", "Jan", "Feb", "Both"], ["A", 50, "abc", "=B2+C2"], ["B", 50, 0, "=B3+C3"],
-           ["Total", None, None, 100]], unknown=1, correct=False),
+           ["Total", None, None, 100]], correct=False),
+    # ---- the fourth review's sheets (scratch probe r5rev4_p3_sheets) ----
+    Shape("two Subtotals with rows between them, the second a copy of the first",
+          [HDR, ["Rent", 100], ["Power", 200], ["Subtotal", 300], ["Food", 50], ["Fun", 70], ["Subtotal", 300],
+           ["Total", 420]], correct=False,
+          note="it read '3 totals add up'. Three totals in one column: no row"),
+    Shape("two Subtotals with rows between them and no total",
+          [HDR, ["Rent", 100], ["Power", 200], ["Subtotal", 300], ["Food", 50], ["Fun", 70], ["Subtotal", 300]],
+          correct=False, note="it read '2 totals add up'"),
+    Shape("a Total column with a blank row and wrong rows below it",
+          [["Product", "Jan", "Feb", "Total"], ["Apples", 3, 4, 7], ["Pears", 1, 2, 3], [None, None, None, None],
+           ["Plums", 6, 6, 99], ["Figs", 2, 2, 50]], correct=False,
+          note="it read '1 total adds up' over the two rows it reached. A column of line totals is not judged"),
+    Shape("a Total column with one wrong row", [["Product", "Jan", "Feb", "Total"], ["Apples", 3, 4, 7],
+                                                 ["Pears", 1, 2, 30], ["Plums", 6, 6, 12]], correct=False),
+    Shape("a budget in sections, tightly packed",
+          [["Category", "Budget"], ["Rent", 1200], ["Utilities", 150], ["Subtotal", 1350], ["Groceries", 400],
+           ["Eating out", 120], ["Subtotal", 520], ["Grand total", 1870]],
+          note="every figure is right, and nothing is said: a sectioned sheet is not judged"),
+    Shape("a grand total that misses a section",
+          [["Category", "Budget"], ["Rent", 1200], ["Utilities", 150], ["Subtotal", 1350], ["Groceries", 400],
+           ["Eating out", 120], ["Subtotal", 520], ["Grand total", 1350]], correct=False),
+    Shape("a total that counts a net amount and its rows",
+          [HDR, ["a", 100], ["b", 200], ["Net amount", 300], ["VAT", 60], ["Total", 660]], correct=False,
+          note="every cell above it added: 660. With a subtotal in the list 'adds up' is never said"),
+    Shape("a total that left the last row out, over a row that equals the rows above it",
+          [HDR, ["a", 100], ["b", 200], ["c", 300], ["d", 50], ["Total", 600]], correct=False,
+          note="300 = 100 + 200: not judged"),
+    Shape("a subtotal alone in its column", [HDR, ["a", 100], ["b", 250], ["Subtotal", 350]], good=1),
+    Shape("a total that is its two rows to the last cent", [HDR, ["a", 10.10], ["b", 20.20], ["Total", 30.30]], good=1),
+    Shape("a total a cent off its two rows", [HDR, ["a", 10.10], ["b", 20.20], ["Total", 30.31]], look=("B4",),
+          correct=False),
+    Shape("a sign forgotten on a refund", [HDR, ["Income", 500], ["Refund given", -200], ["Total", 700]], correct=False,
+          note="700 is 500 less -200: a plain other reading (rows taken away) explains it, so it is not judged"),
 ]
 
 
-def _judged(path: Path) -> "tuple[tuple[int, tuple, int], list[Check]]":
-    """``((good, the cells worth a look, unknown), the totals rows)`` as the checks say it."""
+def _judged(path: Path) -> "tuple[tuple[int, tuple], list[Check]]":
+    """``((good, the cells worth a look), the totals rows)`` as the checks say it."""
     got = _by(content.check_files([str(path)]), SHEET_TOTALS)
-    good, look, unknown = 0, (), 0
+    good, look = 0, ()
     for c in got:
         if c.result == PASSED:
             good = int(re.fullmatch(r"(\d+) totals? adds? up", c.detail).group(1))
         elif c.result == LOOK:
             look = tuple(re.findall(r"(?:^|; )([A-Z]+\d+) says ", c.detail))
-        elif c.result == NOT_CHECKED:
-            unknown = int(re.match(r"(\d+) totals? could not be worked out by rule: ", c.detail).group(1))
-    return (good, look, unknown), got
+    return (good, look), got
 
 
 def _write(how: str, path: Path, rows) -> Path:
@@ -989,6 +1128,9 @@ def _write(how: str, path: Path, rows) -> Path:
 def test_the_table_holds_every_everyday_shape():
     assert len(SHAPES) >= 100 and len({s.name for s in SHAPES}) == len(SHAPES)
     assert sum(1 for s in SHAPES if s.correct) >= 70 and sum(1 for s in SHAPES if s.look) >= 6
+    # Most everyday sheets get NO row about their totals now: that is the rule, and the table says so.
+    silent = sum(1 for s in SHAPES if not s.good and not s.look)
+    assert silent > len(SHAPES) // 2, silent
     # A correct sheet is never expected to be worth a look, but for the few
     # nothing on the sheet can explain (each is named so, and stays listed).
     assert not [s.name for s in SHAPES if s.correct and s.look and not s.unknowable]
@@ -1018,14 +1160,14 @@ def test_over_the_whole_table_no_total_is_ever_a_problem(tmp_path, how):
 def test_every_shape_of_total_gets_the_answer_the_table_says(tmp_path, shape, how):
     p = _write(how, tmp_path / "sheet.xlsx", shape.rows)
     got, rows = _judged(p)
-    assert got == (shape.good, tuple(shape.look), shape.unknown), (shape.name, how, [c.detail for c in rows])
-    assert not [c for c in rows if c.result == FAILED], f"a total reads 'Problem': {shape.name}"
+    assert got == (shape.good, tuple(shape.look)), (shape.name, how, [c.detail for c in rows])
+    assert not [c for c in rows if c.result in (FAILED, NOT_CHECKED)], f"a total reads 'Problem' or 'Not checked': {shape.name}"
     if shape.correct and not shape.unknowable:
         assert not [c for c in rows if c.result == LOOK], f"a correct sheet is 'worth a look': {shape.name}"
         line, tone = line_for(_rows(content.check_files([str(p)])))
         assert tone == "quiet" and "Problem" not in line and "Worth a look" not in line, (shape.name, line)
-    if not shape.good and not shape.look and not shape.unknown:
-        assert rows == [], "a figure that is not beside a total word was judged"
+    if not shape.good and not shape.look:
+        assert rows == [], "a total that is not the one shape got a row"
 
 
 def test_a_total_that_differs_is_worth_a_look_with_both_figures_and_no_verdict(tmp_path):
@@ -1049,24 +1191,25 @@ def test_one_total_that_adds_up_and_one_that_differs_are_both_said(tmp_path):
 
 
 @pytest.mark.parametrize("rows,total,result", [
-    # An exact half rounds either way in different hands: both add up.
-    ([12.5, 8], 21, PASSED), ([12.5, 8], 20, PASSED), ([0.25, 0.1], 0.4, PASSED), ([0.25, 0.1], 0.3, PASSED),
-    ([-12.5, -8], -21, PASSED), ([-12.5, -8], -20, PASSED),
-    # A total written coarser than its rows that matches only after rounding is not judged.
-    ([600.20, 634.29], 1234, NOT_CHECKED), ([33.4, 66.9], 100, NOT_CHECKED), ([1.4, 1.4], 3, NOT_CHECKED),
-    ([33.335, 33.335, 33.335], 100.02, NOT_CHECKED),
+    # "Adds up" means exactly its arithmetic: EQUAL to the sum of every cell of the list.
+    ([33.33, 33.33, 33.34], 100, PASSED), ([0.1, 0.2], 0.3, PASSED), ([0.1, 0.2, 0.35], 0.65, PASSED),
+    ([1e15, 1], 1e15 + 1, PASSED), ([-12.5, -8], -20.5, PASSED),
+    # A total that matches only after ROUNDING is a guess about what its author meant: nothing is said.
+    ([12.5, 8], 21, None), ([12.5, 8], 20, None), ([0.25, 0.1], 0.4, None), ([0.25, 0.1], 0.3, None),
+    ([-12.5, -8], -21, None), ([-12.5, -8], -20, None),
+    ([600.20, 634.29], 1234, None), ([33.4, 66.9], 100, None), ([1.4, 1.4], 3, None),
+    ([33.335, 33.335, 33.335], 100.02, None), ([33.333, 33.333, 33.333], 100, None),
     # ... and one that is simply different is worth a look, rounded or not.
-    ([600.20, 634.29], 1236, LOOK), ([12.5, 8], 22, LOOK), ([0.25, 0.1], 0.5, LOOK), ([100, 200, 300], 650, LOOK),
-    # To the cent is the same.
-    ([33.33, 33.33, 33.34], 100, PASSED), ([0.1, 0.2], 0.3, PASSED),
+    ([600.20, 634.29], 1236, LOOK), ([12.5, 8], 22, LOOK), ([0.25, 0.1], 0.5, LOOK), ([100, 200, 310], 650, LOOK),
+    ([1e15, 1], 1e15 + 3, LOOK), ([10.10, 20.20], 30.31, LOOK),
 ])
-def test_a_total_at_an_exact_half_adds_up_either_way_and_a_rounder_total_is_not_judged(tmp_path, rows, total, result):
+def test_adds_up_means_exactly_its_arithmetic_and_a_total_that_only_rounds_to_it_is_not_judged(
+        tmp_path, rows, total, result):
     p = _xlsx(tmp_path / "t.xlsx", [["Item", "Amount"], *[[f"row {i}", v] for i, v in enumerate(rows)],
                                     ["Total", total]])
     got = _by(content.check_files([str(p)]), SHEET_TOTALS)
-    assert [c.result for c in got] == [result], [c.detail for c in got]
-    if result == NOT_CHECKED:
-        assert got[0].detail.endswith("is written rounder than the rows above it, so it was not added up")
+    assert [c.result for c in got] == ([result] if result else []), [c.detail for c in got]
+    assert NOT_CHECKED not in [c.result for c in got]
 
 
 def test_the_total_is_quoted_as_its_cell_holds_it_and_two_figures_never_print_the_same(tmp_path):
@@ -1086,19 +1229,56 @@ def test_the_total_is_quoted_as_its_cell_holds_it_and_two_figures_never_print_th
     assert content._figures(3.0, 3.0) == ("3", "3")
     # Two that differ far to the right never print as the same NUMBER ("1" and "1.00" are one number).
     assert content._figures(1.0, 1.0000001) == ("1", "1.0000001")
-    # A total that equals part of its list names what the list adds up to, each subtotal counted once.
-    forgot = _xlsx(tmp_path / "forgot.xlsx", [["Item", "Amount"], ["Widget", 100], ["Gadget", 200], ["Subtotal", 300],
-                                              ["Tax", 24], ["Total", 300]])
-    assert [c.detail for c in _by(content.check_files([str(forgot)]), SHEET_TOTALS) if c.result == LOOK] == [
-        "B6 says 300 and the cells above it add up to 324"]
 
 
-def test_a_mismatch_in_a_loose_shape_says_why_in_plain_words(tmp_path):
-    p = _xlsx(tmp_path / "t.xlsx", [["Rent", 100], ["Food", 300], ["Total", 999]])
-    assert _by(content.check_files([str(p)]), SHEET_TOTALS) == [Check(
-        SHEET_TOTALS, NOT_CHECKED,
-        "1 total could not be worked out by rule: B3 could not be added up: the rows above it could not be "
-        "read as one list", file="t.xlsx")]
+def test_a_total_in_any_other_shape_gets_no_row_at_all(tmp_path):
+    """Decision 3. Not "adds up", not "worth a look", and not "not checked"
+    either: where the shape needs a guess about what the author meant,
+    nothing is said. Each of these said something before."""
+    loose = {
+        "no heading": [["Rent", 100], ["Food", 300], ["Total", 999]],
+        "a subtotal in the list, total right": [["Item", "Amount"], ["Widget", 100], ["Gadget", 200], ["Subtotal", 300],
+                                                ["Tax", 24], ["Total", 324]],
+        "a subtotal in the list, total forgot the tax": [["Item", "Amount"], ["Widget", 100], ["Gadget", 200],
+                                                         ["Subtotal", 300], ["Tax", 24], ["Total", 300]],
+        "a row that is the sum of the rows above it": [["Item", "Amount"], ["A", 100], ["B", 200], ["C", 300],
+                                                       ["Total", 650]],
+        "a formula in the list": [["Item", "Amount"], ["A", "=50*2"], ["B", 200], ["Total", 300]],
+        "one row": [["Item", "Amount"], ["Rent", 100], ["Total", 100]],
+        "a blank in the list": [["Item", "Amount"], ["Rent", 100], ["Parking", None], ["Food", 300], ["Total", 400]],
+        "a column of line totals": [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 3], ["b", 10, 20, 30]],
+    }
+    for name, rows in loose.items():
+        p = _xlsx(tmp_path / "t.xlsx", rows)
+        assert _by(content.check_files([str(p)]), SHEET_TOTALS) == [], name
+
+
+def test_the_one_shape_holds_no_subtotal_of_any_kind():
+    """A word that reads like a total in ANY cell of a row, and a row that
+    equals the sum of two or more rows directly above it."""
+    def held(rows):
+        cells = {(r, c): v for r, row in enumerate(rows, start=1) for c, v in enumerate(row, start=1) if v is not None}
+        by_row: dict = {}
+        for (r, c) in cells:
+            by_row.setdefault(r, []).append(c)
+        return content._has_subtotal(cells, by_row, [(r, float(row[1])) for r, row in enumerate(rows, start=1)])
+
+    assert not held([["Rent", 1200], ["Food", 300], ["Travel", 150.5]])
+    for label in ("Subtotal", "Sub-total", "Net", "Net amount", "Total before tax", "Items total", "Gross pay",
+                  "Zwischensumme Gesamt", "Sum of the above"):
+        assert held([["Rent", 100], [label, 100], ["Tax", 5]]), label
+    assert held([["x", 5, "net of fees"], ["y", 7], ["z", 9]]), "the word may sit in any cell of the row"
+    assert not held([["Internet", 100], ["Sumo class", 20], ["Grossery", 7]]), "a word, not a part of one"
+    # A row that equals two or more rows directly above it: anywhere in the list, of any length.
+    assert held([["a", 100], ["b", 200], ["c", 300]]) and held([["a", 100], ["b", 200], ["c", 300], ["d", 50]])
+    assert held([["x", 7], ["a", 100], ["b", 200], ["c", 300], ["d", 50]]), "the run need not start the list"
+    assert held([["a", 1], ["b", 2], ["c", 3], ["d", 4], ["e", 10]]) and held([["a", 33.33], ["b", 33.33], ["c", 66.66]])
+    assert not held([["a", 100], ["b", 100]]), "one row above is a row that repeats, not a sum"
+    assert not held([["a", 100], ["b", 250], ["c", 300]]) and not held([["a", 100], ["b", 200], ["c", 301]])
+    assert held([["a", 0.1], ["b", 0.2], ["c", 0.3]]), "what a computer's arithmetic loses is not a difference"
+    # A long list is looked through in one pass (never one row against every row above it, one by one).
+    long = [[f"r{i}", 1000.5] for i in range(20_000)]
+    assert not held(long) and held(long + [["the last three", 3001.5]])
 
 
 @pytest.mark.parametrize("vals,total", [
@@ -1146,52 +1326,58 @@ def test_a_formula_total_with_no_saved_result_is_added_up_never_read_as_zero(tmp
     p = _xlsx(tmp_path / "t.xlsx", [*BUDGET, ["Total", "=SUM(B2:B4)"]])
     book = content._load(p)
     assert book.values["Summary"].get((5, 2)) is None, "the file really holds no saved result"
-    # Not a number the file holds, and none anybody worked out yet: never a figure by default.
-    assert book.known("Summary", 5, 2) is None
-    content._work_out(book)
-    assert book.known("Summary", 5, 2) == pytest.approx(1650.5)
+    # A plain SUM of exactly the typed list above it adds up by what it IS, whatever anybody saved for it.
     assert _by(content.check_files([str(p)]), SHEET_TOTALS) == [
         Check(SHEET_TOTALS, PASSED, "1 total adds up", file="t.xlsx")]
 
 
 def test_a_formula_total_adds_up_only_when_it_sums_exactly_the_list_above_it(tmp_path):
     """S1: ``=SUM(B2:B3)`` over data in B2:B4 used to read "1 total adds
-    up" (it adds what it names). It is "not checked", with both ranges."""
-    short = _xlsx(tmp_path / "short.xlsx", [*BUDGET, ["Total", "=SUM(B2:B3)"]])
-    assert _by(content.check_files([str(short)]), SHEET_TOTALS) == [Check(
-        SHEET_TOTALS, NOT_CHECKED,
-        "1 total could not be worked out by rule: B5 adds B2 to B3, and the list above it runs from B2 to B4",
-        file="short.xlsx")]
-    one_cell = _xlsx(tmp_path / "cell.xlsx", [*BUDGET, ["Total", "=B2"]])
-    assert _by(content.check_files([str(one_cell)]), SHEET_TOTALS) == [Check(
-        SHEET_TOTALS, NOT_CHECKED,
-        "1 total could not be worked out by rule: B5 is worked out by a formula this check cannot follow",
-        file="cell.xlsx")]
-    plus = _xlsx(tmp_path / "plus.xlsx", [*BUDGET, ["Total", "=B2+B3+B4"]])
-    assert [c.result for c in _by(content.check_files([str(plus)]), SHEET_TOTALS)] == [NOT_CHECKED]
+    up" (it adds what it names). Any formula that is not a plain SUM of
+    exactly the list above it gets no row."""
+    for name, formula in {"short": "=SUM(B2:B3)", "late": "=SUM(B3:B4)", "long": "=SUM(B1:B4)", "cell": "=B2",
+                          "plus": "=B2+B3+B4", "other column": "=SUM(A2:A4)", "two ranges": "=SUM(B2:B3,B4)",
+                          "another sheet": "=SUM(Other!B2:B4)", "twice": "=SUM(B2:B4)*2",
+                          "an average": "=AVERAGE(B2:B4)", "a subtotal function": "=SUBTOTAL(9,B2:B4)"}.items():
+        p = _xlsx(tmp_path / "t.xlsx", [*BUDGET, ["Total", formula]], more={"Other": [["a", 1]]})
+        assert _by(content.check_files([str(p)]), SHEET_TOTALS) == [], name
+    exact = _xlsx(tmp_path / "exact.xlsx", [*BUDGET, ["Total", "=SUM(B2:B4)"]], more={"Other": [["a", 1]]})
+    assert [c.result for c in _by(content.check_files([str(exact)]), SHEET_TOTALS)] == [PASSED]
+    named = _xlsx(tmp_path / "named.xlsx", [*BUDGET, ["Total", "=SUM(Summary!$B$2:$B$4)"]], more={"Other": [["a", 1]]})
+    assert [c.result for c in _by(content.check_files([str(named)]), SHEET_TOTALS)] == [PASSED]
 
 
-def test_a_formula_total_whose_saved_result_differs_from_its_cells_is_not_checked_never_wrong(tmp_path, monkeypatch):
-    """A file another program wrote may hold any saved result for a formula
-    (one common writer saves 0 for every one); a spreadsheet program works it
-    out again on opening. Said, with both figures; never "Problem", never
-    "Worth a look"."""
-    p = _xlsx(tmp_path / "t.xlsx", [*BUDGET, ["Total", "=SUM(B2:B4)"]])
-    real = content._load
+def test_a_formula_total_whose_saved_result_differs_from_its_cells_gets_no_row(tmp_path):
+    """A file that stands by a saved result for its SUM which is NOT what
+    its cells add up to: the formula adds up by what it is, the file says
+    another figure. Nothing is said: never "adds up", never a problem."""
+    plain = _xlsx(tmp_path / "plain.xlsx", [*BUDGET, ["Total", "=SUM(B2:B4)"]])
 
-    def stale(path, late=content._never_late):
-        book = real(path, late)
-        book.values["Summary"][(5, 2)] = 1500
-        return book
+    def saved(figure: str):
+        def change(name: str, data: bytes) -> bytes:
+            if name != "xl/worksheets/sheet1.xml":
+                return data
+            text = data.decode("utf-8")
+            for empty in ("<v></v>", "<v />", "<v/>"):
+                text = text.replace(f"<f>SUM(B2:B4)</f>{empty}", f"<f>SUM(B2:B4)</f><v>{figure}</v>")
+            assert f"<v>{figure}</v>" in text, text[-400:]
+            return text.encode("utf-8")
+        return change
 
-    monkeypatch.setattr(content, "_load", stale)
-    assert _by(content.check_files([str(p)]), SHEET_TOTALS) == [Check(
-        SHEET_TOTALS, NOT_CHECKED,
-        "1 total could not be worked out by rule: B5 has a saved result of 1,500 and its cells add up to "
-        "1,650.50: a spreadsheet program works it out again when it opens the file", file="t.xlsx")]
+    stale = _stands_by(_repack(plain, tmp_path / "a.xlsx", saved("1500")), tmp_path / "stale.xlsx")
+    assert content._load(stale).values["Summary"] == {(5, 2): 1500}
+    got = content.check_files([str(stale)])
+    assert _by(got, SHEET_TOTALS) == [] and not [c for c in got if c.result in (FAILED, LOOK)]
+    right = _stands_by(_repack(plain, tmp_path / "b.xlsx", saved("1650.5")), tmp_path / "right.xlsx")
+    assert _by(content.check_files([str(right)]), SHEET_TOTALS) == [
+        Check(SHEET_TOTALS, PASSED, "1 total adds up", file="right.xlsx")]
+    # The same stale figure in a file that asks to be worked out again is a placeholder: it is not read at all.
+    asks = _repack(plain, tmp_path / "asks.xlsx", saved("1500"))
+    assert _by(content.check_files([str(asks)]), SHEET_TOTALS) == [
+        Check(SHEET_TOTALS, PASSED, "1 total adds up", file="asks.xlsx")]
 
 
-def test_a_total_that_cannot_be_worked_out_by_rule_is_not_checked_never_passed(tmp_path):
+def test_a_total_over_a_formula_nobody_could_work_out_gets_no_row(tmp_path):
     p = _xlsx(tmp_path / "t.xlsx", [
         ["Item", "Amount"],
         ["Rent", 1200],
@@ -1200,53 +1386,55 @@ def test_a_total_that_cannot_be_worked_out_by_rule_is_not_checked_never_passed(t
         ["Grand total", "=AVERAGE(B2:B3)*2"],
     ])
     checks = content.check_files([str(p)])
-    got = _by(checks, SHEET_TOTALS)
-    assert [c.result for c in got] == [NOT_CHECKED]
-    assert got[0].detail == (
-        "2 totals could not be worked out by rule: B4 sits under a cell this check could not work out, and 1 more")
+    assert _by(checks, SHEET_TOTALS) == []
     assert _by(checks, SHEET_ERRORS) == [Check(
         SHEET_ERRORS, NOT_CHECKED, "3 formulas have no saved result and could not be worked out here", file="t.xlsx")]
 
 
-def test_a_grand_total_over_subtotals_is_accepted_and_a_wrong_one_is_not_called_wrong_by_guess(tmp_path):
+def test_a_sheet_with_a_subtotal_or_two_totals_in_a_column_says_nothing_about_totals(tmp_path):
+    """The subtotal acceptance is GONE. A grand total over subtotals read
+    "3 totals add up"; a second Subtotal that was a copy of the first read
+    the same. Which cells each of several totals adds is a guess."""
     rows = [
         ["Line", "Amount"],
         ["Sales", 1000], ["Other", 50], ["Subtotal", 1050],
         ["Fees", 20], ["Interest", 5], ["Subtotal", 25],
     ]
-    good = _xlsx(tmp_path / "good.xlsx", [*rows, ["Grand total", 1075]])
-    assert _by(content.check_files([str(good)]), SHEET_TOTALS) == [
-        Check(SHEET_TOTALS, PASSED, "3 totals add up", file="good.xlsx")]
-    odd = _xlsx(tmp_path / "odd.xlsx", [*rows, ["Grand total", 999]])
-    got = {c.result: c.detail for c in _by(content.check_files([str(odd)]), SHEET_TOTALS)}
-    assert got[PASSED] == "2 totals add up"
-    # 999 lies between the subtotals: another plain reading, so it is not judged (and never "adds up").
-    assert got[NOT_CHECKED] == ("1 total could not be worked out by rule: B8 may be worked out another way than "
-                                "adding the rows above it")
-    assert FAILED not in got
+    sheets = {
+        "right": [*rows, ["Grand total", 1075]],
+        "a grand total off": [*rows, ["Grand total", 999]],
+        "the second subtotal is a copy of the first": [*rows[:6], ["Subtotal", 1050], ["Grand total", 1075]],
+        "two subtotals and no grand total": rows,
+        "one subtotal, then a total": [["Item", "Amount"], ["Widget", 100], ["Gadget", 250], ["Subtotal", 350],
+                                       ["Total", 350]],
+        "two tables one above the other": [["Item", "Amount"], ["a", 1], ["b", 5], ["Total", 6], [None, None],
+                                           ["Item", "Amount"], ["c", 5], ["d", 7], ["Total", 12]],
+    }
+    for name, grid in sheets.items():
+        got = content.check_files([str(_xlsx(tmp_path / "t.xlsx", grid))])
+        assert _by(got, SHEET_TOTALS) == [], name
+        assert line_for(_rows(got))[0] == "Checked by Iron Jarvis: the spreadsheet opens, no error cells.", name
+    # One total alone in its column is judged, each column on its own (two tables side by side).
+    side = [["Item", "Amount", None, "Item", "Amount"], ["a", 1, None, "x", 10], ["b", 5, None, "y", 20],
+            ["Total", 6, None, "Total", 30]]
+    assert _by(content.check_files([str(_xlsx(tmp_path / "s.xlsx", side))]), SHEET_TOTALS) == [
+        Check(SHEET_TOTALS, PASSED, "2 totals add up", file="s.xlsx")]
 
 
-def test_a_total_column_adds_up_only_as_sums_and_never_beside_a_price(tmp_path):
-    """Each row the SUM of the numbers to its left: one total. A column
-    beside one that is not added (``Qty | Each | Total``) is a product or
-    something else: "adds up" would not be true of it, so nothing is said
-    (3 + 5 under Total 8 read "1 total adds up")."""
-    sums = _xlsx(tmp_path / "sums.xlsx", [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 3], ["b", 10, 20, 30]])
-    assert _by(content.check_files([str(sums)]), SHEET_TOTALS) == [
-        Check(SHEET_TOTALS, PASSED, "1 total adds up", file="sums.xlsx")]
+def test_a_column_headed_by_a_total_word_is_not_judged(tmp_path):
+    """The check of a totals COLUMN is GONE: it walked down to the first
+    blank and said "adds up" over the rows it never reached."""
     for name, rows in {
+        "sums.xlsx": [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 3], ["b", 10, 20, 30]],
+        "wrong_below_a_blank.xlsx": [["Product", "Jan", "Feb", "Total"], ["Apples", 3, 4, 7], ["Pears", 1, 2, 3],
+                                     [None, None, None, None], ["Plums", 6, 6, 99], ["Figs", 2, 2, 50]],
         "product.xlsx": [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, 7.5], ["ink", 2, 10, 20]],
         "sum_of_qty_and_price.xlsx": [["Item", "Qty", "Price", "Total"], ["A", 3, 5, 8], ["B", 2, 10, 12]],
         "neither.xlsx": [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, 99]],
+        "sum_formulas.xlsx": [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, "=SUM(B2:C2)"], ["b", 10, 20, "=SUM(B3:C3)"]],
     }.items():
         assert _by(content.check_files([str(_xlsx(tmp_path / name, rows))]), SHEET_TOTALS) == [], name
-    # Beside columns that ARE added, a row that is their product is not their sum: never "adds up".
-    product = _xlsx(tmp_path / "times.xlsx", [["Name", "Jan", "Feb", "Total"], ["a", 3, 2.5, 7.5]])
-    assert [c.result for c in _by(content.check_files([str(product)]), SHEET_TOTALS)] == [NOT_CHECKED]
-    other = _xlsx(tmp_path / "other.xlsx", [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 99]])
-    (only,) = _by(content.check_files([str(other)]), SHEET_TOTALS)
-    assert only.result == NOT_CHECKED
-    assert only.detail.endswith("the “Total” column is not the sum of the numbers beside it")
+    assert not hasattr(content, "_column_total")
 
 
 def test_a_sheet_with_no_labelled_total_says_nothing_about_totals(tmp_path):
@@ -1337,31 +1525,168 @@ def test_a_word_document_with_no_text_found_is_worth_a_look_never_a_problem(tmp_
     assert _by(content.check_files([str(full)]), DOC_TEXT) == [Check(DOC_TEXT, PASSED, "has text", file="letter.docx")]
 
 
-def test_a_word_documents_text_is_any_word_in_it_a_text_box_a_content_control_a_header(tmp_path):
-    """A letter whose words sit in a text box, a content control or only in
-    its letterhead read "it has no text": only the body's own paragraphs and
-    tables were looked at."""
+def test_found_no_text_is_said_only_when_the_reader_found_none_and_no_part_of_the_file_holds_any(tmp_path):
+    """Decision 9. "has text": the app's own reader read words (the body's
+    paragraphs and tables, the headers, the footers, the notes). A letter
+    whose words sit where that reader does not read (a text box, a content
+    control, a part nothing points to, another prefix) is NOT "no text
+    found": it is "not checked". "Found no text" needs both: the reader
+    read none, and no part of the package holds a run of text."""
+    import zipfile
+
     import docx
 
-    control = _docx(tmp_path / "control.docx", (
-        f"<w:sdt {_W}><w:sdtContent><w:p><w:r><w:t>Dear Ms Lee, thank you.</w:t></w:r></w:p></w:sdtContent></w:sdt>"))
-    box = _docx(tmp_path / "box.docx", (
-        f"<w:p {_W}><w:r><w:pict><v:textbox><w:txbxContent><w:p><w:r><w:t>Words in a box</w:t></w:r></w:p>"
-        "</w:txbxContent></v:textbox></w:pict></w:r></w:p>"))
     letterhead = _docx(tmp_path / "letterhead.docx", header_text="ACME LTD")
     table = tmp_path / "table.docx"
     d = docx.Document()
     d.add_table(rows=1, cols=1).cell(0, 0).text = "Rent"
     d.save(str(table))
-    for path in (control, box, letterhead, table):
+    for path in (letterhead, table):
         assert _by(content.check_files([str(path)]), DOC_TEXT) == [
             Check(DOC_TEXT, PASSED, "has text", file=path.name)], path.name
-    # Blank runs, a tab and a line break are not text.
+    control = _docx(tmp_path / "control.docx", (
+        f"<w:sdt {_W}><w:sdtContent><w:p><w:r><w:t>Dear Ms Lee, thank you.</w:t></w:r></w:p></w:sdtContent></w:sdt>"))
+    box = _docx(tmp_path / "box.docx", (
+        f"<w:p {_W}><w:r><w:pict><v:textbox><w:txbxContent><w:p><w:r><w:t>Words in a box</w:t></w:r></w:p>"
+        "</w:txbxContent></v:textbox></w:pict></w:r></w:p>"))
+    # Words in a part the document does not point to (the reviewer's file), and under another prefix.
+    stray = tmp_path / "stray.docx"
+    docx.Document().save(str(stray))
+    with zipfile.ZipFile(stray, "a") as z:
+        z.writestr("word/footnotes.xml", '<x:footnotes xmlns:x="urn:x"><x:t>See the 2023 audit.</x:t></x:footnotes>')
+    for path in (control, box, stray):
+        got = content.check_files([str(path)])
+        assert got == [Check(FILE_OPENS, PASSED, "opens", file=path.name),
+                       Check(DOC_TEXT, NOT_CHECKED, content.TEXT_NOT_READ, file=path.name)], path.name
+        line, tone = line_for(_rows(got))
+        assert tone == "quiet" and "found no text" not in line and "Worth a look" not in line, line
+    # Blank runs, a tab and a line break are not text: no part holds any, so "found no text" is true.
     blank = _docx(tmp_path / "blank.docx", (
         f"<w:sdt {_W}><w:sdtContent><w:p><w:r><w:t xml:space='preserve'>   </w:t><w:tab/></w:r></w:p>"
         "</w:sdtContent></w:sdt>"))
     assert _by(content.check_files([str(blank)]), DOC_TEXT) == [
         Check(DOC_TEXT, LOOK, content.NO_TEXT, file="blank.docx")]
+    # A title in the document's properties is not text of the document.
+    titled = tmp_path / "titled.docx"
+    d = docx.Document()
+    d.core_properties.title = "Quarterly report"
+    d.save(str(titled))
+    assert _by(content.check_files([str(titled)]), DOC_TEXT) == [Check(DOC_TEXT, LOOK, content.NO_TEXT, file="titled.docx")]
+    # A package that cannot be looked through, or a deadline that ran out: never "found no text".
+    assert content._package_holds(tmp_path / "gone.docx", content._WORD_PART_RX, content._TEXT_RUN_RX) is None
+    assert content._package_holds(blank, content._WORD_PART_RX, content._TEXT_RUN_RX, lambda: True) is None
+    assert content._package_holds(blank, content._WORD_PART_RX, content._TEXT_RUN_RX) is False
+    assert content._package_holds(box, content._WORD_PART_RX, content._TEXT_RUN_RX) is True
+    late = content.check_one(str(blank), may_read=lambda _p: True, late=lambda: True)
+    assert [(c.check, c.result, c.detail) for c in late] == [
+        (FILE_OPENS, PASSED, "opens"), (DOC_TEXT, NOT_CHECKED, content.TEXT_NOT_READ)]
+
+
+def test_a_word_file_is_opened_by_the_apps_own_reader_never_judged_by_the_names_of_its_parts(tmp_path):
+    """Decision 2. Word Online saves the main part as ``word/document2.xml``.
+    That is a valid file (the package says where its main part is): it read
+    "Problem: a part of the file is missing"."""
+    import docx
+
+    plain = tmp_path / "plain.docx"
+    d = docx.Document()
+    d.add_paragraph("The meeting is on Monday.")
+    d.save(str(plain))
+
+    def change(name: str, data: bytes) -> bytes:
+        if name in ("[Content_Types].xml", "_rels/.rels"):
+            return data.replace(b"word/document.xml", b"word/document2.xml")
+        return data
+
+    import zipfile
+
+    online = tmp_path / "letter.docx"
+    with zipfile.ZipFile(plain) as zin, zipfile.ZipFile(online, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            name = {"word/document.xml": "word/document2.xml",
+                    "word/_rels/document.xml.rels": "word/_rels/document2.xml.rels"}.get(item.filename, item.filename)
+            zout.writestr(name, change(item.filename, zin.read(item.filename)))
+    with zipfile.ZipFile(online) as z:
+        assert "word/document.xml" not in z.namelist()
+    assert content.check_files([str(online)]) == [
+        Check(FILE_OPENS, PASSED, "opens", file="letter.docx"), Check(DOC_TEXT, PASSED, "has text", file="letter.docx")]
+
+
+def test_a_workbook_is_opened_by_the_apps_own_reader_never_judged_by_the_names_of_its_parts(tmp_path):
+    plain = _xlsx(tmp_path / "plain.xlsx", [*BUDGET, ["Total", 1650.5]])
+    import zipfile
+
+    other = tmp_path / "book.xlsx"
+    with zipfile.ZipFile(plain) as zin, zipfile.ZipFile(other, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename in ("[Content_Types].xml", "_rels/.rels"):
+                data = data.replace(b"xl/workbook.xml", b"xl/workbook2.xml")
+            name = {"xl/workbook.xml": "xl/workbook2.xml",
+                    "xl/_rels/workbook.xml.rels": "xl/_rels/workbook2.xml.rels"}.get(item.filename, item.filename)
+            zout.writestr(name, data)
+    with zipfile.ZipFile(other) as z:
+        assert "xl/workbook.xml" not in z.namelist()
+    got = content.check_files([str(other)])
+    assert [(c.check, c.result, c.detail) for c in got] == [
+        (FILE_OPENS, PASSED, "opens"), (SHEET_ERRORS, PASSED, "no error cells"), (SHEET_TOTALS, PASSED, "1 total adds up")]
+    # ... and whether it asks to be worked out again is read from its workbook part, whatever it is called.
+    assert content._recalculates(other) is True
+
+
+def test_a_workbook_whose_cells_the_reader_does_not_see_is_not_called_empty(tmp_path):
+    """Decision 9. A Strict Open XML workbook (Excel: Save As) opens, and the
+    reader finds no cell in it: it read "it has no filled cells"."""
+    plain = _xlsx(tmp_path / "plain.xlsx", [*BUDGET, ["Total", 1650.5]])
+
+    def strict(_name: str, data: bytes) -> bytes:
+        return data.replace(b"http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                            b"http://purl.oclc.org/ooxml/spreadsheetml/main")
+
+    odd = _repack(plain, tmp_path / "strict.xlsx", strict)
+    assert not any(content._load(odd).formulas.values()), "the reader reads Strict Open XML now: read the test again"
+    got = content.check_files([str(odd)])
+    assert got == [Check(FILE_OPENS, PASSED, "opens", file="strict.xlsx"),
+                   Check(DOC_TEXT, NOT_CHECKED, content.CELLS_NOT_READ, file="strict.xlsx")]
+    assert "no filled cells" not in line_for(_rows(got))[0]
+    # A workbook that really holds no cell is still worth a look.
+    bare = tmp_path / "bare.xlsx"
+    Workbook().save(bare)
+    assert content._package_holds(bare, content._SHEET_PART_RX, content._CELL_RX) is False
+    assert content._package_holds(odd, content._SHEET_PART_RX, content._CELL_RX) is True
+    assert _by(content.check_files([str(bare)]), DOC_TEXT) == [Check(DOC_TEXT, LOOK, content.NO_CELLS, file="bare.xlsx")]
+
+
+def test_an_error_cell_is_a_cell_whose_type_is_an_error_never_text_that_reads_like_one(tmp_path):
+    """Decision 8. " #REF! " typed with spaces round it, and "#N/A" kept as
+    text (an inline string), are words. Only a cell whose TYPE is an error
+    is one."""
+    p = _xlsx(tmp_path / "t.xlsx", [["Note"], ["If you see #DIV/0! call me"], [" #REF! "], ["#N/A"], [5]])
+    assert content._load(p).errors["Summary"] == {(4, 1): "#N/A"}, "openpyxl saves a bare error word as an error cell"
+    assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [
+        Check(SHEET_ERRORS, FAILED, "A4 holds #N/A", file="t.xlsx")]
+
+    def as_text(name: str, data: bytes) -> bytes:
+        if name != "xl/worksheets/sheet1.xml":
+            return data
+        out = re.sub(rb'<c r="A4"[^>]*>.*?</c>', b'<c r="A4" t="inlineStr"><is><t>#N/A</t></is></c>', data, flags=re.S)
+        assert out != data
+        return out
+
+    text = _repack(p, tmp_path / "text.xlsx", as_text)
+    book = content._load(text)
+    assert book.formulas["Summary"][(4, 1)] == "#N/A" and book.errors["Summary"] == {}
+    assert _by(content.check_files([str(text)]), SHEET_ERRORS) == [
+        Check(SHEET_ERRORS, PASSED, "no error cells", file="text.xlsx")]
+    # The slower read tells the two apart the same way.
+    from openpyxl import load_workbook
+
+    for path, want in ((p, {(4, 1): "#N/A"}), (text, {})):
+        wb = load_workbook(str(path), read_only=True)
+        try:
+            assert content._read_twice(wb, path, content._never_late).errors["Summary"] == want
+        finally:
+            wb.close()
 
 
 def test_a_text_document_of_blank_space_is_worth_a_look(tmp_path):
@@ -1377,6 +1702,19 @@ def test_a_text_document_of_blank_space_is_worth_a_look(tmp_path):
     table = tmp_path / "empty.csv"
     table.write_text("\n", encoding="utf-8")
     assert _by(content.check_files([str(table)]), DOC_TEXT) == [Check(DOC_TEXT, LOOK, content.NO_TEXT, file="empty.csv")]
+    # A table of text that holds only its separators has no text (it read "has text").
+    for name, data in {"commas.csv": ",,,\r\n,,,\r\n", "quotes.csv": '"","",""\n;;\n', "tabs.tsv": "\t\t\n\t\t\n",
+                       "pipes.csv": "||\n||\n"}.items():
+        path = tmp_path / name
+        path.write_text(data, encoding="utf-8")
+        assert _by(content.check_files([str(path)]), DOC_TEXT) == [Check(DOC_TEXT, LOOK, content.NO_TEXT, file=name)], name
+    one = tmp_path / "one.csv"
+    one.write_text(",,x,\n", encoding="utf-8")
+    assert _by(content.check_files([str(one)]), DOC_TEXT) == [Check(DOC_TEXT, PASSED, "has text", file="one.csv")]
+    # Only a TABLE's separators are nothing: a note that holds commas has text.
+    note = tmp_path / "note.txt"
+    note.write_text(",,,\n", encoding="utf-8")
+    assert _by(content.check_files([str(note)]), DOC_TEXT) == [Check(DOC_TEXT, PASSED, "has text", file="note.txt")]
 
 
 def test_an_empty_document_is_worth_a_look_and_an_empty_file_of_another_kind_says_nothing(tmp_path):
@@ -1456,42 +1794,40 @@ def _zip(path: Path, parts: dict) -> Path:
     return path
 
 
-def test_a_file_reads_problem_only_for_a_fact_about_the_file_itself(tmp_path):
-    """A PROBLEM: the file is not a valid file of its kind, read from the
-    file itself. A reader of Iron Jarvis's own that trips for any other
-    reason is "not checked", and "opens" is not said either way."""
-    facts = {
-        "notzip.xlsx": (b"this is not a workbook", "it does not open: it is not a real Office file"),
-        "notzip.docx": (b"this is not a document", "it does not open: it is not a real Office file"),
-        "notpdf.pdf": (b"just some text\n%%EOF\n", "it does not open: it is not the kind of file its name says"),
-        "cut.pdf": (b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\n", "it does not open: the PDF was cut off"),
+def test_a_file_reads_problem_exactly_when_the_apps_own_reader_could_not_open_it(tmp_path):
+    """Decision 2. A PROBLEM is the reader's own failure, said as that fact
+    and nothing more: "Iron Jarvis could not open “x.xlsx”". No reason is
+    given (a reason is a guess about the file), and no part of a package is
+    looked for by its name."""
+    broken = {
+        "notzip.xlsx": b"this is not a workbook", "notzip.docx": b"this is not a document",
+        "notpdf.pdf": b"just some text\n%%EOF\n", "cut.pdf": b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\n",
+        "odd.pdf": b"%PDF-1.7\nthis is not a pdf body\n%%EOF\n",
     }
-    for name, (data, why) in facts.items():
+    made = []
+    for name, data in broken.items():
         path = tmp_path / name
         path.write_bytes(data)
+        made.append(path)
+    made += [_zip(tmp_path / "nobook.xlsx", {"docProps/app.xml": "<x/>"}),
+             _zip(tmp_path / "nodoc.docx", {"docProps/app.xml": "<x/>"}),
+             _zip(tmp_path / "oddbook.xlsx", {"xl/workbook.xml": "<not-xml", "[Content_Types].xml": "<Types/>"}),
+             _zip(tmp_path / "odddoc.docx", {"word/document.xml": "<not-xml", "[Content_Types].xml": "<Types/>"})]
+    for path in made:
         got = content.check_files([str(path)])
-        assert got == [Check(FILE_OPENS, FAILED, why, file=name)], name
-        assert line_for(_rows(got))[1] == "warn" and "opens." not in line_for(_rows(got))[0]
-    nobook = _zip(tmp_path / "nobook.xlsx", {"docProps/app.xml": "<x/>"})
-    nodoc = _zip(tmp_path / "nodoc.docx", {"docProps/app.xml": "<x/>"})
-    for path in (nobook, nodoc):
-        assert content.check_files([str(path)]) == [
-            Check(FILE_OPENS, FAILED, "it does not open: a part of the file is missing", file=path.name)]
-    # NOT facts about the file: its parts are there and the reader could not read them.
-    oddbook = _zip(tmp_path / "odd.xlsx", {"xl/workbook.xml": "<not-xml", "[Content_Types].xml": "<Types/>"})
-    odddoc = _zip(tmp_path / "odd.docx", {"word/document.xml": "<not-xml", "[Content_Types].xml": "<Types/>"})
-    oddpdf = tmp_path / "odd.pdf"
-    oddpdf.write_bytes(b"%PDF-1.7\nthis is not a pdf body\n%%EOF\n")
-    for path in (oddbook, odddoc, oddpdf):
-        got = content.check_files([str(path)])
-        assert got == [Check(FILE_OPENS, NOT_CHECKED, "it could not be read here", file=path.name)], path.name
+        assert got == [Check(FILE_OPENS, FAILED, f"Iron Jarvis could not open “{path.name}”", file=path.name)], path.name
         line, tone = line_for(_rows(got))
-        assert tone == "quiet" and "opens" not in line and "Problem" not in line
+        kind = R.kind_words(path.name)
+        assert line == f"Checked by Iron Jarvis: a problem in {kind}: Iron Jarvis could not open “{path.name}”."
+        assert tone == "warn" and "opens" not in line and "does not open" not in line
+    assert content.could_not_open("C:/clients/acme/letter.docx") == "Iron Jarvis could not open “letter.docx”"
+    assert content.could_not_open("") == "Iron Jarvis could not open it"
 
 
-def test_a_workbook_the_reader_cannot_load_is_not_called_broken(tmp_path):
-    """A workbook with a chart sheet and no chart is a file Excel opens and
-    the library does not. It read "Problem: it does not open"."""
+def test_a_workbook_the_reader_cannot_open_says_only_that(tmp_path):
+    """A workbook with a chart sheet and no chart is a file Excel may open
+    and the app's reader does not: the app's own tools cannot read it back
+    either. The line says that fact, and never why."""
     wb = Workbook()
     wb.active.title = "Data"
     wb.active.append(["a", 1])
@@ -1499,8 +1835,74 @@ def test_a_workbook_the_reader_cannot_load_is_not_called_broken(tmp_path):
     p = tmp_path / "chart.xlsx"
     wb.save(p)
     got = content.check_files([str(p)])
-    assert not [c for c in got if c.result == FAILED]
-    assert got == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="chart.xlsx")] or got[0].detail == "opens"
+    assert got == [Check(FILE_OPENS, FAILED, "Iron Jarvis could not open “chart.xlsx”", file="chart.xlsx")] or (
+        got[0].detail == "opens"), got
+
+
+def test_the_disks_refusal_is_not_the_readers_failure(tmp_path, monkeypatch):
+    """A file the disk will not hand over (another program holds it, a
+    permission) was not opened, and that is not a fact about the file: not
+    checked, never a problem."""
+    import docx
+    import openpyxl
+    import pypdf
+
+    def refused(*_a, **_kw):
+        raise PermissionError(13, "the file is in use")
+
+    assert content._disk_refused(PermissionError(13, "in use")) and content._disk_refused(FileNotFoundError(2, "gone"))
+    # A reader that says "this is no workbook" with an error of the same class, and no number, is not the disk.
+    assert not content._disk_refused(OSError("File contains no valid workbook part"))
+    assert not content._disk_refused(ValueError("x"))
+
+    book = _xlsx(tmp_path / "t.xlsx", BUDGET)
+    monkeypatch.setattr(openpyxl, "load_workbook", refused)
+    assert content.check_files([str(book)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.xlsx")]
+    letter = tmp_path / "t.docx"
+    docx.Document().save(str(letter))
+    monkeypatch.setattr(docx, "Document", refused)
+    assert content.check_files([str(letter)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.docx")]
+    pdf = _pdf(tmp_path / "t.pdf", 1)
+    monkeypatch.setattr(pypdf, "PdfReader", refused)
+    assert content.check_files([str(pdf)]) == [Check(FILE_OPENS, NOT_CHECKED, content.NOT_READ, file="t.pdf")]
+
+
+def test_a_word_file_that_opens_and_whose_text_cannot_be_read_is_not_called_broken(tmp_path, monkeypatch):
+    import docx
+
+    from iron_jarvis.documents import readers
+
+    letter = tmp_path / "t.docx"
+    d = docx.Document()
+    d.add_paragraph("words")
+    d.save(str(letter))
+
+    def trips(_p, **_kw):
+        raise RuntimeError("a table it cannot walk")
+
+    monkeypatch.setattr(readers, "_read_docx", trips)
+    assert content.check_files([str(letter)]) == [
+        Check(FILE_OPENS, PASSED, "opens", file="t.docx"), Check(DOC_TEXT, NOT_CHECKED, content.TEXT_NOT_READ, file="t.docx")]
+
+
+def test_a_file_protected_with_a_password_is_not_checked_never_a_problem(tmp_path):
+    """Decision 2. A .docx or .xlsx protected with a password is not a
+    package: it is the older Office container. It read "Problem: it is not a
+    real Office file". Said for certain only when the container names its
+    encrypted part; any other file of that container MAY be one."""
+    head = bytes.fromhex("D0CF11E0A1B11AE1")
+    for name in ("locked.docx", "locked.xlsx", "locked.xlsm"):
+        path = tmp_path / name
+        path.write_bytes(head + b"\x00" * 512 + "EncryptedPackage".encode("utf-16-le") + b"\x00" * 512)
+        assert content.check_files([str(path)]) == [
+            Check(FILE_OPENS, NOT_CHECKED, "it is protected with a password", file=name)], name
+        other = tmp_path / f"older-{name}"
+        other.write_bytes(head + b"\x00" * 4096)
+        got = content.check_files([str(other)])
+        assert got == [Check(FILE_OPENS, NOT_CHECKED, content.MAY_BE_PROTECTED, file=other.name)], name
+        assert line_for(_rows(got))[1] == "quiet"
+    assert content.MAY_BE_PROTECTED == "it may be protected with a password, or be an older kind of Office file"
+    assert content._older_container(_xlsx(tmp_path / "plain.xlsx", BUDGET)) == ""
 
 
 def test_text_in_an_older_code_page_is_read_and_a_file_that_is_not_text_is_not_checked(tmp_path):
@@ -1635,7 +2037,17 @@ def test_a_locked_pdf_is_not_checked_and_is_not_said_to_open(tmp_path):
     with open(p, "wb") as fh:
         w.write(fh)
     assert content.check_files([str(p)]) == [
-        Check(FILE_OPENS, NOT_CHECKED, "it is locked with a password", file="locked.pdf")]
+        Check(FILE_OPENS, NOT_CHECKED, "it is protected with a password", file="locked.pdf")]
+    # A PDF that only limits what may be done with it opens with no password (the app's own reader tries
+    # the empty one): it is opened, and its pages are counted.
+    w = PdfWriter()
+    w.add_blank_page(width=200, height=200)
+    w.encrypt("", owner_password="an-owner-password-for-this-test")
+    free = tmp_path / "limited.pdf"
+    with open(free, "wb") as fh:
+        w.write(fh)
+    assert [(c.check, c.result, c.detail) for c in content.check_files([str(free)])][:2] == [
+        (FILE_OPENS, PASSED, "opens"), (PDF_PAGES, PASSED, "1 page")]
 
 
 # --------------------------------------------------------------------------- #
@@ -1771,14 +2183,15 @@ def test_the_slower_read_gives_the_same_book_when_the_one_pass_read_is_not_there
         wb.save(q)
     once = [content._load(p), content._load(q)]
 
-    def gone(_wb, _late):
+    def gone(_wb, _late, _trusted=True):
         raise ImportError("the library moved its parser")
 
     monkeypatch.setattr(content, "_read_once", gone)
     twice = [content._load(p), content._load(q)]
     for a, b in zip(once, twice):
-        assert (a.formulas, a.values, a.percent, a.spaces, a.sheets, a.cut) == (
-            b.formulas, b.values, b.percent, b.spaces, b.sheets, b.cut)
+        assert (a.formulas, a.values, a.errors, a.percent, a.spaces, a.sheets, a.cut) == (
+            b.formulas, b.values, b.errors, b.percent, b.spaces, b.sheets, b.cut)
+    assert once[0].errors == {"S": {(1, 2): "#DIV/0!"}}
     assert once[1].percent == {("Summary", 2, 3)} and once[1].spaces == {("Summary", 3, 2)}
     assert [(c.check, c.result) for c in content.check_files([str(p)])] == [
         (FILE_OPENS, PASSED), (SHEET_ERRORS, FAILED)]
@@ -1996,48 +2409,26 @@ def test_a_network_spelling_is_refused_by_its_text_and_an_unreadable_folder_is_n
     assert opened == []
 
 
-def test_a_file_that_is_gone_says_nothing_and_an_empty_or_broken_one_fails_in_plain_words(tmp_path):
+def test_a_file_that_is_gone_says_nothing_and_an_empty_one_is_worth_a_look(tmp_path):
     assert content.check_files([str(tmp_path / "scratch.py")]) == []
     empty = tmp_path / "empty.xlsx"
     empty.write_bytes(b"")
     assert content.check_files([str(empty)]) == [Check(DOC_TEXT, LOOK, "it is empty", file="empty.xlsx")]
-    broken = tmp_path / "broken.xlsx"
-    broken.write_bytes(b"this is not a workbook")
-    assert content.check_files([str(broken)]) == [
-        Check(FILE_OPENS, FAILED, "it does not open: it is not a real Office file", file="broken.xlsx")]
-    import zipfile
-
-    part = tmp_path / "part.xlsx"
-    with zipfile.ZipFile(part, "w") as zf:
-        zf.writestr("docProps/app.xml", "<x/>")
-    assert content.check_files([str(part)]) == [
-        Check(FILE_OPENS, FAILED, "it does not open: a part of the file is missing", file="part.xlsx")]
-    odd = tmp_path / "odd.xlsx"
-    with zipfile.ZipFile(odd, "w") as zf:
-        zf.writestr("xl/workbook.xml", "<not a workbook")
-    # Its parts are there and the reader could not read them: not a fact about the file.
-    assert content.check_files([str(odd)]) == [Check(FILE_OPENS, NOT_CHECKED, "it could not be read here", file="odd.xlsx")]
-    cut = tmp_path / "cut.pdf"
-    cut.write_bytes(b"%PDF-1.7\n" + b"x" * 400)
-    assert content.check_files([str(cut)]) == [
-        Check(FILE_OPENS, FAILED, "it does not open: the PDF was cut off", file="cut.pdf")]
 
 
-@pytest.mark.parametrize("why,said", [
-    ("it does not open (BadZipFile: File is not a zip file)", "it does not open"),
-    ("it does not open (KeyError: \"There is no item named 'xl/sharedStrings.xml' in the archive\")", "it does not open"),
-    ("not a valid Office file (it is not a package)", "it does not open: it is not a real Office file"),
-    ("its package has no xl/workbook.xml", "it does not open: a part of the file is missing"),
-    ("the workbook has no sheets", "it does not open: the workbook has no sheets"),
-    ("it does not start like a PDF file", "it does not open: it is not the kind of file its name says"),
-    ("the PDF has no end marker (it was cut off)", "it does not open: the PDF was cut off"),
-    ("it is not UTF-8 text", "its text could not be read"),
-    ("it cannot be read (PermissionError)", "it could not be read"),
-    ("something nobody planned for (ZeroDivisionError: x)", "it does not open"),
-])
-def test_why_a_file_does_not_open_is_said_in_plain_words_never_an_engines(why, said):
-    """N8: the older check's own reason named an exception ("BadZipFile:
-    ...") or a part of the package, and it reached the line."""
-    assert R.open_words(why) == said
-    for word in ("Error", "BadZip", "xl/", "package", "Exception", "UTF"):
-        assert word not in R.open_words(why)
+def test_nothing_says_a_file_does_not_open_or_why():
+    """The words "does not open" and every reason for it (it is not a real
+    Office file, a part is missing, it was cut off) are GONE from the
+    package: each was a guess about the file. What is said is the reader's
+    own failure (``content.could_not_open``)."""
+    import inspect
+
+    from iron_jarvis.checks import existing, tool, turn
+
+    assert not hasattr(R, "open_words")
+    for module in (content, R, existing, tool, turn):
+        text = inspect.getsource(module)
+        code = "\n".join(line for line in text.splitlines() if "return " in line or " = " in line)
+        for words in ("it does not open", "not a real Office file", "a part of the file is missing",
+                      "the PDF was cut off", "not the kind of file its name says"):
+            assert words not in code, (module.__name__, words)

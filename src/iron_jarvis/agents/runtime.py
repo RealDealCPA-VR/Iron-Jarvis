@@ -2183,10 +2183,6 @@ class AgentRuntime:
         try:
             if self._effective_trust(session) == TRUST_LOW or int(steps_left) < 2:
                 # Nothing is sent then: never read the ledger for it.
-                if self._effective_trust(session) == TRUST_LOW:
-                    # Release 5 of the intelligence plan: said on the record
-                    # of checks as "not checked", with the reason.
-                    until.skipped = "low_trust"
                 return ""
             from ..daemon.chat_turn import _asked_for_a_file, custom_tools_used, ran_local_writer
             from ..daemon.until_done import Facts, note_checked_again, run_record
@@ -2242,9 +2238,9 @@ class AgentRuntime:
 
     async def _note_claims_check(self, until: Any, session: Session, run: AgentRun) -> None:
         """The intelligence plan, release 5: ONE row of the record of checks
-        for the check-again loop's last look at this run's answer (whether
-        what it says matches what it did; ``not_checked`` with the reason
-        when the loop did not look). Off the loop; never raises."""
+        for the check-again loop's last look at this run's answer, written
+        ONLY when the loop left a claim open that no step matches (worth a
+        look; ``checks/existing.claims_check``). Off the loop; never raises."""
         try:
             from ..checks import existing as _existing
             from ..checks import record as _checks

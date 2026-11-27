@@ -4507,6 +4507,26 @@ class FinishCheck:
             # review's change (``_second_review``).
             self._review_mark = self._answer_mark
 
+    def tests_ended(self) -> str:
+        """How the runs behind a FAILED verdict ended, for the record of
+        checks (``checks/existing.finish_checks``; nothing in this check
+        reads it): ``"failed"`` when a command ran to its end and reported
+        failure (an exit status that is not 0, and it was not stopped at
+        its time); else ``"timed_out"`` when one was stopped at its time;
+        else ``"no_exit"`` when one has no exit status at all (it could not
+        start); else ``"unread"``. "" when no run is failed. Never raises."""
+        try:
+            failed = [r for r in self.runs if r.verdict == TESTS_FAILED]
+            if not failed:
+                return ""
+            if any(not r.timed_out and isinstance(r.exit_code, int) and r.exit_code != 0 for r in failed):
+                return "failed"
+            if any(r.timed_out for r in failed):
+                return "timed_out"
+            return "no_exit" if any(r.exit_code is None for r in failed) else "unread"
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            return ""
+
     def _settle_tests(self) -> None:
         if self.tests in (TESTS_NONE,) or not self.runs:
             return

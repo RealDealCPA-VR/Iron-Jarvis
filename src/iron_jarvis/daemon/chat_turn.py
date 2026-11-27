@@ -16612,6 +16612,7 @@ async def run_chat_turn(
         await _note_finish(
             platform, out["finish"], turn_id=_usage_turn,
             thread_id=str(getattr(body, "thread_id", "") or ""), session_id=_tool_session,
+            ended=_finish.tests_ended(),
         )
     # THE CODING-SESSION TEAM (v1.403.0): LAST, and present ONLY for a turn of
     # a session with a team. MIRROR NOTE (lock-step): the stream done-frame.

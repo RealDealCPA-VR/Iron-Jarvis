@@ -10,15 +10,20 @@ so "what did you check?" has one place to read.
 WHICH OUTCOME EACH WRITER MAY USE (``record.PROBLEM_CHECKS`` is the
 allowlist; a row of any other check is never a "Problem"):
 
-* :func:`claims_check` (the reply's own claims): ``passed`` only when the
-  reply NAMED something it saved, changed or sent and the record holds it;
-  what the reading found unmatched is ``look`` (a reading of prose).
+* :func:`claims_check` (the reply's own claims): ``look``, and ONLY when
+  the check-again loop itself raised a claim no step matches. There is NO
+  passed row: "nothing open" also means "the reading gave up", so nothing
+  is ever said to be in the record.
 * :func:`required_file_checks`: ``failed`` ONLY for a required file that is
-  not on disk (a fact). One that is there and empty, or that the older check
-  could not open, is ``look``.
-* :func:`proof_check`, :func:`finish_checks` (tests): ``failed`` for a test
-  command that ran and failed (a fact). A reviewer that asked for changes is
-  ``look`` (a model's opinion; never its words).
+  not on disk (a fact). One that is there passes with that fact alone ("it
+  is on disk (12 KB)": never "opens", the older check opens nothing of most
+  kinds). One that is there and empty, or that the older check could not
+  open, is ``look``.
+* :func:`proof_check`, :func:`finish_checks` (tests): ``failed`` ONLY for a
+  test command that ran to its end and reported failure (a fact). A run
+  that did not finish in its time, or could not be run, is ``not_checked``.
+  A reviewer that asked for changes is ``look`` (a model's opinion; never
+  its words).
 * :func:`step_check`, :func:`workflow_check`: a step whose check did not
   pass is ``look``, whether a model judged it or a rule looked for a file
   the plan named.
@@ -28,8 +33,8 @@ code) built: a judging model's reason, a reviewer's read and a tool's raw
 error are never stored, so they can never reach the line under a reply or
 the list a press opens. A model-judged step that failed reads "its check did
 not pass", with the model's name in ``by``, and nothing more. PLAIN WORDS:
-an older check's reason is put through ``record.open_words`` /
-``record.plain_words`` (never an exception's name or a folder).
+an older check's reason is put through ``record.plain_words`` (never an
+exception's name or a folder).
 
 Pure and never raising: a row that cannot be built is no row.
 """
@@ -42,37 +47,30 @@ from typing import Any, Iterable
 
 from .record import (
     BY_RULE, CLAIMS, FAILED, LINE_HEAD, LINE_NOT_CHECKED, LOOK, NOT_CHECKED, PASSED, REQUIRED_FILE, REVIEW,
-    STEP_CHECK, TESTS, WORKFLOW_STEP, Check, file_name, open_words, plain_words, quoted,
+    STEP_CHECK, TESTS, WORKFLOW_STEP, Check, file_name, plain_words, quoted,
 )
 
 log = logging.getLogger(__name__)
 
-#: A problem the check-again loop left open (``until_done.Problem.key``'s
-#: first part), as the record says it. Read after "the reply:".
+#: A CLAIM of the reply that the check-again loop found no step for and
+#: left open (``until_done.Problem.key``'s first part), as the record says
+#: it. Read after "the reply:". Only these: the loop's other open problems
+#: (a file that was asked for, a figure, a required file) are not claims of
+#: the reply, and write no row here.
 OPEN_WORDS = {
     "claimed_file": "it says a file was saved that no step wrote",
     "changed_file": "it says a file was changed that no step changed",
-    "asked_file": "a file was asked for and none was written",
     "claimed_change": "it says a change was made that no step made",
     "claimed_sent": "it says something was sent that no step sent",
-    "figures": "a file it wrote holds a figure nobody worked out",
-    "deliverables": "a required file is not done",
 }
-#: Why the check-again loop did not look at a reply (``UntilDone.skipped``).
-SKIPPED_WORDS = {
-    "low_trust": "it read content from outside, so it was not checked against what it did",
-    "truncated": "it was cut off at its length limit, so it was not checked against what it did",
-    "declined": "a step was declined or no tools were wanted, so it was not checked against what it did",
-    "blocked": "it ended by saying what blocks it, so it was not checked again",
-}
-#: The good side of the reply's claims check. No wider than what is READ:
-#: the files a reply says it saved or changed, and what it says it sent
-#: (never "what it says matches what it did": a reply also says it ran
-#: tests, printed, booked, deleted, and none of that is read).
-CLAIMS_PASSED = ("the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record")
 #: A required file's states that are a FACT about the disk: it is not there
 #: (or a folder is where the file should be).
 NOT_ON_DISK = frozenset({"missing", "folder"})
+#: A test run that did not run to its end (``harness/finish.FinishCheck
+#: .tests_ended``): never a failed test run.
+TESTS_TIMED_OUT = "they did not finish in their time"
+TESTS_NO_EXIT = "they could not be run"
+TESTS_UNREAD = "how the run ended could not be read"
 #: A model-judged step that failed: this, and the model's name in ``by``.
 STEP_FAILED = "its check did not pass"
 #: Why a coding reply's tests did not run, where the finish check's own code
@@ -116,27 +114,16 @@ def _review_words(state: str, why: Any) -> str:
 
 
 def claims_check(until: Any) -> "Check | None":
-    """The check-again loop's last look at a reply (``daemon/until_done``).
-    None when the loop never looked (the demo model, a text-only reply, a
-    coding session), and when it looked, found nothing unmatched, and the
-    reply named NOTHING it saved, changed or sent (``until.claims``): there
-    is then nothing to say was checked. What the reading found unmatched is
-    ``look``: it is read out of the reply's prose."""
+    """The check-again loop's last look at a reply (``daemon/until_done``):
+    ONE row, worth a look, exactly when the loop itself raised a claim of
+    the reply that no step matches and left it open (:data:`OPEN_WORDS`).
+    None for everything else. There is no passed row and no "not checked"
+    row: the loop finding nothing open also means its reading gave up, so
+    nothing is said to be checked, and nobody is told it was."""
     try:
-        if until is None:
-            return None
-        skipped = str(getattr(until, "skipped", "") or "")
-        if skipped:
-            return Check(CLAIMS, NOT_CHECKED, SKIPPED_WORDS.get(skipped, "it was not checked against what it did"))
-        if not int(getattr(until, "looked", 0) or 0):
-            return None
-        still = list(dict.fromkeys(str(k) for k in (getattr(until, "open", None) or [])))
-        if not still:
-            if not int(getattr(until, "claims", 0) or 0):
-                return None
-            return Check(CLAIMS, PASSED, CLAIMS_PASSED)
-        said = [OPEN_WORDS.get(k, "something it says does not match what it did") for k in still]
-        return Check(CLAIMS, LOOK, "; ".join(dict.fromkeys(said)))
+        still = dict.fromkeys(str(k).partition(":")[0] for k in (getattr(until, "open", None) or []))
+        said = [OPEN_WORDS[k] for k in still if k in OPEN_WORDS]
+        return Check(CLAIMS, LOOK, "; ".join(said)) if said else None
     except Exception:  # noqa: BLE001
         log.debug("the check-again verdict could not be recorded", exc_info=True)
         return None
@@ -144,20 +131,34 @@ def claims_check(until: Any) -> "Check | None":
 
 def required_file_checks(states: Iterable[Any]) -> list[Check]:
     """One row per required file of the task (``deliverables/check``'s own
-    look on disk: ``FileState``)."""
+    look on disk: ``FileState``).
+
+    The words are the FACT the older check holds, never its verdict on the
+    file's inside: it looks for an Office file's parts by their names and
+    opens nothing of most kinds, so "opens" and "does not open" are not its
+    to say here. A file that is there reads "it is on disk (12 KB)"."""
     out: list[Check] = []
     try:
+        from ..deliverables.check import _size_words
+
         for s in states or ():
             status = str(getattr(s, "status", "") or "")
             # A PROBLEM only for the fact "it is not on disk". A file that is
-            # there and empty, or that the older check could not open (it
-            # reads a cut piece of a large text file), is worth a look.
+            # there and empty, or that the older check could not open, is
+            # worth a look.
             result = (PASSED if status == "ok" else NOT_CHECKED if status == "unchecked"
                       else FAILED if status in NOT_ON_DISK else LOOK)
-            detail = str(getattr(s, "detail", "") or "")
-            # The older check's own reason for a file that does not open may
-            # name an exception or a part of the package: plain words only.
-            said = open_words(detail) if status == "unreadable" else plain_words(detail)
+            size = int(getattr(s, "size", 0) or 0)
+            on_disk = f"it is on disk ({_size_words(size)})"
+            if status == "ok":
+                said = on_disk
+            elif status == "unreadable":
+                # Why it could not is the older check's guess (an exception's
+                # name, a part it looked for by name): only the fact is kept.
+                said = (f"{on_disk}, and the check of required files could not open it" if size
+                        else "the check of required files could not read it")
+            else:
+                said = plain_words(str(getattr(s, "detail", "") or ""))
             out.append(Check(REQUIRED_FILE, result, said, file=str(getattr(s, "rel", "") or "")))
     except Exception:  # noqa: BLE001
         log.debug("the required files could not be recorded", exc_info=True)
@@ -189,10 +190,17 @@ def proof_check(record: Any) -> "Check | None":
         return None
 
 
-def finish_checks(record: Any) -> list[Check]:
+def finish_checks(record: Any, ended: str = "") -> list[Check]:
     """Chat › Code's finish check (``harness/finish.FinishCheck.record``):
     the folder's tests, and the reviewer's read where a team gave one (``by``
-    is the reviewing model's name)."""
+    is the reviewing model's name).
+
+    *ended* is how the runs behind a ``failed`` verdict ended
+    (``FinishCheck.tests_ended``). A PROBLEM only for ``"failed"``: a
+    command that ran to its end and reported failure. The finish check
+    also calls a run it stopped at its time, and a command that could not
+    start, "failed": those are ``not_checked`` here, each with its reason,
+    and so is a ``failed`` verdict nobody said the ending of."""
     out: list[Check] = []
     try:
         if not isinstance(record, dict):
@@ -203,7 +211,11 @@ def finish_checks(record: Any) -> list[Check]:
         if tests == "passed":
             out.append(Check(TESTS, PASSED, "they passed"))
         elif tests == "failed":
-            out.append(Check(TESTS, FAILED, "they failed"))
+            if ended == "failed":
+                out.append(Check(TESTS, FAILED, "they failed"))
+            else:
+                out.append(Check(TESTS, NOT_CHECKED, {"timed_out": TESTS_TIMED_OUT, "no_exit": TESTS_NO_EXIT}.get(
+                    ended, TESTS_UNREAD)))
         elif tests == "not_run":
             # The reason is kept only when it is one the finish check's own
             # code wrote: a command's raw error is not shown.
@@ -307,7 +319,7 @@ def workflow_check(step_name: Any, problem: Any, *, run_id: str = "") -> "Check 
 
 
 __all__ = [
-    "CLAIMS_PASSED", "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "SKIPPED_WORDS", "STEP_FAILED",
-    "TESTS_NOT_RUN_WORDS",
+    "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "STEP_FAILED", "TESTS_NO_EXIT",
+    "TESTS_NOT_RUN_WORDS", "TESTS_TIMED_OUT", "TESTS_UNREAD",
     "claims_check", "finish_checks", "proof_check", "required_file_checks", "step_check", "workflow_check",
 ]
