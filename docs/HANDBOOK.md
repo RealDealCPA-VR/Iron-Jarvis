@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.588.0 (2026-11-19).*
+holds itself to. Current as of v1.588.1 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,23 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## Local only: memory search stays on this PC (v1.588.1)
+
+Two gaps in Local only are closed.
+
+- **Memory search.** In a Local only chat, when Iron Jarvis searched your
+  memory with its own search step, it also asked memory bases that are not
+  on this PC (for example a notes base in the cloud), which sends them the
+  words of the question. It now asks only the bases on this PC, as the
+  rest of a Local only chat already did. Allowing one cloud model for a
+  single message does not change this.
+- **A new chat that read a protected mailbox.** When the first reply of a
+  new chat read an app you keep on your own models, the chat is held
+  Local only for that app. If the page went away at the wrong moment, a
+  hold could be lost. Every hold is now written, whatever the page does.
+
+There is nothing to set up and nothing new on screen.
 
 ## See what is filling a chat (v1.583.0)
 
