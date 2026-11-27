@@ -542,6 +542,25 @@ def _from_outside(out: dict) -> bool:
     return out.get("kind") == TRIGGER_KIND or bool(out.get("outside"))
 
 
+def _reads_outside(texts: "list[str]", view: dict) -> bool:
+    """Whether any ``{{name}}`` in *texts* reads words someone outside wrote:
+    the reference as written (a step named with a dot owns its name), or the
+    output it reads from, found as the save check finds it
+    (``validate._ref_base``: ``item.sub`` reads ``item``, ``Read.data.x``
+    reads ``Read``). An If's line, a message's "notified: …" and a For each's
+    items quote such values, so their own output is outside words too."""
+    from .validate import _ref_base
+
+    for text in texts:
+        for m in _TEMPLATE_RX.finditer(text or ""):
+            ref = m.group(1).strip()
+            for name in (ref, _ref_base(ref)):
+                out = view.get(name)
+                if isinstance(out, dict) and _from_outside(out):
+                    return True
+    return False
+
+
 class UnreadableData(ValueError):
     """A step's stored JSON could not be read (it was clipped to the record's
     bound, :data:`_MAX_STEP_DATA`), so no field can be read from it."""
@@ -659,7 +678,11 @@ def render_template(text: str, outputs: dict[str, Any], *, fence_outside: bool =
         if isinstance(out, dict):
             summary = str(out.get("summary") or "")
             if out.get("status") == "failed":
-                return f"[step {ref} failed: {summary}]"[:_MAX_STEP_SUMMARY]
+                failed = f"[step {ref} failed: {summary}]"[:_MAX_STEP_SUMMARY]
+                # An If that could not decide quotes the value it read.
+                if fence_outside and _from_outside(out):
+                    return _fenced_outside(failed)
+                return failed
             if fence_outside and _from_outside(out):
                 return _fenced_outside(summary[:_MAX_STEP_SUMMARY])
             return summary[:_MAX_STEP_SUMMARY]
@@ -682,15 +705,20 @@ def render_template(text: str, outputs: dict[str, Any], *, fence_outside: bool =
             base = outputs.get(ref[: -len(".data")].strip())
             if isinstance(base, dict):
                 val = base.get("data")
+                text = ""
                 if isinstance(val, str):
-                    return val[:_MAX_STEP_DATA]
-                if val is not None:
+                    text = val[:_MAX_STEP_DATA]
+                elif val is not None:
                     try:
-                        return json.dumps(val, ensure_ascii=False, default=str)[
+                        text = json.dumps(val, ensure_ascii=False, default=str)[
                             :_MAX_STEP_DATA
                         ]
                     except (TypeError, ValueError):
                         return ""
+                # A For each's rows name its items (a folder's file names).
+                if fence_outside and _from_outside(base):
+                    return _fenced_outside(text)
+                return text
         return ""
 
     return _TEMPLATE_RX.sub(_sub, text or "")
@@ -812,20 +840,21 @@ def _scope_view(outputs: dict, frame: "_Frame") -> dict:
     return view
 
 
-def _local_chain(outputs: dict, frame: "_Frame") -> list[tuple[str, str]]:
+def _local_chain(outputs: dict, frame: "_Frame") -> list[tuple[str, str, bool]]:
     """The finished steps of *frame* and the blocks around it, by plain name
-    (the agent step's "Context from earlier steps" inside a block)."""
+    (the agent step's "Context from earlier steps" inside a block), each with
+    whether its line is outside words (:func:`_from_outside`)."""
     chain: list[_Frame] = []
     f: _Frame | None = frame
     while f is not None and f.prefix:
         chain.append(f)
         f = f.parent
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, bool]] = []
     for f in reversed(chain):
         for s in f.steps:
             o = outputs.get(f.prefix + s.name)
             if isinstance(o, dict) and o.get("status") == "completed":
-                out.append((s.name, str(o.get("summary") or "")))
+                out.append((s.name, str(o.get("summary") or ""), _from_outside(o)))
     return out
 
 
@@ -1269,12 +1298,12 @@ class WorkflowEngine:
             # {{Trigger}} as '' — different behavior from the original run.
             await self._persist(run_id, outputs=outputs)
 
-        def _completed_chain() -> list[tuple[str, str]]:
+        def _completed_chain() -> list[tuple[str, str, bool]]:
             chain = []
             for s in steps:
                 o = outputs.get(s.name)
                 if isinstance(o, dict) and o.get("status") == "completed":
-                    chain.append((s.name, str(o.get("summary") or "")))
+                    chain.append((s.name, str(o.get("summary") or ""), _from_outside(o)))
             return chain
 
         # Idea 09 (09-a): every step goes through ``_exec_any``; a step of the
@@ -1844,7 +1873,7 @@ class WorkflowEngine:
         idx: int,
         total: int,
         outputs: dict[str, Any],
-        completed: list[tuple[str, str]],
+        completed: "list[tuple[str, str] | tuple[str, str, bool]]",
         workspace_root: str | None,
         session_ids: list[str],
         tool_workspace,
@@ -2154,8 +2183,14 @@ class WorkflowEngine:
         # its failure was skipped past): the lane it took stands either way.
         took = prior.get("took") if prior.get("status") in ("running", "failed") else None
         words = str(prior.get("took_words") or prior.get("summary") or "")
+        # Its line quotes the values it compared: when one is outside words
+        # ({{Trigger}}, an item from a folder or a signal), so is the line,
+        # and a later agent step gets it fenced (review 3).
+        outside = bool(prior.get("outside")) if took in ("then", "else") else False
         if took not in ("then", "else"):
             view = _scope_view(outputs, frame)
+            outside = _reads_outside(logic.condition_texts(step.condition), view)
+            mark = {"outside": True} if outside else {}
             absent = missing_values(step, view)
             if absent:
                 return {"status": "failed", "summary": no_value_words(absent), "kind": "if", "no_value_for": absent}
@@ -2168,11 +2203,11 @@ class WorkflowEngine:
                 return {
                     "status": "failed",
                     "summary": f"The If “{step.name}” could not decide: {exc}.",
-                    "kind": "if",
+                    "kind": "if", **mark,
                 }
             took = "then" if held else "else"
             words = f"{'Then' if held else 'Otherwise'}: {said}."
-            outputs[key] = {"status": "running", "kind": "if", "took": took, "summary": words}
+            outputs[key] = {"status": "running", "kind": "if", "took": took, "summary": words, **mark}
             await self._persist(ctx.run_id, outputs=outputs)
         taken = step.steps if took == "then" else step.else_steps
         other, other_seg = (step.else_steps, "else") if took == "then" else (step.steps, "then")
@@ -2195,6 +2230,7 @@ class WorkflowEngine:
                 status="failed", took_words=words,
                 summary=f"{words} “{name}” failed: {failed.get('summary') or 'it failed'}"[:_MAX_STEP_SUMMARY],
             )
+            outside = outside or _from_outside(failed)
             if failed.get("bound"):
                 out["bound"] = True
             if failed.get("kind") == "agent" and failed.get("session_id"):
@@ -2205,6 +2241,9 @@ class WorkflowEngine:
                 status="failed", handled="skipped", took_words=words,
                 summary=f"{words} “{name}” failed and was skipped: {failed.get('summary') or ''}"[:_MAX_STEP_SUMMARY],
             )
+            outside = outside or _from_outside(failed)
+        if outside:
+            out["outside"] = True
         return out
 
     async def _items_for(
@@ -2279,24 +2318,15 @@ class WorkflowEngine:
             parsed = json.loads(text) if text else None
         except (TypeError, ValueError):
             parsed = None
-        if not isinstance(parsed, list):
-            shown = " ".join(text.split())[:80] or "nothing"
-            return [], 0, False, f"{source.strip()} is not a list to work through (it gave {shown})"
         # The items are outside words when any value the list is made from
-        # is: the reference as written (a step named with a dot owns its
-        # name), and the output it reads from, found as the save check finds
-        # it (``validate._ref_base``: ``item.sub`` reads ``item``, an outer
-        # For each's item, so a nested For each over a field of an item from
+        # is (:func:`_reads_outside`: an outer For each's ``item.sub`` reads
+        # that item, so a nested For each over a field of an item from
         # {{Trigger}} or a folder is fenced too).
-        from .validate import _ref_base
-
-        outside = False
-        for m in _TEMPLATE_RX.finditer(source):
-            ref = m.group(1).strip()
-            for name in (ref, _ref_base(ref)):
-                base_out = view.get(name)
-                if isinstance(base_out, dict) and _from_outside(base_out):
-                    outside = True
+        outside = _reads_outside([source], view)
+        if not isinstance(parsed, list):
+            # The sentence quotes what it was given: outside words, maybe.
+            shown = " ".join(text.split())[:80] or "nothing"
+            return [], 0, outside, f"{source.strip()} is not a list to work through (it gave {shown})"
         return parsed[:limit], len(parsed), outside, None
 
     async def _exec_for_each(
@@ -2328,6 +2358,7 @@ class WorkflowEngine:
                     "status": "failed",
                     "summary": f"“{step.name}” could not start: {problem}"[:_MAX_STEP_SUMMARY],
                     "kind": "for_each", "done": 0, "failed": 0, "skipped": 0, "total": 0, "data": [],
+                    **({"outside": True} if outside else {}),
                 }
             # While it works its line counts only what is settled: "6 of 14
             # done", never the items still to come as "not run".
@@ -2395,15 +2426,20 @@ class WorkflowEngine:
                         rows[n]["halts"] = True
                         if failed.get("bound"):
                             rows[n]["bound"] = True
+                    if _from_outside(failed):
+                        # Its line quotes outside words (an If on {{Trigger}}).
+                        rows[n]["outside"] = True
                     first_failure.append((n, name, failed))
                 else:
-                    last = ""
+                    last, last_outside = "", False
                     for s in reversed(step.steps):
                         o = outputs.get(prefix + s.name)
                         if isinstance(o, dict) and o.get("status") == "completed" and str(o.get("summary") or "").strip():
-                            last = str(o.get("summary") or "")
+                            last, last_outside = str(o.get("summary") or ""), _from_outside(o)
                             break
                     rows[n] = {"n": n, "label": label, "status": "done", "summary": last[:_MAX_ITEM_SUMMARY]}
+                    if last_outside:
+                        rows[n]["outside"] = True
                 # The item is settled: keep only a short line of each of its
                 # steps (the record grows with every item; this bounds it).
                 for k in [k for k in outputs if k.startswith(prefix)]:
@@ -2413,7 +2449,7 @@ class WorkflowEngine:
                             "status": o.get("status"),
                             "summary": str(o.get("summary") or "")[:_MAX_ITEM_SUMMARY],
                         }
-                        for keep in ("kind", "handled", "took", "session_id", "bound", "folded"):
+                        for keep in ("kind", "handled", "took", "session_id", "bound", "folded", "outside"):
                             if o.get(keep) not in (None, ""):
                                 small[keep] = o[keep]
                         outputs[k] = small
@@ -2500,7 +2536,9 @@ class WorkflowEngine:
             "done": done, "failed": failed, "skipped": not_run, "total": total,
             "data": [rows[n] for n in sorted(rows)],
         }
-        if outside:
+        # Its items' names, or a row's line, are outside words: so are its
+        # own line and its rows (``{{Each}}``, ``{{Each.data}}``).
+        if outside or any(r.get("outside") for r in rows.values()):
             out["outside"] = True
         if cancelled:
             out["status"] = "cancelled"
@@ -2890,7 +2928,12 @@ class WorkflowEngine:
                 "summary": f"delivery failed: {detail}"[:_MAX_STEP_SUMMARY],
                 "kind": "notify",
             }
-        return {"status": "completed", "summary": f"notified: {message[:200]}", "kind": "notify"}
+        out = {"status": "completed", "summary": f"notified: {message[:200]}", "kind": "notify"}
+        # Delivered as written; its line quotes the message, so when the
+        # message read outside words a later agent step gets it fenced.
+        if _reads_outside([step.message or step.task], outputs):
+            out["outside"] = True
+        return out
 
     # ------------------------------------------------------------------ #
     # verified steps (v1.170.0, contract 8)
@@ -3062,16 +3105,25 @@ class WorkflowEngine:
             return False, f"{type(exc).__name__}: {exc}"
 
     @staticmethod
-    def _context_block(completed: list[tuple[str, str]]) -> str:
+    def _context_block(completed: "list[tuple[str, str] | tuple[str, str, bool]]") -> str:
         """Build the '# Context from earlier steps' block from prior COMPLETED
         steps' summaries — each clipped, the whole thing capped, most-recent
-        steps kept when the budget is tight (then re-ordered chronologically)."""
+        steps kept when the budget is tight (then re-ordered chronologically).
+
+        Idea 09 (review 3): a summary marked as outside words (the third
+        value: an If that compared {{Trigger}}, a message that quoted it, a
+        For each over a folder) goes in as a fenced untrusted block, as
+        ``render_template(fence_outside=True)`` puts in ``{{Trigger}}``."""
         if not completed:
             return ""
         parts: list[str] = []
         total = 0
-        for name, summary in reversed(completed):  # newest first — they win the budget
-            block = f"\n## {name}\n{(summary or '')[:_MAX_STEP_SUMMARY]}"
+        for entry in reversed(completed):  # newest first — they win the budget
+            name, summary = entry[0], entry[1]
+            text = (summary or "")[:_MAX_STEP_SUMMARY]
+            if len(entry) > 2 and entry[2] and text:
+                text = _fenced_outside(text).strip("\n")
+            block = f"\n## {name}\n{text}"
             if total + len(block) > _MAX_CONTEXT:
                 break
             parts.append(block)
