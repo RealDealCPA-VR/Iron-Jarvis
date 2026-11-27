@@ -437,6 +437,55 @@ async def test_a_for_each_given_outside_words_that_are_not_a_list_hands_them_on_
     assert PLANTED in task and PLANTED not in _unfenced(task), task
 
 
+class _FileReader(Tool):
+    """Reads a client's file: its words are data (``returns_untrusted_content``)."""
+
+    name = "t_leap09a_reader"
+    reversibility = Reversibility.READONLY
+    returns_untrusted_content = True
+    input_schema = {"type": "object", "properties": {}}
+    description = "test-only"
+
+    async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
+        return ToolResult(ok=True, output=f"Invoice. {PLANTED}", data={"note": PLANTED, "total": "5,200.00"})
+
+
+async def test_what_a_tool_read_from_a_file_reaches_a_later_agent_step_fenced(tmp_path):
+    """Review 4 (note): a tool step's output (``read_document`` or
+    ``extract_pdf`` text) reached a later agent step unfenced, by {{Read}},
+    {{Read.data.note}}, an If built on it and "Context from earlier steps".
+    With a For each over a folder of PDFs that is the common case."""
+    platform, engine, *_ = _setup(tmp_path)
+    platform.registry.register(_FileReader())
+    orch = _Orch()
+    engine.orchestrator = orch
+    wf = load_workflow({"name": "w", "steps": [
+        {"name": "Top", "kind": "tool", "tool": "t_leap09a_reader"},
+        {"name": "Each", "kind": "for_each", "over": {"from": "{{Names}}"}, "steps": [
+            {"name": "Read", "kind": "tool", "tool": "t_leap09a_reader"},
+            {"name": "Check", "kind": "if",
+             "condition": {"left": "{{Read.data.note}}", "op": "contains", "right": "mail"},
+             "steps": [{"name": "Say", "kind": "notify", "message": "{{item}}"}]},
+            {"name": "Next", "kind": "agent", "task": "File {{item}}: {{Read}} / {{Read.data.note}} / {{Check}}"},
+        ]},
+        {"name": "After", "kind": "agent", "task": "Report {{Top.data.note}}"},
+    ]})
+    inputs = {"Names": json.dumps(["a.pdf"])}
+    rec = await asyncio.to_thread(engine.create_record, wf, inputs)
+    done = await engine.run_record(rec, wf, inputs=inputs)
+    outs = _outs(done)
+    assert done.status == "completed", outs
+    assert outs["Top"]["outside"] is True
+    assert outs["Each/1/Read"]["outside"] is True and outs["Each/1/Check"]["outside"] is True
+    assert len(orch.tasks) == 2, orch.tasks
+    for task in orch.tasks:
+        assert PLANTED in task and PLANTED not in _unfenced(task), task
+    # The tools the headline example reads files with carry the mark.
+    for real in ("read_file", "read_document", "extract_pdf"):
+        tool = platform.registry.get(real)
+        assert tool is not None and tool.returns_untrusted_content is True, real
+
+
 async def test_a_resumed_if_on_outside_words_still_hands_them_on_fenced(tmp_path):
     """A resume walks the recorded lane without deciding again; the record
     still says its line quotes outside words."""

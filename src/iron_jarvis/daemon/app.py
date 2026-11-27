@@ -493,55 +493,21 @@ def _blocks_for_models() -> str:
 def _extract_workflow_json(text: str) -> dict[str, Any]:
     """Pull the workflow JSON object out of a model reply.
 
-    Prefers a fenced ```json … ``` block; otherwise scans for the FIRST
-    balanced ``{…}`` with a string-aware state machine (so braces or quotes
-    inside step text don't corrupt extraction, and a truncated reply that
-    never closes simply fails). Raises :class:`ValueError` when nothing
-    parseable is found so callers surface the honest error path — never
-    returns a partial/garbled object.
+    Read by ``core/jsonish.loads_object``, the ONE recovery parser for model
+    output (a fenced block, prose around the object, braces inside step
+    text, and the repairs models need: trailing commas, single quotes).
+    Idea 09 (09-a review 4): this used to be a second, strict parser, so a
+    local model's near-JSON reply holding a For each read as "no workflow".
+    Raises :class:`ValueError` when nothing parseable is found (a truncated
+    reply that never closes included) so callers surface the honest error
+    path — never returns a partial/garbled object.
     """
-    import json as _json
-    import re as _re
+    from ..core.jsonish import loads_object
 
-    text = text or ""
-    # 1) A fenced code block is the cleanest signal when present.
-    for m in _re.finditer(r"```(?:json)?\s*(.*?)```", text, _re.DOTALL):
-        try:
-            obj = _json.loads(m.group(1).strip())
-        except Exception:  # noqa: BLE001 — fall through to the scanner
-            continue
-        if isinstance(obj, dict):
-            return obj
-    # 2) Scan for the first balanced object, ignoring braces inside strings.
-    start, depth, in_str, escape = -1, 0, False, False
-    for i, ch in enumerate(text):
-        if start < 0:
-            if ch == "{":
-                start, depth = i, 1
-            continue
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-        elif in_str:
-            if ch == '"':
-                in_str = False
-        elif ch == '"':
-            in_str = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    obj = _json.loads(text[start : i + 1])
-                    if isinstance(obj, dict):
-                        return obj
-                except Exception:  # noqa: BLE001 — keep scanning for the next one
-                    pass
-                start, in_str, escape = -1, False, False
-    raise ValueError("no parseable workflow JSON object found")
+    obj = loads_object(text or "")
+    if obj is None:
+        raise ValueError("no parseable workflow JSON object found")
+    return obj
 
 
 def _unique_workflow_name(store, base: str, explicit: bool) -> str:
@@ -4191,6 +4157,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     + _paid_only_note(),
                 )
 
+        # Idea 09 (09-a): a step may also be a tool call, a question, a
+        # notice, or one of the two blocks (the ONE text every door that
+        # lets a model write a workflow uses). The repair round below says it
+        # too, so a restated workflow keeps its blocks (review 4).
+        kinds_and_blocks = (
+            "A step's `kind` may be agent (the default), tool (`tool` + `args`, "
+            "no model), ask (`message`: the run waits for the user) or notify "
+            "(`message`). " + _blocks_for_models()
+        )
         system = (
             "You design Iron Jarvis workflows. A workflow is a repeatable, ordered "
             "list of steps. Respond with ONLY a JSON object (no prose, no code "
@@ -4200,12 +4175,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             '"a clear instruction for this step", "tool": null}]}. '
             "agent MUST be one of: builder, planner, researcher, reviewer, "
             "supervisor. Keep tasks concrete and self-contained. Prefer 2-6 steps. "
-            # Idea 09 (09-a): a step may also be a tool call, a question, a
-            # notice, or one of the two blocks (the ONE text every door that
-            # lets a model write a workflow uses).
-            "A step's `kind` may be agent (the default), tool (`tool` + `args`, "
-            "no model), ask (`message`: the run waits for the user) or notify "
-            "(`message`). " + _blocks_for_models()
+            + kinds_and_blocks
         )
         user = f"Create a workflow for this request:\n\n{description}"
         if current:
@@ -4228,10 +4198,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # kind/on_failure vocabularies) whichever door a workflow came in by.
         from .chat_turn import _sanitize_draft
 
+        from ..core.jsonish import loads_object
+
         def _steps_from(text: str) -> list[dict[str, Any]]:
-            try:
-                wf_obj = _extract_workflow_json(text or "")
-            except Exception:  # noqa: BLE001 — no parseable object (garbled/truncated)
+            # Model output is almost JSON: the ONE recovery parser reads it
+            # (idea 09, review 4), so a trailing comma after a For each's
+            # inner step is not "no workflow" and a second model call.
+            wf_obj = loads_object(text or "")
+            if wf_obj is None:  # no parseable object (garbled/truncated)
                 return []
             draft = _sanitize_draft(
                 {"name": wf_obj.get("name") or name or "x", "steps": wf_obj.get("steps")}
@@ -4257,8 +4231,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 '{"name": "kebab-case-name", "description": "one line", '
                 '"steps": [{"name": "Step name", "agent": "builder", "task": '
                 '"instruction", "tool": null}]}. agent MUST be one of: builder, '
-                "planner, researcher, reviewer, supervisor. Keep every step the "
-                "text describes; add none."
+                "planner, researcher, reviewer, supervisor. "
+                + kinds_and_blocks
+                + " Keep every step the text describes, and every If or For "
+                "each with the steps inside it; add none."
             )
             try:
                 resp2, _p2, _m2 = await _one_shot_complete(

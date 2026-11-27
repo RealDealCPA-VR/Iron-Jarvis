@@ -396,6 +396,103 @@ def test_the_builder_writes_blocks_and_saves_them_through_the_one_check(tmp_path
         assert client.get("/workflows/broken").status_code == 404
 
 
+class _Replies:
+    """Answers each model call with the next reply in turn."""
+
+    def __init__(self, *texts: str):
+        self.texts = list(texts)
+        self.systems: list[str] = []
+
+    async def complete(self, *, system, messages, tools):
+        self.systems.append(system)
+        return LLMResponse(text=self.texts[len(self.systems) - 1])
+
+
+#: A local model's near-JSON answer (review 4): prose before the object and
+#: the trailing commas ``core/jsonish`` repairs, around a For each with an If.
+NEAR_JSON = (
+    'Here is the workflow: {"name":"intake","description":"PDFs","steps":['
+    '{"name":"Each","kind":"for_each","over":{"files":{"folder":"C:/Intake","glob":"*.pdf"}},'
+    '"steps":[{"name":"Big?","kind":"if","condition":{"left":"{{item.name}}","op":"contains","right":"big"},'
+    '"steps":[{"name":"Ask","kind":"ask","message":"File {{item.name}}?"},],'
+    '"else_steps":[{"name":"Note","kind":"notify","message":"{{item.name}} filed"},],},],},]}'
+)
+
+
+def _generate_with(tmp_path, adapter):
+    app = create_app(str(tmp_path))
+    app.state.platform.providers.get = lambda *a, **k: adapter
+    return TestClient(app)
+
+
+def test_the_builder_reads_a_near_json_reply_with_blocks_in_one_model_call(tmp_path):
+    """Review 4: ``/workflows/generate`` parsed the reply with its own strict
+    parser, so a trailing comma inside a For each read as "no workflow" and
+    cost a second model call whose prompt knew no blocks. Model output is
+    almost JSON: the ONE recovery parser (``core/jsonish``) reads it."""
+    adapter = _Replies(NEAR_JSON)
+    with _generate_with(tmp_path, adapter) as client:
+        r = client.post("/workflows/generate", json={"description": "for each PDF in intake…"})
+        assert r.status_code == 200, r.text
+        assert len(adapter.systems) == 1, "the reply was read the first time"
+        saved = json.loads(client.get("/workflows/intake").json()["steps_json"])
+    each = saved[0]
+    assert each["kind"] == "for_each" and each["over"] == {"files": {"folder": "C:/Intake", "glob": "*.pdf"}}
+    big = each["steps"][0]
+    assert big["kind"] == "if" and big["steps"][0]["kind"] == "ask"
+    assert big["else_steps"][0]["kind"] == "notify"
+
+
+def test_the_builder_s_restatement_round_keeps_the_blocks(tmp_path):
+    """Review 4: the one repair round asked for the old agent-only shape, so a
+    restated For each came back (and was saved) as plain agent steps, and an
+    "ask me" as an agent step instead of a question. It now says the step
+    kinds and the blocks too."""
+    restated = json.dumps({"name": "Intake", "description": "PDFs", "steps": GOOD})
+    adapter = _Replies(
+        "1. For each PDF in Intake, read the total.\n2. If it is over 5,000, ask me.\n3. Otherwise file it.",
+        restated,
+    )
+    with _generate_with(tmp_path, adapter) as client:
+        r = client.post("/workflows/generate", json={"description": "for each PDF in intake…"})
+        assert r.status_code == 200, r.text
+        assert len(adapter.systems) == 2
+        repair = adapter.systems[1]
+        assert repair.startswith("Convert the workflow described below")
+        assert BLOCKS_FOR_MODELS in repair
+        for word in ("ask (`message`", "notify (`message`)", "tool (`tool` + `args`"):
+            assert word in repair, word
+        saved = json.loads(client.get("/workflows/intake").json()["steps_json"])
+    assert [s["kind"] for s in saved] == ["tool", "for_each", "notify"]
+    assert saved[1]["steps"][1]["steps"][0]["kind"] == "ask"
+
+
+def test_the_one_parser_reads_every_reply_the_old_one_did():
+    """The workflow reply reader is ``core/jsonish`` now (review 4): a fenced
+    block, braces inside step text, and a truncated reply still refused."""
+    from iron_jarvis.daemon.app import _extract_workflow_json
+
+    assert _extract_workflow_json(NEAR_JSON)["steps"][0]["kind"] == "for_each"
+    assert _extract_workflow_json('```json\n{"name": "x", "steps": [],}\n```')["name"] == "x"
+    with pytest.raises(ValueError):
+        _extract_workflow_json('{"name": "z", "steps": [{"task": "do a thin')
+
+
+async def test_the_chat_tool_that_runs_a_stored_workflow_says_an_unknown_kind_in_its_own_sentence(tmp_path):
+    """Review 4 (note): ``workflow_run`` loaded the stored row outside its
+    try, so a step of a kind this version does not know reached the model as
+    "UnknownStepKind: …" from the registry."""
+    platform = build_platform(str(tmp_path))
+    WorkflowStore(platform.engine).save("typo", [{"name": "s", "task": "t", "kind": "toool"}])
+    result = await platform.registry.invoke(
+        "workflow_run", {"name": "typo"},
+        _ctx(platform, tmp_path), platform.permissions, session_allow=["workflow_run"],
+    )
+    assert result.ok is False
+    assert result.error.startswith("The step “s” is a “toool” step, which this version"), result.error
+    assert "UnknownStepKind" not in result.error
+
+
 async def test_a_stored_workflow_a_rule_or_a_schedule_cannot_run_is_said_in_its_own_sentence(tmp_path):
     """Review (note): a hand-made or very old row a rule or a schedule runs,
     with a kind this version does not know or a block that would run

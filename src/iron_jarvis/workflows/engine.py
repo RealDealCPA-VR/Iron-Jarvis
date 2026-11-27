@@ -2866,6 +2866,18 @@ class WorkflowEngine:
             "tool": step.tool,
             "kind": "tool",
         }
+        # Idea 09 (09-a review 4): what a tool read from a file, a page or a
+        # program (``returns_untrusted_content``: read_file, read_document,
+        # extract_pdf, shell…) is outside words, as ``{{Trigger}}`` is, unless
+        # the tool says it is the session's own source. So an agent step gets
+        # it fenced by every route ({{Read}}, {{Read.data.x}}, an If or a For
+        # each built on it, "Context from earlier steps"), and a For each over
+        # a folder of PDFs never hands a file's words on as instructions.
+        if getattr(tool_impl, "returns_untrusted_content", False):
+            from ..tools.builtins import is_own_source
+
+            if not is_own_source(result):
+                out["outside"] = True
         # Bounded structured data (v1.170.0, contract 7): persisted so
         # ``{{Step Name.data}}`` can hand structure to a later step. SUCCESSFUL
         # calls only — a failed tool's payload feeding downstream templating as

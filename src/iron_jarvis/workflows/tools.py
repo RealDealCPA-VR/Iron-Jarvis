@@ -357,7 +357,7 @@ class WorkflowRunTool(Tool):
         self.platform = platform
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-        from .engine import WorkflowEngine
+        from .engine import UnknownStepKind, WorkflowEngine
 
         name = str(args.get("name") or "").strip()
         if not name:
@@ -365,7 +365,13 @@ class WorkflowRunTool(Tool):
         store = WorkflowStore(self.platform.engine)
         # load_def is the ONE stored-record -> def seam — the project pin
         # rides along for free (the same fix the reflex router got).
-        wf = store.load_def(name)
+        try:
+            wf = store.load_def(name)
+        except UnknownStepKind as exc:
+            # Idea 09 (09-a review 4): a stored step of a kind this version
+            # does not know says its own sentence, as a rule's start and a
+            # schedule's fire do, never "UnknownStepKind: …" from the registry.
+            return ToolResult(ok=False, error=str(exc))
         if wf is None:
             known = [r.name for r in store.list()]
             if known:
