@@ -4735,6 +4735,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import capability_misses as _capability_misses_routes
 
     _capability_misses_routes.register(app, d)
+    # Next leaps 19-b: Accept, Decline and Rehearse on an offer to run a
+    # repeated task by itself (its item on Improvements names them).
+    from .routes import schedule_offers as _schedule_offers_routes
+
+    _schedule_offers_routes.register(app, d)
     # Your other computers (v1.497.0, vision plan leap 7): pair two PCs
     # running Iron Jarvis with a six-digit code.
     from .routes import peers as _peers_routes

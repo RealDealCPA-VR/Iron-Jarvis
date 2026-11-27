@@ -23,6 +23,7 @@ from sqlmodel import select
 from iron_jarvis.capability.models import CapabilityProposalRecord
 from iron_jarvis.capability.store import CapabilityProposalStore
 from iron_jarvis.capability_search.miss_models import CapabilityMiss, MissGroup
+from iron_jarvis.scheduling.offers import ScheduleOfferRecord
 from iron_jarvis.coach.models import CoachProposalRecord
 from iron_jarvis.core.db import session_scope
 from iron_jarvis.core.events import EventType
@@ -255,10 +256,27 @@ def seed_missing(desk) -> str:
     return gid
 
 
+def seed_schedule_offer(desk) -> str:
+    """Next leaps 19-b: an offer to run a repeated task by itself."""
+    from iron_jarvis.scheduling.offers import ScheduleOfferRecord
+
+    row = ScheduleOfferRecord(
+        title="month-end-close", words="close the month for the books", cadence="0 9 * * mon",
+        rhythm_json=json.dumps({"kind": "weekly", "hour": 9, "weekday": 0, "day": 0}),
+        skill_name="month-end-close", provider="ollama", model="qwen3:8b",
+        evidence_json=json.dumps({"units": [{"start": 1.0}] * 3, "days": [], "tools": []}),
+    )
+    with session_scope(desk.engine) as db:
+        db.add(row)
+        db.commit()
+        return row.id
+
+
 def seed_everything(desk):
     return {
         "preference": seed_preference(desk), "client": seed_client(desk), "meaning_search": seed_meaning(desk),
         "skill": seed_skill(desk),
+        "schedule_offer": seed_schedule_offer(desk),
         "coach": seed_coach(desk),
         "habit": seed_habit(desk), "lesson": seed_lesson(desk), "session_edit": seed_session_edit(desk),
         "memory": seed_memory(desk), "tool": seed_tool(desk), "missing": seed_missing(desk),
@@ -447,6 +465,8 @@ def test_every_home_link_is_the_screen_the_suggestion_lives_on(desk):
         "client": "/clients#waiting",
         "meaning_search": "/settings?focus=meaning_search",
         "skill": "/skills",
+        # 19-b: the schedule does not exist until Accept.
+        "schedule_offer": None,
         "coach": "/agents?view=team&agent=custom%3Atax-reader",
         "habit": "/agents?view=team&agent=custom%3Aglm-worker",
         "lesson": "/chat?view=code&session=chat_abc",
@@ -637,6 +657,7 @@ TABLES = [
     (LessonRecord, ["preference"]),
     (WorkClient, ["client"]),
     (SkillProposalRecord, ["skill"]),
+    (ScheduleOfferRecord, ["schedule_offer"]),
     (CoachProposalRecord, ["coach", "habit"]),
     (HarnessLibraryRecord, ["lesson", "session_edit"]),
     (MemoryProposalRecord, ["memory"]),
@@ -703,7 +724,7 @@ def test_reading_the_inbox_changes_nothing(desk):
     seed_everything(desk)
     tables = (LessonRecord, SkillProposalRecord, CoachProposalRecord, HarnessLibraryRecord,
               MemoryProposalRecord, CapabilityProposalRecord, ProposalRecord, EventRecord, GoalContractRecord,
-              WorkClient, WorkClientFolder, CapabilityMiss, MissGroup)
+              WorkClient, WorkClientFolder, CapabilityMiss, MissGroup, ScheduleOfferRecord)
 
     def snapshot():
         with session_scope(desk.engine) as db:

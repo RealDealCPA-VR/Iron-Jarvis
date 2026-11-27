@@ -88,6 +88,9 @@ KIND_UNASKED = "unasked"
 #: Next leaps 20-a: something the owner asked for, twice or more in 30 days,
 #: that Iron Jarvis had no feature for (``capability_search/misses``).
 KIND_MISSING = "missing"
+#: Next leaps 19-b: an offer to run a repeated task by itself on its rhythm
+#: (``scheduling/offers``), beside its skill draft.
+KIND_SCHEDULE_OFFER = "schedule_offer"
 
 #: The groups, in the order the page shows them: ``(kind, heading)``.
 KINDS: tuple[tuple[str, str], ...] = (
@@ -95,6 +98,7 @@ KINDS: tuple[tuple[str, str], ...] = (
     (KIND_CLIENT, "Clients Iron Jarvis noticed"),
     (KIND_MEANING, "Search by meaning"),
     (KIND_SKILL, "Skill drafts"),
+    (KIND_SCHEDULE_OFFER, "Tasks Iron Jarvis could run on a schedule"),
     (KIND_COACH, "Agent instructions"),
     (KIND_HABIT, "Working habits for a team member"),
     (KIND_LESSON, "Lessons from coding sessions"),
@@ -322,6 +326,56 @@ def skill_item(view: dict[str, Any]) -> dict[str, Any]:
                       note=("Approving updates that skill with this version." if refine
                             else "Approving saves this as a skill agents and chat can use.")),
         decline=action("Reject", f"/skills/proposals/{_seg(pid)}/reject"), home="/skills",
+    )
+
+
+#: 19-b: the words of an offer to run a task by itself.
+OFFER_DECLINE_NOTE = "Iron Jarvis won't offer to run this by itself again."
+OFFER_NOT_REHEARSED = "Not rehearsed yet."
+OFFER_REHEARSE = "Rehearse"
+
+
+def offer_item(view: dict[str, Any]) -> dict[str, Any]:
+    """19-b: "Run this by itself each Monday at 9am?" (``scheduling/offers``
+    ``offer_view``). Accept makes the schedule (two presses: it starts work by
+    itself); Decline is final; Rehearse (``extra.rehearse``) runs 06-a's
+    rehearsal of it once, changing nothing. Every line is read from the
+    record: the days and tools from the evidence, the model and account the
+    schedule would use, whether the skill is one yet."""
+    from ..learning import repeats
+
+    oid = str(view.get("id") or "")
+    when = str(view.get("when") or "")
+    skill = str(view.get("skill_name") or "")
+    evidence = view.get("evidence") if isinstance(view.get("evidence"), dict) else {}
+    lines = [repeats.times_line(evidence), repeats.tools_line(evidence)]
+    if skill and view.get("skill_kept"):
+        lines.append(f"It uses the skill “{skill}”.")
+    elif skill:
+        lines.append(f"The skill draft “{skill}” is waiting under Skill drafts. A schedule made before you "
+                     "approve it runs without it.")
+    if not view.get("rehearsal_id"):
+        lines.append(OFFER_NOT_REHEARSED)
+    day = str(view.get("newest_day") or "")
+    uses = "the same model and account as" if view.get("account") else "the same model as"
+    model_words = f"It runs on {uses} your chat on {day}" if day else f"It runs on {uses} your chats"
+    there = ", and reports there" if view.get("reports_to_chat") else ""
+    note = (f"Accepting makes a schedule that runs this by itself {when}. {model_words}{there}. "
+            "Schedules can pause or remove it.")
+    path = f"/schedules/offers/{_seg(oid)}"
+    return item(
+        KIND_SCHEDULE_OFFER, oid, title=f"Run this by itself {when}?", about=skill,
+        why=str(view.get("why") or ""), evidence=lines, created_at=view.get("created_at"),
+        detail=detail_text(view.get("words"), "What it runs each time, in your words"),
+        accept=action("Accept", f"{path}/accept", confirm=True, note=note),
+        decline=action("Decline", f"{path}/decline", note=OFFER_DECLINE_NOTE),
+        extra={
+            "rehearse": {
+                "label": OFFER_REHEARSE, "path": f"{path}/rehearse",
+                "note": "Runs it once now, changing nothing: what it would do is listed here.",
+            },
+            "rehearsal_id": str(view.get("rehearsal_id") or ""),
+        },
     )
 
 
@@ -833,6 +887,15 @@ def _skills(d: Any) -> Read:
     return Read({KIND_SKILL: (_built(rows, lambda r: skill_item(_proposal_view(r)), "skill"), total)})
 
 
+def _schedule_offers(d: Any) -> Read:
+    """19-b: the offers to run a repeated task by itself that wait."""
+    from ..scheduling import offers as O
+
+    rows, total = _pending(d.platform.engine, O.ScheduleOfferRecord, O.ScheduleOfferRecord.status == O.WAITING)
+    build = lambda r: offer_item(O.offer_view(d.platform, r))  # noqa: E731
+    return Read({KIND_SCHEDULE_OFFER: (_built(rows, build, "schedule offer"), total)})
+
+
 def _coach(d: Any) -> Read:
     from ..coach.engine import proposal_view
     from ..coach.models import PENDING, CoachProposalRecord as R
@@ -985,6 +1048,7 @@ SOURCES: tuple[tuple[tuple[str, ...], Source], ...] = (
     ((KIND_CLIENT,), _clients),
     ((KIND_MEANING,), _meaning),
     ((KIND_SKILL,), _skills),
+    ((KIND_SCHEDULE_OFFER,), _schedule_offers),
     ((KIND_COACH, KIND_HABIT), _coach),
     ((KIND_LESSON, KIND_SESSION_EDIT), _library),
     ((KIND_MEMORY,), _memory),
@@ -1088,6 +1152,6 @@ __all__ = [
     "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "RESULTS_KIND", "SOURCES", "Read",
     "action", "change_results",
     "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
-    "library_item", "memory_effect", "missing_item", "missing_why", "night_reasons",
+    "library_item", "memory_effect", "missing_item", "missing_why", "night_reasons", "offer_item",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",
 ]

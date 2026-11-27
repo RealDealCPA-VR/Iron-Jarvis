@@ -19,8 +19,10 @@ from sqlmodel import Field, SQLModel
 from ..core.db import session_scope
 from ..core.ids import new_id, utcnow
 
-#: What can be rehearsed (06-a: rules and schedules; 06-b adds the rest).
-SUBJECT_KINDS = ("rule", "schedule", "workflow", "goal")
+#: What can be rehearsed (06-a: rules and schedules; 06-b adds the rest;
+#: next leaps 19-b: ``offer``, a schedule Iron Jarvis offers on Improvements,
+#: rehearsed before it is made).
+SUBJECT_KINDS = ("rule", "schedule", "workflow", "goal", "offer")
 #: ``running`` until its run ends; then ``ready`` (a report to read),
 #: ``failed`` (it could not run; ``summary_json.error`` says why) or
 #: ``stopped`` (the user pressed Stop).

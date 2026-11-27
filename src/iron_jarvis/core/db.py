@@ -285,6 +285,7 @@ _LATE_MODEL_MODULES = (
     "..capability_search.miss_models",  # CapabilityMiss + MissGroup — what you asked for that Iron Jarvis can't do yet (20-a)
     "..harness.scoreboard",   # CodingOutcome — what became of each piece of coding work (leap 28-a)
     "..checks.record",        # CheckRecord — what Iron Jarvis itself checked (intelligence plan, release 5)
+    "..scheduling.offers",   # ScheduleOfferRecord — an offer to run a repeated task by itself (next leaps 19-b)
 )
 
 
