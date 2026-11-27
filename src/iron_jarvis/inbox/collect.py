@@ -299,6 +299,16 @@ def skill_item(view: dict[str, Any]) -> dict[str, Any]:
     refine = str(view.get("kind") or "") == "refine"
     sources = view.get("source_session_ids")
     runs = len(sources) if isinstance(sources, (list, tuple)) else 0
+    # Next leaps 19-a: a draft from repeated chat tasks says when it was
+    # asked for and the tools every one of those tasks used (its evidence,
+    # read from the record), never "earlier runs".
+    evidence = view.get("evidence") if isinstance(view.get("evidence"), dict) else {}
+    if str(view.get("source") or "") == "chat" and evidence:
+        from ..learning import repeats
+
+        lines = [repeats.times_line(evidence), repeats.tools_line(evidence)]
+    else:
+        lines = [f"Written from {_plural(runs, 'earlier run')}"] if runs else []
     detail = (
         detail_diff(view.get("prev_body_md"), view.get("body_md"), f"The skill {name}") if refine
         else detail_text(view.get("body_md"), f"The skill {name}")
@@ -306,7 +316,7 @@ def skill_item(view: dict[str, Any]) -> dict[str, Any]:
     return item(
         KIND_SKILL, pid, title=f"{'Update the skill' if refine else 'New skill'}: {name}", about=name,
         why=str(view.get("description") or ""),
-        evidence=[f"Written from {_plural(runs, 'earlier run')}"] if runs else [],
+        evidence=lines,
         created_at=view.get("created_at"), detail=detail,
         accept=action("Approve", f"/skills/proposals/{_seg(pid)}/approve",
                       note=("Approving updates that skill with this version." if refine

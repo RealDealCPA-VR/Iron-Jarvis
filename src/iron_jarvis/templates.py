@@ -17,6 +17,33 @@ from .core.db import session_scope
 from .core.models import AgentType, SavedPromptRecord
 
 
+#: THE REPEAT RULE, shared by the template detector below and the chat
+#: repeat detector (``learning/repeats.py``, next leaps 19-a): two requests
+#: are the same kind of task when their word sets meet :data:`SAME_TASK`
+#: (Jaccard); a request with fewer than :data:`MIN_TOKENS` words is never
+#: grouped; a group within :data:`ALREADY_SAVED` of a saved template is
+#: already covered.
+SAME_TASK = 0.55
+ALREADY_SAVED = 0.5
+MIN_TOKENS = 3
+_STOP = frozenset({"the", "and", "for", "with", "that", "this", "from", "into",
+                   "please", "then", "them", "your", "file", "files"})
+
+
+def task_tokens(text: str) -> frozenset[str]:
+    """A request's words for the repeat rule (lower case, 3+ letters, the
+    filler words left out). Pure."""
+    words = re.findall(r"[a-z]{3,}", (text or "").lower())
+    return frozenset(w for w in words if w not in _STOP)
+
+
+def similarity(a: frozenset, b: frozenset) -> float:
+    """Jaccard of two word sets (0.0 when either is empty). Pure."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
 def _normalize_agent_type(raw: object) -> str:
     """Any agent identifier -> its canonical string (v1.128.0).
 
@@ -117,16 +144,7 @@ class TemplateStore:
         until the user clicks save."""
         from .core.models import Session as SessionModel
 
-        def toks(text: str) -> frozenset[str]:
-            words = re.findall(r"[a-z]{3,}", (text or "").lower())
-            stop = {"the", "and", "for", "with", "that", "this", "from", "into",
-                    "please", "then", "them", "your", "file", "files"}
-            return frozenset(w for w in words if w not in stop)
-
-        def sim(a: frozenset, b: frozenset) -> float:
-            if not a or not b:
-                return 0.0
-            return len(a & b) / len(a | b)
+        toks, sim = task_tokens, similarity
 
         with session_scope(self.engine) as db:
             tasks = [
@@ -137,10 +155,10 @@ class TemplateStore:
         groups: list[dict] = []  # {sig, example, count}
         for task in tasks:
             sig = toks(task)
-            if len(sig) < 3:
+            if len(sig) < MIN_TOKENS:
                 continue
             for g in groups:
-                if sim(sig, g["sig"]) >= 0.55:
+                if sim(sig, g["sig"]) >= SAME_TASK:
                     g["count"] += 1
                     if len(task) < len(g["example"]):
                         g["example"] = task  # keep the crispest phrasing
@@ -151,7 +169,7 @@ class TemplateStore:
         for g in sorted(groups, key=lambda x: -x["count"]):
             if g["count"] < min_count:
                 continue
-            if any(sim(g["sig"], e) >= 0.5 for e in existing):
+            if any(sim(g["sig"], e) >= ALREADY_SAVED for e in existing):
                 continue  # already a template
             words = [w for w in re.findall(r"[A-Za-z]{3,}", g["example"])][:4]
             out.append({

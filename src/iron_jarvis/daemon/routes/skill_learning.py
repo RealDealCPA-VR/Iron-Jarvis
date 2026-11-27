@@ -23,6 +23,25 @@ from fastapi import FastAPI, HTTPException
 from ..schemas import SkillLearningSettingsPatch, SkillProposalApproveBody
 
 
+def _evidence(text: Any) -> dict[str, Any]:
+    """A chat draft's evidence (next leaps 19-a) as the views show it: when
+    each task was asked for, the days, the tools and the file kinds. The
+    owner's words and the chat ids stay in the record. {} for a run's."""
+    from ...learning.repeats import load_evidence
+
+    got = load_evidence(text)
+    if not got:
+        return {}
+    units = [u for u in got.get("units") or [] if isinstance(u, dict)]
+    return {
+        "units": [{"at": u.get("at")} for u in units],
+        "days": [str(d) for d in got.get("days") or []],
+        "tools": [str(t) for t in got.get("tools") or []],
+        "kinds_in": [str(k) for k in got.get("kinds_in") or []],
+        "kinds_out": [str(k) for k in got.get("kinds_out") or []],
+    }
+
+
 def _proposal_view(p) -> dict[str, Any]:
     """One proposal, FLAT (the POST /sessions convention) — always carries
     ``status`` so the UI can filter pending itself."""
@@ -38,6 +57,10 @@ def _proposal_view(p) -> dict[str, Any]:
         "body_md": p.body_md,
         "prev_body_md": p.prev_body_md,
         "source_session_ids": source_ids,
+        # 19-a: "run" or "chat" (an older row's NULL is a run's), and a chat
+        # draft's evidence (its days and tools; never a file name).
+        "source": str(getattr(p, "source", "") or "run"),
+        "evidence": _evidence(getattr(p, "evidence_json", "")),
         "status": p.status,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "decided_at": p.decided_at.isoformat() if p.decided_at else None,

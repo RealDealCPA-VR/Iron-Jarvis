@@ -374,6 +374,17 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # Third plan CS7: and its turn records (each reply's text, thinking,
         # tool inputs and results), in this same transaction.
         _durable.drop_thread_records(db, thread_id)
+        # Next leaps 19-a: and what a repeat took from it (a waiting skill
+        # draft's record of its task and words), in this same transaction.
+        from ...learning import repeats as _repeats
+
+        # A delete must always complete: a candidate table that cannot be
+        # read (its start-up step failed) never keeps the chat.
+        try:
+            with db.begin_nested():
+                _repeats.drop_thread(db, thread_id)
+        except Exception:  # noqa: BLE001
+            log.warning("a deleted chat's repeat records could not be dropped", exc_info=True)
         try:
             index = search_index(engine)
             if index is not None:

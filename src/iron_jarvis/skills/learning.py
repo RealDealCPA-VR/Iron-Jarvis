@@ -28,6 +28,7 @@ skill use through the ``skill_load`` tool inside a real session and IS covered.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -47,6 +48,9 @@ from ..improvement.models import OutcomeRecord
 from .framework import _tokens
 from .loader import SKILL_FILE, _parse_frontmatter, save_skill, slugify
 from .learning_models import (
+    HELD,
+    SOURCE_CHAT,
+    SOURCE_RUN,
     SkillCandidateRecord,
     SkillProposalRecord,
     SkillStatRecord,
@@ -126,6 +130,65 @@ _REFINE_SYSTEM = (
 )
 
 
+#: Next leaps 19-a: the request for a draft written from CHATS. The same
+#: format, and the steps only: never a value from one of the chats, since a
+#: kept skill reaches every later use.
+_CHAT_CREATE_SYSTEM = (
+    _CREATE_SYSTEM
+    + " These chats are the same kind of task asked for on different days: keep "
+    "the STEPS they share, never the values. Write no name of a person, client "
+    "or company, no figure, amount, date, account number or file name from "
+    "them; say what kind of thing goes there instead."
+)
+#: 19-a: what one chat's record holds, at most.
+_CHAT_OWNER_LINES = 6
+_CHAT_REPLY = 300
+_CHAT_LINE = 1200
+_CHAT_TOOLS = 30
+
+
+def _scanned_line(text: Any, cap: int, source: str) -> str:
+    """One line of a chat's record for a drafting request (19-a): masked
+    (``detections/redact.mask``), then scanned (``core/promptguard``: a line
+    read as an instruction is replaced by its placeholder), then cut. A
+    line the scan cannot read is left out ("" back): nothing unscanned
+    reaches the drafting model."""
+    from ..core.promptguard import scan_context
+    from ..detections.redact import mask
+
+    masked = str(mask(str(text or "")) or "")
+    try:
+        scanned = scan_context(masked, source=source, cap=None, strict=True).text
+    except Exception:  # noqa: BLE001
+        return ""
+    return " ".join(str(scanned or "").split())[:cap]
+
+
+def names_a_client(engine: Any, text: Any) -> bool:
+    """Does ``text`` name a client, confirmed or waiting (the wall's own name
+    list, ``workmap/clients/store.load_map``)? A list that cannot be read
+    answers True: the draft is held, never shown on a guess (19-a; the
+    intelligence plan's release 10 asks it of every draft). BLOCKING."""
+    try:
+        from ..workmap.clients import names as client_names
+        from ..workmap.clients import store as client_store
+
+        cmap = client_store.load_map(engine)
+        body = str(text or "")
+        size = client_names.NAMED_TEXT_MAX
+        step = size - 200  # overlapping pieces: a name across a cut is still read
+        for table in (cmap.names, cmap.waiting_names):
+            if not table:
+                continue
+            for i in range(0, max(1, len(body)), step):
+                if client_names.named_in(body[i : i + size], table):
+                    return True
+        return False
+    except Exception:  # noqa: BLE001 — unreadable: held
+        log.warning("skill draft: the client names could not be read; the draft is held", exc_info=True)
+        return True
+
+
 #: Said before the fenced record in both drafting requests (the intelligence
 #: plan, release 2): the record is information about what was done.
 _RECORD_LEAD = (
@@ -159,6 +222,18 @@ def _fenced_record(text: str) -> str:
     from ..computeruse.safety import wrap_untrusted
 
     return f"{_RECORD_LEAD}\n{wrap_untrusted(text)}"
+
+
+def _is_chat(cand: Any) -> bool:
+    """19-a: a candidate found from chats (``source == "chat"``)."""
+    return str(getattr(cand, "source", "") or SOURCE_RUN) == SOURCE_CHAT
+
+
+def _not_chat(column: Any) -> Any:
+    """SQL: not a chat candidate (an older row's NULL is a run's)."""
+    from sqlalchemy import or_
+
+    return or_(column.is_(None), column != SOURCE_CHAT)  # type: ignore[union-attr]
 
 
 def _signature(task: str) -> str:
@@ -535,6 +610,11 @@ class SkillLearningEngine:
             stmt = select(SkillCandidateRecord).where(SkillCandidateRecord.status == "pending")
             if ids is not None:
                 stmt = stmt.where(SkillCandidateRecord.id.in_([str(i) for i in ids]))  # type: ignore[attr-defined]
+            else:
+                # 19-a: a chat candidate is drafted ONLY by the night review
+                # (``ids``), pinned to its own chats' model; the sweep after a
+                # run and "Distill now" use whatever model is the default.
+                stmt = stmt.where(_not_chat(SkillCandidateRecord.source))
             candidates = list(
                 db.exec(
                     stmt.order_by(SkillCandidateRecord.created_at.asc())
@@ -548,6 +628,7 @@ class SkillLearningEngine:
         reviewed = 0
         held = 0
         unread = 0
+        held_client = 0
         for cand in candidates:
             if reviewed >= want:
                 break
@@ -556,7 +637,11 @@ class SkillLearningEngine:
             # is dropped HERE, before any request is built. It spends no
             # request, so it does not count toward ``want``. A row that
             # cannot be read is left for the next sweep (fail closed).
-            trusted = self._candidate_trusted(cand)
+            chat = _is_chat(cand)
+            # 19-a: a chat candidate's checks read its chats again (bounded,
+            # but not small): off the event loop.
+            trusted = (await asyncio.to_thread(self._candidate_trusted, cand) if chat
+                       else self._candidate_trusted(cand))
             if trusted is None:
                 unread += 1
                 continue
@@ -569,7 +654,8 @@ class SkillLearningEngine:
             # one-shot gate refuses a model that leaves this network. Held
             # pending (not dismissed, no attempt spent) until the model that
             # writes skill drafts is one on this network.
-            local = self._candidate_local_only(cand)
+            local = (await asyncio.to_thread(self._candidate_local_only, cand) if chat
+                     else self._candidate_local_only(cand))
             try:
                 with _egress.local_only_scope(local):
                     if cand.kind == "refine":
@@ -582,12 +668,20 @@ class SkillLearningEngine:
                 held += 1
                 continue
             reviewed += 1
+            if outcome == HELD:
+                # 19-a: the draft named a client. It is never shown; it waits
+                # for client-only skills (19-c).
+                self._set_candidate_status(cand.id, HELD)
+                held_client += 1
+                continue
             if isinstance(outcome, SkillProposalRecord):
                 self._set_candidate_status(cand.id, "distilled")
-                if not local:
+                if not local and not chat:
                     # A draft written from a Local only run is never added
                     # unasked: once kept, a skill reaches every later prompt,
-                    # a cloud model's included. It waits for the owner.
+                    # a cloud model's included. It waits for the owner. 19-a:
+                    # nor is a draft from the owner's chats (suggest, never
+                    # act: "Approve learned skills automatically" is for runs).
                     outcome = self._maybe_auto_approve(outcome)
                 proposal_ids.append(outcome.id)
                 if announce:
@@ -608,13 +702,26 @@ class SkillLearningEngine:
             # Left for the next sweep: the run's row could not be read, so
             # nobody could say whether it was trusted work.
             out["held_unreadable"] = unread
+        if held_client:
+            out["held_client"] = held_client
         return out
 
     def _candidate_trusted(self, cand: SkillCandidateRecord) -> "bool | None":
         """May this candidate's run be drafted from? False = its run ended
         low trust (drop it); None = the row could not be read (leave it for
         the next sweep). A run whose row is gone has no record left to
-        send, and is judged as before."""
+        send, and is judged as before.
+
+        19-a, a CHAT candidate: its chats are read again; any of its tasks
+        whose reply now reads LOW trust makes it untrusted, chats that cannot
+        be read leave it for the next sweep."""
+        if _is_chat(cand):
+            from ..learning import repeats
+
+            found = repeats.reread(self.engine, repeats.load_evidence(cand.evidence_json))
+            if found is None:
+                return None
+            return not any(unit.low_trust or unit.remote for unit, _lines in found)
         try:
             with session_scope(self.engine) as db:
                 sess = db.get(Session, cand.session_id)
@@ -627,7 +734,23 @@ class SkillLearningEngine:
     def _candidate_local_only(self, cand: SkillCandidateRecord) -> bool:
         """Was the run this candidate came from Local only (v1.502.0)? Read
         off its session row (``options.local_only``). A row that cannot be
-        read is treated as Local only: fail closed, the draft waits."""
+        read is treated as Local only: fail closed, the draft waits.
+
+        19-a, a CHAT candidate: Local only when ANY of its chats was (as
+        noted, or now), so the whole request stays on this network."""
+        if _is_chat(cand):
+            from ..learning import repeats
+
+            evidence = repeats.load_evidence(cand.evidence_json)
+            noted = [u for u in evidence.get("units") or [] if isinstance(u, dict)]
+            if not noted or any(bool(u.get("local_only", True)) for u in noted):
+                return True
+            found = repeats.reread(self.engine, evidence)
+            if found is None:
+                return True
+            # A task a model on the owner's own PC or network answered keeps
+            # the whole request home too (``repeats._home_if_here``).
+            return any(repeats._home_if_here(self.p, unit).local_only for unit, _lines in found)
         try:
             from ..agents.orchestrator import session_local_only
 
@@ -642,6 +765,8 @@ class SkillLearningEngine:
     async def _distill_create(
         self, cand: SkillCandidateRecord, complete: Complete
     ) -> "SkillProposalRecord | str | None":
+        if _is_chat(cand):
+            return await self._distill_chat_create(cand, complete)
         task, summary, tool_lines = self._session_context(cand.session_id, cand.task)
         # The intelligence plan, release 2: the record is masked
         # (`_session_context`) and handed over as fenced information, with
@@ -672,6 +797,89 @@ class SkillLearningEngine:
             source_session_ids=[cand.session_id],
             signature=cand.signature,
         )
+
+    async def _distill_chat_create(
+        self, cand: SkillCandidateRecord, complete: Complete
+    ) -> "SkillProposalRecord | str | None":
+        """19-a: one draft from the chats that asked for the same kind of task
+        on three days. The chats are read AGAIN (``_chat_context``): a task
+        gone from its chat is left out, and too few left ends the candidate.
+        The draft is written, parsed like any other, and HELD when it names
+        a client (``names_a_client``)."""
+        from ..learning import repeats
+
+        evidence = repeats.load_evidence(cand.evidence_json)
+        context = await asyncio.to_thread(self._chat_context, evidence)
+        if context is None:
+            return None  # unreadable now: a bounded retry
+        record, units = context
+        days = {repeats.day_of(u.start) for u in units}
+        if len(units) < repeats.MIN_UNITS or len(days) < repeats.MIN_DAYS:
+            return "dismiss"  # the chats no longer hold three tasks on three days
+        prompt = (
+            f"The owner asked for the same kind of task in {len(units)} chats, on "
+            f"{len(days)} different days. Capture the repeatable procedure as a skill.\n\n"
+            f"{_fenced_record(record)}\n\n"
+            "Write the full SKILL.md now."
+        )
+        reply = await complete(_CHAT_CREATE_SYSTEM, prompt)
+        name, description, body = self._parse_skill_md(reply)
+        if not name:
+            return None
+        if self._slug_taken(slugify(name)):
+            return None
+        body_md = _compose_skill_md(name, description, body)
+        if await asyncio.to_thread(names_a_client, self.engine, body_md):
+            return HELD
+        return self._mint_proposal(
+            kind="create",
+            skill_name=name,
+            description=description,
+            body_md=body_md,
+            prev_body_md="",
+            source_session_ids=list(dict.fromkeys(u.ref for u in units)),
+            signature=cand.signature,
+            source=SOURCE_CHAT,
+            # Rebuilt from the tasks just READ (a deleted chat's task is not
+            # counted, its days and tools recomputed), with none of the
+            # owner's words: the rejected-draft check reads the candidate.
+            evidence_json=json.dumps(repeats.evidence_of(repeats.group_of(units), words=False)),
+        )
+
+    def _chat_context(self, evidence: dict) -> "tuple[str, list[Any]] | None":
+        """``(record, units)`` for a chat draft's request, or None when the
+        chats cannot be read. Per task: the owner's own lines, the tools the
+        ledger shows in order, the replies clipped; every line masked and
+        scanned (``_scanned_line``). The caller fences the record. BLOCKING."""
+        from ..learning import repeats
+
+        found = repeats.reread(self.engine, evidence)
+        if found is None:
+            return None
+        parts: list[str] = []
+        units = []
+        for k, (unit, lines) in enumerate(found, 1):
+            units.append(unit)
+            owner = [m for m in lines if m.get("role") == "user"][:_CHAT_OWNER_LINES]
+            replies = [m for m in lines if m.get("role") == "assistant"]
+            chunk = [f"Chat {k}:"]
+            for m in owner:
+                line = _scanned_line(m.get("content"), _CHAT_LINE, "chat")
+                if line:
+                    chunk.append(f"- The owner: {line}")
+            tools = ", ".join(unit.tools[:_CHAT_TOOLS])
+            chunk.append(f"- Tools used, in order: {tools or '(none recorded)'}")
+            if unit.kinds_in or unit.kinds_out:
+                chunk.append(
+                    f"- Kinds of files read: {', '.join(sorted(unit.kinds_in)) or 'none'}; "
+                    f"written: {', '.join(sorted(unit.kinds_out)) or 'none'}"
+                )
+            if replies:
+                line = _scanned_line(replies[-1].get("content"), _CHAT_REPLY, "chat")
+                if line:
+                    chunk.append(f"- Iron Jarvis's reply, clipped: {line}")
+            parts.append("\n".join(chunk))
+        return "\n\n".join(parts), units
 
     async def _distill_refine(
         self, cand: SkillCandidateRecord, complete: Complete
@@ -838,6 +1046,8 @@ class SkillLearningEngine:
         prev_body_md: str,
         source_session_ids: list[str],
         signature: str,
+        source: str = SOURCE_RUN,
+        evidence_json: str = "",
     ) -> SkillProposalRecord:
         record = SkillProposalRecord(
             kind=kind,
@@ -847,6 +1057,8 @@ class SkillLearningEngine:
             prev_body_md=prev_body_md,
             source_session_ids=json.dumps(source_session_ids),
             signature=signature,
+            source=source,
+            evidence_json=evidence_json,
         )
         with session_scope(self.engine) as db:
             db.add(record)
@@ -1051,11 +1263,14 @@ class SkillLearningEngine:
                     )
                 )
             )
+            # 19-a: a chat candidate waits for the night review, not for
+            # "Distill now", so the Skills page's count leaves it out.
             pending_candidates = len(
                 list(
                     db.exec(
                         select(SkillCandidateRecord.id).where(
-                            SkillCandidateRecord.status == "pending"
+                            SkillCandidateRecord.status == "pending",
+                            _not_chat(SkillCandidateRecord.source),
                         )
                     )
                 )

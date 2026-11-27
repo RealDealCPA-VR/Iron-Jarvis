@@ -132,6 +132,9 @@ PER_AGENT = 25
 SKILL_DRAFTS = 1
 #: Waiting skill drafts looked at to find the one the budget allows.
 SKILL_LOOK = 20
+#: 19-a: drafts from repeated chat tasks written in one night (one request
+#: each, inside the night's cap).
+REPEAT_DRAFTS = 2
 #: One suggestion maker's time limit (its model request included).
 CALL_TIMEOUT_S = 180.0
 #: Night rows read for the reasons shown on Improvements.
@@ -167,6 +170,10 @@ PROPOSERS: tuple[tuple[str, str], ...] = (
     ("tool_failures", "the tool-failure scan: a tool that kept failing this week (no model)"),
     ("coach", "the coach: a custom agent with a pattern in yesterday's runs"),
     ("skill", "one skill draft that was waiting to be written"),
+    # Next leaps 19-a: the same kind of task asked for in chat on three
+    # different days (``learning/repeats``, no model) becomes one draft,
+    # written on the model of the newest of those chats.
+    ("repeat", "a skill draft from the same kind of task asked for in chat on three different days"),
 )
 
 #: The coach's categories as the reason on a suggestion (``{n}`` is how
@@ -409,10 +416,14 @@ def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
     from ..scheduling.knobs import session_options
     from ..skills.learning_models import SkillCandidateRecord as C
 
+    from ..skills.learning import _not_chat
+
     out: list[dict[str, Any]] = []
     with session_scope(platform.engine) as db:
+        # 19-a: a chat candidate is the ``repeat`` row's (its own model).
         cands = list(db.exec(
-            select(C).where(C.status == "pending").order_by(C.created_at.asc()).limit(SKILL_LOOK)  # type: ignore[attr-defined]
+            select(C).where(C.status == "pending", _not_chat(C.source))
+            .order_by(C.created_at.asc()).limit(SKILL_LOOK)  # type: ignore[attr-defined]
         ))
         for cand in cands:
             sess = db.get(Session, cand.session_id)
@@ -439,14 +450,66 @@ def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
     return (allowed or out)[:SKILL_DRAFTS]
 
 
+def repeat_why(n: int) -> str:
+    """Why the review made a draft from repeated chat tasks (the item's own
+    evidence says the days and the tools)."""
+    return f"Written from the {int(n)} times you asked for the same kind of task in chat."
+
+
+def _repeat_jobs(platform: Any, end: datetime, night: str = "") -> list[dict[str, Any]]:
+    """19-a: first the repeat detector (``learning/repeats.detect``: the
+    chats of the 35 days before ``end``, no model; it adds a chat candidate
+    per new repeat and never raises), then one job per waiting chat
+    candidate, at most :data:`REPEAT_DRAFTS`, each pinned to the model of
+    its NEWEST chat task (provider, model AND account) and Local only
+    when any of its chats was. The
+    budget's refusals are handled as :func:`_skill_jobs` does."""
+    if getattr(platform, "skill_learning", None) is None:
+        return []
+    from ..learning import repeats
+    from ..skills.learning_models import SOURCE_CHAT, SkillCandidateRecord as C
+
+    repeats.detect(platform, now=end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end)
+    out: list[dict[str, Any]] = []
+    with session_scope(platform.engine) as db:
+        cands = list(db.exec(
+            select(C).where(C.status == "pending", C.source == SOURCE_CHAT)
+            .order_by(C.created_at.asc()).limit(SKILL_LOOK)  # type: ignore[attr-defined]
+        ))
+    for cand in cands:
+        evidence = repeats.load_evidence(cand.evidence_json)
+        units = [u for u in evidence.get("units") or [] if isinstance(u, dict)]
+        newest = units[0] if units else {}
+        out.append({
+            "key": f"repeat:{cand.id}", "proposer": "repeat", "target": cand.id,
+            "provider": str(newest.get("provider") or ""), "model": str(newest.get("model") or ""),
+            # The account the newest chat ran on (never the vendor's Default
+            # in its place): ``_arm_account`` pins it, and an account that is
+            # gone or turned off refuses the night's draft; no other login.
+            "account": str(newest.get("account") or ""),
+            # Fail closed: a unit that does not say is Local only.
+            "local_only": (not units) or any(bool(u.get("local_only", True)) for u in units),
+            "why": repeat_why(len(units)),
+        })
+    allowed = [
+        job for job in out
+        if not B.may_spend(platform, provider=job["provider"], model=job["model"], account=job["account"],
+                           local_only=bool(job["local_only"]), night=night)
+    ]
+    return (allowed or out)[:REPEAT_DRAFTS]
+
+
 def match(platform: Any, start: datetime, end: datetime, night: str = "") -> list[dict[str, Any]]:
     """Tonight's jobs, in :data:`PROPOSERS` order. BLOCKING; RAISES when the
-    records cannot be read (the pass then waits)."""
+    records cannot be read (the pass then waits). The one write: the repeat
+    detector (19-a) adds a chat candidate for each NEW repeat it finds (no
+    model; the same repeat is never added twice)."""
     jobs: list[dict[str, Any]] = []
     if getattr(platform, "improvement", None) is not None:
         jobs.append({"key": "tool_failures", "proposer": "tool_failures", "target": ""})
     jobs += _coach_jobs(platform, start, end)
     jobs += _skill_jobs(platform, night)
+    jobs += _repeat_jobs(platform, end, night)
     return jobs
 
 
@@ -781,6 +844,9 @@ _RUNNERS: dict[str, Callable[[Any, dict[str, Any], str], Awaitable[tuple[dict[st
     "tool_failures": _run_tool_failures,
     "coach": _run_coach,
     "skill": _run_skill,
+    # 19-a: a chat candidate is drafted by the same runner (the skill
+    # learner reads its chats; the job carries the newest chat's model).
+    "repeat": _run_skill,
 }
 assert set(_RUNNERS) == {name for name, _ in PROPOSERS}
 
@@ -919,7 +985,7 @@ async def _stop_reason(d: Any, at: datetime) -> str:
 #: The suggestion makers that send a model request, and the answers of
 #: theirs that mean no request was ever going to be sent (the maker is not
 #: there at all).
-_ASKS_A_MODEL = frozenset({"coach", "skill"})
+_ASKS_A_MODEL = frozenset({"coach", "skill", "repeat"})
 _UNAVAILABLE = frozenset({WHY_NO_COACH, WHY_NO_SKILLS})
 
 
