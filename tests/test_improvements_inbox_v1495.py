@@ -393,7 +393,9 @@ def test_each_kind_points_at_its_own_routes(desk):
 def test_two_presses_only_where_an_answer_acts_at_once_or_is_final(desk):
     seed_everything(desk)
     by = {i["kind"]: i for i in _inbox(desk)["items"]}
-    assert {k for k, i in by.items() if i["accept"] and i["accept"]["confirm"]} == {"memory", "tool", "wants"}
+    assert {k for k, i in by.items() if i["accept"] and i["accept"]["confirm"]} == {"memory", "tool", "wants",
+                                                                                     # 19-b: a schedule that starts work by itself
+                                                                                     "schedule_offer"}
     # Rejecting something it wants to do is final, and two presses on its own screen.
     assert {k for k, i in by.items() if i["decline"] and i["decline"]["confirm"]} == {"wants"}
 

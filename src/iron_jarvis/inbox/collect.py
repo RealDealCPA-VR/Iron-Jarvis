@@ -32,8 +32,8 @@ THE RULES, each pinned in ``tests/test_improvements_inbox_v1495.py``:
   at most :data:`GOALS_MAX` goals (past that the kind is named as
   incomplete).
 * TWO PRESSES (``confirm``) for an accept that acts at once beyond saving
-  what the item shows: it starts a task, creates a tool, or deletes or
-  rewrites notes. A decline that is final and takes two presses on its own
+  what the item shows: it starts a task, creates a tool, deletes or
+  rewrites notes, or makes a schedule that starts work by itself (19-b). A decline that is final and takes two presses on its own
   screen (rejecting something Iron Jarvis wants to do) takes two here.
 * An offer to run a tool WITHOUT ASKING is listed but never decided here: it
   widens what runs unasked, so it is answered on its own screen.
