@@ -758,9 +758,14 @@ def _end_reply(reply: "_Reply | None") -> None:
 
 
 async def removals_done() -> None:
-    """Wait for the removals that ended replies started (shutdown, tests)."""
-    while _TASKS:
-        await asyncio.gather(*list(_TASKS), return_exceptions=True)
+    """Wait for the removals that ended replies started (shutdown, tests).
+
+    Through ``core/tasks.drain_tasks``: a ``while tasks: await gather(...)``
+    loop spins forever once every task has finished and its done callback
+    has not yet taken it out of the set (docs/rules/daemon.md, v1.388.2)."""
+    from ..core.tasks import drain_tasks
+
+    await drain_tasks(_TASKS)
 
 
 @contextmanager
