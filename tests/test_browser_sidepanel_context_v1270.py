@@ -44,6 +44,7 @@ from iron_jarvis.core.turns import TURNS
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.tools.base import ToolResult
 from tests._fakes.panel_harness import _FIRST, _SECOND, Gate, RealApp, _headers, _wait_for
+from tests._fakes.sent import own_words
 from tests.test_browser_actions_v1237 import (
     ActRuntime,
     FakeApprovals,
@@ -155,7 +156,10 @@ def test_the_second_message_carries_the_first_exchange(tmp_path, monkeypatch):
         assert [r["role"] for r in second] == ["user", "assistant", "user"], second
         assert "Remember the number 41." in second[0]["content"]
         assert "Noted: the number is 41." in second[1]["content"]
-        assert second[-1]["content"].endswith("What number did I say?")
+        # (Release 7: what Iron Jarvis found for the newest message rides
+        # beside it, after the person's own words, which end the message.)
+        assert own_words(second[-1]["content"]).endswith("What number did I say?")
+        assert second[0]["content"].endswith("Remember the number 41."), "an earlier message goes as it was typed"
 
 
 def test_open_replays_the_conversation_and_reset_forgets_it(tmp_path, monkeypatch):
