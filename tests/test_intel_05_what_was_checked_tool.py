@@ -284,6 +284,12 @@ SHOULD_NOT_ARM = [
     "how do I know the restaurant is right for the party",
     "how do I know it is installed",
     "how do you know that",
+    # Right FOR somebody is not right; a thing that is not the work; somebody else's check.
+    "how do you know it is right for us",
+    "how do I know the address is right",
+    "how do we know the new hire is correct",
+    "did he check the report",
+    "did they check the figures at the bank",
     "what should I check before filing",
     "what did we decide about the fee",
 ]

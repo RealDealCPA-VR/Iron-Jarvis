@@ -1164,10 +1164,38 @@ def test_settling_a_kept_home_run_asks_the_chat_now_and_a_failed_read_is_no(plat
     for name, ask in (("s_no", lambda _e, _c: False), ("s_broken", broken)):
         assert T.settle_run(platform.engine, name, [str(made)], thread_id="c1", kept_home=True, chat_local_only=ask) == 2
         assert {(r.thread_id, r.kept_home) for r in _rows(platform.engine, session_id=name)} == {("", True)}, name
+    # A caller that does not say: the run's OWN row is read. A Local only run's rows get no chat ...
+    from iron_jarvis.core.models import Session
+
+    with session_scope(platform.engine) as db:
+        db.add(Session(id="s_row_home", task="x", options_json=json.dumps({"local_only": True})))
+        db.add(Session(id="s_row_open", task="x", options_json=json.dumps({})))
+        db.commit()
+    assert T.settle_run(platform.engine, "s_row_home", [str(made)], thread_id="c1", chat_local_only=lambda _e, _c: False) == 2
+    assert {(r.thread_id, r.kept_home) for r in _rows(platform.engine, session_id="s_row_home")} == {("", True)}
+    # ... and any other run's rows are its chat's, as before (so is a run with no row at all).
+    assert T.settle_run(platform.engine, "s_row_open", [str(made)], thread_id="c1", chat_local_only=broken) == 2
+    assert {(r.thread_id, r.kept_home) for r in _rows(platform.engine, session_id="s_row_open")} == {("c1", False)}
+    assert T._keeps_home(platform.engine, "no_such_run") is False and T._keeps_home(object(), "x") is True
     # A run that keeps nothing home is written under its chat, and the chat is never asked.
     asked.clear()
     assert T.settle_run(platform.engine, "s_open", [str(made)], thread_id="c1", chat_local_only=local) == 2
     assert asked == [] and {(r.thread_id, r.kept_home) for r in _rows(platform.engine, session_id="s_open")} == {("c1", False)}
+
+
+async def test_two_chats_that_send_one_turn_id_never_read_each_others_files(platform, tmp_path):
+    """A turn's id comes from the caller. With one id sent from two chats,
+    the second chat's line named the first chat's file."""
+    mine = tmp_path / "chatA-payroll.md"
+    mine.write_text("x", encoding="utf-8")
+    theirs = tmp_path / "chatB-notes.md"
+    theirs.write_text("y", encoding="utf-8")
+    one = await T.checked_for_turn(platform, turn_id="same-id", thread_id="chatA", made_docs=[str(mine)])
+    two = await T.checked_for_turn(platform, turn_id="same-id", thread_id="chatB", made_docs=[str(theirs)])
+    assert one["line"] == two["line"] == "Checked by Iron Jarvis: the document opens, has text."
+    assert "payroll" not in json.dumps(two) and {c["label"] for c in two["checks"]} == {"“chatB-notes.md”"}
+    assert {(r.thread_id, r.file) for r in _rows(platform.engine, turn_id="same-id")} == {
+        ("chatA", "chatA-payroll.md"), ("chatB", "chatB-notes.md")}
 
 
 # --------------------------------------------------------------------------- #

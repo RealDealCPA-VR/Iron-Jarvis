@@ -173,6 +173,10 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
     if not docs:
         return None
     kept = await asyncio.to_thread(record.for_turn, engine, turn)
+    if thread_id:
+        # A turn's id is the caller's own choice. Two chats that send one id
+        # are never read as one reply: this chat's line holds this chat's rows.
+        kept = [r for r in kept if r.get("thread_id") == thread_id]
     return record.payload(kept) if record.has_content(kept) else None
 
 
@@ -265,7 +269,7 @@ async def note_finish(platform: Any, finish: Any, *, turn_id: str = "", thread_i
 
 
 def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", *, thread_id: str = "",
-               reply: str = "", clock: Callable[[], float] = time.monotonic, kept_home: bool = False,
+               reply: str = "", clock: Callable[[], float] = time.monotonic, kept_home: "bool | None" = None,
                chat_local_only: "Callable[[Any, str], bool] | None" = None) -> int:
     """BLOCKING. A finished run's made files (read from its undo journal by
     ``outcome.session_result``: ``documents``), checked by rule and written
@@ -279,8 +283,10 @@ def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", 
     names and figures, so they are marked, and they are written under the
     chat (*thread_id*) ONLY when that chat is Local only itself, asked NOW
     (*chat_local_only*, default ``providers/egress.thread_local_only``; a
-    read that fails is "no": the rows get no chat). Returns the rows
-    written; never raises."""
+    read that fails is "no": the rows get no chat). Left out (None), it is
+    read from the run's own row (:func:`_keeps_home`), so a caller that
+    forgets to say cannot put such a run's rows under a chat. Returns the
+    rows written; never raises."""
     try:
         docs = [str(p) for p in (documents or ()) if p]
         if not str(session_id or ""):
@@ -288,6 +294,8 @@ def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", 
         rows = content.check_files(docs, str(reply or ""), clock=clock,
                                    deadline_s=content.RUN_DEADLINE_S) if docs else []
         chat = str(thread_id or "")
+        if kept_home is None:
+            kept_home = _keeps_home(engine, str(session_id))
         if kept_home and chat and not _is_local_only(engine, chat, chat_local_only):
             chat = ""       # a chat that is not Local only never owns these rows
         return record.write(engine, rows, session_id=str(session_id), thread_id=chat,
@@ -295,6 +303,23 @@ def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", 
     except Exception:  # noqa: BLE001 — a record is never worth a failed finalize
         log.debug("a run's made files could not be checked", exc_info=True)
         return 0
+
+
+def _keeps_home(engine: Any, session_id: str) -> bool:
+    """BLOCKING. Does the run *session_id* keep its words on this PC, read
+    from its own row (``agents/chat_delivery.keeps_words_home``)? False for
+    a run with no row; True when the row cannot be read (in doubt, home)."""
+    try:
+        from ..agents import chat_delivery
+        from ..core.db import session_scope
+        from ..core.models import Session
+
+        with session_scope(engine) as db:
+            row = db.get(Session, session_id)
+            return bool(row is not None and chat_delivery.keeps_words_home(row))
+    except Exception:  # noqa: BLE001
+        log.debug("a run's own row could not be read", exc_info=True)
+        return True
 
 
 def _is_local_only(engine: Any, thread_id: str, ask: "Callable[[Any, str], bool] | None" = None) -> bool:

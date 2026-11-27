@@ -300,6 +300,7 @@ def test_the_measured_names_are_the_ones_the_writers_table_says_were_measured():
 @pytest.mark.parametrize("formula", [
     '=IF(B1>0,TEXTJOIN(",",TRUE,A1:A1),"")', "=NETWORKDAYS.INTL(B1,B1)", "=WORKDAY.INTL(B1,1)", "=IFS(B1>0,1)",
     "=STDEV.S(B1:B1)",
+    '=MINIFS(B1:B1,A1:A1,"a")',         # one the app's evaluator CAN work out: still not called clean
 ])
 def test_a_newer_function_nobody_measured_is_not_worked_out_and_is_no_finding(tmp_path, formula):
     """NETWORKDAYS.INTL and WORKDAY.INTL are on the writer's table, and the
@@ -367,6 +368,151 @@ def test_the_good_phrase_is_one_of_two_true_ones_never_a_loose_one(tmp_path):
     plain = _xlsx(tmp_path / "plain.xlsx", BUDGET)
     assert _by(content.check_files([str(plain)]), SHEET_ERRORS) == [
         Check(SHEET_ERRORS, PASSED, "no error cells", file="plain.xlsx")]
+
+
+def test_formulas_worked_out_here_are_counted_with_the_ones_whose_result_is_saved(tmp_path):
+    """One formula with a saved result and one with none: "its 2 formulas
+    work out" (EVERY formula of the workbook has a result that is not an
+    error), never "its formula works out" and never "no error cells"."""
+    import zipfile
+
+    plain = tmp_path / "plain.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    ws["A1"], ws["B1"], ws["B2"] = "x", "=2+2", "=B1*3"
+    wb.save(plain)
+    out = tmp_path / "mixed.xlsx"
+    with zipfile.ZipFile(plain) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                text = data.decode("utf-8")
+                for empty in ("<v></v>", "<v />", "<v/>"):
+                    text = text.replace(f'<c r="B1"><f>2+2</f>{empty}</c>', '<c r="B1"><f>2+2</f><v>4</v></c>')
+                assert "<v>4</v>" in text, text[:400]
+                data = text.encode("utf-8")
+            zout.writestr(item, data)
+    assert content._formula_counts(content._load(out)) == (2, 1)
+    assert _by(content.check_files([str(out)]), SHEET_ERRORS) == [
+        Check(SHEET_ERRORS, PASSED, "its 2 formulas work out", file="mixed.xlsx")]
+
+
+def _worked_out(tmp_path, rows):
+    """``(what each formula came to, the cells that work out to an error,
+    how many could not be worked out)`` for a sheet whose formulas hold no
+    saved result."""
+    book = content._load(_xlsx(tmp_path / "e.xlsx", rows))
+    found, unworked = content._work_out(book)
+    return book.worked.get("Summary", {}), sorted((r, c) for _s, r, c, _w in found), unworked
+
+
+def test_text_is_a_number_only_when_it_is_spelled_as_one(tmp_path):
+    """Python's ``float()`` reads "nan", "inf", "Infinity" and "1_000".
+    Excel reads none of them: arithmetic over such a cell is #VALUE! there,
+    and the line said the formulas were clean."""
+    from iron_jarvis.documents import excel_formula as XF
+
+    for text in ("nan", "NaN", "inf", "-inf", "Infinity", "1_000", "0x10", "1e", "--5", "five", ""):
+        with pytest.raises(XF.ExcelError) as err:
+            XF._as_num(text)
+        assert err.value.code == "#VALUE!", text
+    assert [XF._as_num(t) for t in ("12", " 12 ", "1,000", "$5", "50%", "1e3", "-0.5", ".5", "+7", "3.")] == [
+        12.0, 12.0, 1000.0, 5.0, 0.5, 1000.0, -0.5, 0.5, 7.0, 3.0]
+    # A number cell that holds NaN or infinity is no number at all: it cannot be worked out.
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(XF.FormulaError) as err:
+            XF._as_num(bad)
+        assert not isinstance(err.value, XF.ExcelError)
+    rows = [["Item", "Amount", "Double"], ["A", "nan", "=B2*2"], ["B", "inf", "=B3+1"], ["C", "Infinity", "=B4-1"],
+            ["D", "1_000", "=B5+1"]]
+    worked, errors, unworked = _worked_out(tmp_path, rows)
+    assert (worked, errors, unworked) == ({}, [], 4)
+    got = _by(content.check_files([str(_xlsx(tmp_path / "t.xlsx", rows))]), SHEET_ERRORS)
+    assert got == [Check(SHEET_ERRORS, NOT_CHECKED, "4 formulas have no saved result and could not be worked out here",
+                         file="t.xlsx")]
+
+
+def test_the_evaluator_gives_excels_own_errors_where_it_gave_a_clean_number(tmp_path):
+    """Each of these read as a formula that worked out. Excel shows an error
+    for every one (#NUM!, #DIV/0!, #N/A): the reviewer's list."""
+    from iron_jarvis.documents import excel_formula as XF
+
+    rows = [["what", "value"], ["zero to the zero", "=0^0"], ["the same, by name", "=POWER(0,0)"],
+            ["zero to a negative", "=0^-1"], ["a positive number, a negative step", "=CEILING(5,-2)"],
+            ["the same, down", "=FLOOR(5,-2)"], ["down by zero", "=FLOOR(5,0)"], ["the year of a negative", "=YEAR(-5)"],
+            ["the day of a negative", "=DAY(-1)"], ["a block for MATCH", '=MATCH("b",A1:B2,0)'],
+            ["too large to hold", "=1E308*10"]]
+    worked, errors, unworked = _worked_out(tmp_path, rows)
+    assert errors == [(r, 2) for r in range(2, 12)] and worked == {} and unworked == 0
+    with pytest.raises(XF.ExcelError) as err:
+        XF._power(0.0, -1.0)
+    assert err.value.code == "#DIV/0!"
+    with pytest.raises(XF.ExcelError) as err:
+        XF._power(0.0, 0.0)
+    assert err.value.code == "#NUM!"
+    # ... and the neighbours that ARE numbers in Excel still are.
+    fine = [["what", "value"], ["up", "=CEILING(5,2)"], ["a negative up", "=CEILING(-5,2)"], ["a negative down", "=FLOOR(-5,-2)"],
+            ["up by zero", "=CEILING(5,0)"], ["zero down by zero", "=FLOOR(0,0)"], ["a year", "=YEAR(45000)"],
+            ["along a row", '=MATCH("value",A1:B1,0)'], ["a power", "=2^10"], ["zero to a power", "=0^3"]]
+    worked, errors, unworked = _worked_out(tmp_path, fine)
+    assert (errors, unworked) == ([], 0)
+    assert [worked[(r, 2)] for r in range(2, 11)] == [6.0, -4.0, -4.0, 0.0, 0.0, 2023.0, 2.0, 1024.0, 0.0]
+
+
+def test_match_with_minus_one_is_worked_out_only_over_a_list_sorted_large_to_small(tmp_path):
+    """Over any other order Excel's answer depends on how it searches (it is
+    #N/A for 1, 2, 3 where the app said 3). Not guessed: not worked out."""
+    up = [[1, "=MATCH(2,A1:A3,-1)"], [2], [3]]
+    assert _worked_out(tmp_path, up) == ({}, [], 1)
+    down = [[3, "=MATCH(2,A1:A3,-1)"], [2], [1]]
+    assert _worked_out(tmp_path, down) == ({(1, 2): 2.0}, [], 0)
+    # MATCH looks along ONE row or column. Over a block it is #N/A in Excel, where the app said 2.
+    block = [["a", "b", '=MATCH("b",A1:B2,0)'], ["c", "d"]]
+    assert _worked_out(tmp_path, block) == ({}, [(1, 3)], 0)
+    row = [["a", "b", '=MATCH("b",A1:B1,0)'], ["c", "d"]]
+    assert _worked_out(tmp_path, row) == ({(1, 3): 2.0}, [], 0)
+
+
+def test_count_and_counta_do_not_fail_over_a_cell_that_holds_an_error(tmp_path):
+    """=COUNT over a range with one #DIV/0! in it is 1 in Excel, and =COUNTA
+    counts the error cell. Both read as errors of their own. =SUM over the
+    same range still is one. PRODUCT of no numbers at all is 0."""
+    rows = [["x", 1, 0, "=B1/C1"], ["y", 4, 2, "=B2/C2"], ["how many", None, None, "=COUNT(D1:D2)"],
+            ["filled", None, None, "=COUNTA(D1:D2)"], ["sum", None, None, "=SUM(D1:D2)"],
+            ["nothing", None, None, "=PRODUCT(B6:C6)"], ["something", 3, 4, "=PRODUCT(B7:C7)"],
+            ["a literal", None, None, "=COUNT(1,2,3)"]]
+    worked, errors, unworked = _worked_out(tmp_path, rows)
+    assert errors == [(1, 4), (5, 4)] and unworked == 0
+    assert worked == {(2, 4): 2.0, (3, 4): 1.0, (4, 4): 2.0, (6, 4): 0.0, (7, 4): 12.0, (8, 4): 3.0}
+
+
+def test_a_result_too_large_to_hold_is_an_error_never_a_clean_number(tmp_path):
+    """=1E308*10 is #NUM! in Excel. Python makes it infinity, and infinity
+    read as a number that worked out."""
+    p = _xlsx(tmp_path / "t.xlsx", [["a", 5], ["t", "=1E308*10"], ["u", "=B1*2"]])
+    assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [
+        Check(SHEET_ERRORS, LOOK, "B2 works out to an error", file="t.xlsx")]
+
+
+def test_every_check_of_a_made_file_carries_the_key_of_its_own_path(tmp_path):
+    """A run's card matches a check to the file it lists by this key (never
+    by a name two files may share): every row of every kind has it."""
+    import docx
+
+    made = [_xlsx(tmp_path / "a.xlsx", [*BUDGET, ["Total", 1700]]), tmp_path / "b.docx", tmp_path / "c.md",
+            tmp_path / "d.json", tmp_path / "e.txt", tmp_path / "f.xlsx", tmp_path / "g.pdf"]
+    docx.Document().save(str(made[1]))
+    made[2].write_text("words\n", encoding="utf-8")
+    made[3].write_text("{not json", encoding="utf-8")
+    made[4].write_bytes(b"")
+    made[5].write_bytes(b"not a workbook")
+    _pdf(made[6], 2)
+    for path in made:
+        got = content.check_files([str(path)])
+        assert got and {c.path_key for c in got} == {R.path_key(path)}, path.name
+    late = content.check_files([str(made[0])], clock=iter([0.0, 99.0, 99.0]).__next__, deadline_s=1.0)
+    assert [(c.detail, c.path_key) for c in late] == [(content.OUT_OF_TIME, R.path_key(made[0]))]
 
 
 def test_a_number_cell_that_holds_no_number_makes_no_claim_about_error_cells(tmp_path):
@@ -769,6 +915,17 @@ SHAPES: list[Shape] = [
     Shape("a total that forgot the tax row",
           [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 300]],
           good=1, look=("B6",), correct=False, note="it equals the subtotal; the list adds up to 324"),
+    Shape("a total that counts its subtotal twice",
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 624]],
+          good=1, look=("B6",), correct=False, note="every cell above it added: the list adds up to 324"),
+    Shape("a wrong total between a small row and the subtotal",
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 250]],
+          good=1, look=("B6",), correct=False,
+          note="250 is not between the plain rows (24 to 200): the subtotal is not one of them"),
+    Shape("a total after a subtotal that is itself off",
+          [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 310], ["Tax", 24], ["Total", 334]],
+          good=1, look=("B4",), correct=False,
+          note="the total is its subtotal plus the row after it (it adds up); the subtotal is the one to look at"),
     Shape("a total with its tax row added",
           [HDR, ["Widget", 100], ["Gadget", 200], ["Subtotal", 300], ["Tax", 24], ["Total", 324]], good=2),
     Shape("a grand total that left the shipping out",
@@ -927,8 +1084,13 @@ def test_the_total_is_quoted_as_its_cell_holds_it_and_two_figures_never_print_th
     assert content._figures(300, 324) == ("300", "324")
     assert content._figures(0.123456, 0.1234569) == ("0.123456", "0.123457")
     assert content._figures(3.0, 3.0) == ("3", "3")
-    said, added = content._figures(1.0, 1.0000001)
-    assert said == "1" and added != said
+    # Two that differ far to the right never print as the same NUMBER ("1" and "1.00" are one number).
+    assert content._figures(1.0, 1.0000001) == ("1", "1.0000001")
+    # A total that equals part of its list names what the list adds up to, each subtotal counted once.
+    forgot = _xlsx(tmp_path / "forgot.xlsx", [["Item", "Amount"], ["Widget", 100], ["Gadget", 200], ["Subtotal", 300],
+                                              ["Tax", 24], ["Total", 300]])
+    assert [c.detail for c in _by(content.check_files([str(forgot)]), SHEET_TOTALS) if c.result == LOOK] == [
+        "B6 says 300 and the cells above it add up to 324"]
 
 
 def test_a_mismatch_in_a_loose_shape_says_why_in_plain_words(tmp_path):
@@ -1078,6 +1240,9 @@ def test_a_total_column_adds_up_only_as_sums_and_never_beside_a_price(tmp_path):
         "neither.xlsx": [["Item", "Qty", "Each", "Total"], ["pen", 3, 2.5, 99]],
     }.items():
         assert _by(content.check_files([str(_xlsx(tmp_path / name, rows))]), SHEET_TOTALS) == [], name
+    # Beside columns that ARE added, a row that is their product is not their sum: never "adds up".
+    product = _xlsx(tmp_path / "times.xlsx", [["Name", "Jan", "Feb", "Total"], ["a", 3, 2.5, 7.5]])
+    assert [c.result for c in _by(content.check_files([str(product)]), SHEET_TOTALS)] == [NOT_CHECKED]
     other = _xlsx(tmp_path / "other.xlsx", [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 99]])
     (only,) = _by(content.check_files([str(other)]), SHEET_TOTALS)
     assert only.result == NOT_CHECKED

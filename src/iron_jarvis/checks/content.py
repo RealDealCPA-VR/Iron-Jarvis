@@ -751,10 +751,10 @@ def _work_out(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[lis
       measured: with no saved result it counts as not worked out;
     * a formula with NO saved result, worked out by the app's own evaluator:
       one that comes to an error of :data:`_LOOK_CODES` "works out to an
-      error" (never which one); one that comes to ``#VALUE!`` or any other
-      error, a result that is not a finite number, or one the evaluator
-      cannot do counts as not worked out. A result that was worked out is
-      kept in ``book.worked``.
+      error" (never which one; a result too large to hold is one, the
+      evaluator's own rule); one that comes to ``#VALUE!`` or any other
+      error, or one the evaluator cannot do, counts as not worked out. A
+      result that was worked out is kept in ``book.worked``.
 
     Bounded: at most :data:`MAX_WORKED` formulas, while the deadline lasts;
     the rest count as not worked out. Raises only :class:`_OutOfTime`, when
@@ -821,9 +821,6 @@ def _work_out(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[lis
             continue
         except Exception:  # noqa: BLE001 — a formula this evaluator cannot do
             unworked += 1
-            continue
-        if isinstance(got, float) and not math.isfinite(got):
-            unworked += 1   # not a number anybody can read: never a clean result
             continue
         book.worked.setdefault(sheet, {})[(row, col)] = 0.0 if got is None else got
     return found, unworked
@@ -1110,7 +1107,7 @@ def _numeric_heading_row(cells: dict, by_row: "dict[int, list[int]]", row: int, 
 
 
 def _other_reading(cells: dict, by_row: "dict[int, list[int]]", rows: "list[tuple[int, float]]", row: int,
-                   label_col: int, total: float, lists: "Iterable[list[float]]") -> bool:
+                   label_col: int, total: float, plain: "list[float]") -> bool:
     """Is there a plain reason the total of a list is NOT the sum of its
     rows? Then the difference is not judged (it is not "worth a look"):
 
@@ -1119,9 +1116,8 @@ def _other_reading(cells: dict, by_row: "dict[int, list[int]]", rows: "list[tupl
     * a row's own label says it is not added, or is taken away (a rate, a
       price, an average; a discount, a deposit paid, expenses);
     * the top row of the list is a second heading row of numbers;
-    * another reading of the same rows gives the total (:func:`_explained`),
-      tried on each of *lists* (every plain row; and, where the list has
-      subtotals, the subtotals with the rows after the last one)."""
+    * another reading of the plain rows (*plain*: the rows that are not
+      themselves totals) gives the total (:func:`_explained`)."""
     if any((row, c) in cells for c in range(1, label_col)):
         return True
     for r, _x in rows:
@@ -1130,7 +1126,7 @@ def _other_reading(cells: dict, by_row: "dict[int, list[int]]", rows: "list[tupl
             return True
     if _numeric_heading_row(cells, by_row, rows[0][0], label_col):
         return True
-    return any(_explained(total, list(vals)) for vals in lists if vals)
+    return _explained(total, list(plain))
 
 
 def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col: int, label_col: int,
@@ -1209,8 +1205,7 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
     plain = [x for i, (_r, x) in enumerate(rows) if i not in labelled]
     if _rounder(total, plain):
         return NOT_CHECKED, f"{place} {ROUNDER}"
-    reduced = [x for i, (_r, x) in enumerate(rows) if i in labelled or i > max(labelled)] if labelled else []
-    if _other_reading(cells, by_row or {}, rows, row, label_col, total, (plain, reduced)):
+    if _other_reading(cells, by_row or {}, rows, row, label_col, total, plain):
         return NOT_CHECKED, f"{place} {ANOTHER_WAY}"
     return LOOK, differs
 
