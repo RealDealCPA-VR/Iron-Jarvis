@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.587.0
+
+**What you asked for that Iron Jarvis can't do yet.** When you ask for something Iron Jarvis has no feature for, it now keeps a note of it.
+
 ## v1.586.0
 
 **Search by meaning, offered with what it costs here.** **Search by meaning** finds notes, files and memories by what they are about, not only by their words: "the angry email about shipping" finds the message that says "customer furious, parcel late".
@@ -77,7 +81,3 @@
 ## v1.569.0
 
 **Auto asks less: your own pages open, and the quick check knows your folder.** With the approval level on **Auto**, Iron Jarvis still stopped to ask about work nobody needed to approve, and a card nobody saw held the work for hours.
-
-## v1.568.0
-
-**Say "when this happens, do that" once: a folder or a download can start a rule.** Say one sentence in chat, such as "when a PDF lands in Intake, read it and file it by sender", and Iron Jarvis makes **one rule**.

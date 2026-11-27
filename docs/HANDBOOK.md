@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.586.0 (2026-11-19).*
+holds itself to. Current as of v1.587.0 (2026-11-19).*
 
 ---
 
@@ -2150,7 +2150,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## What you asked for that Iron Jarvis can't do yet (v1.579.0)
+## What you asked for that Iron Jarvis can't do yet (v1.587.0)
 
 When you ask for something Iron Jarvis has no feature for, it now keeps a
 note of it. Ask for the same thing twice in a month and it waits on
