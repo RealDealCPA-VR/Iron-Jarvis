@@ -320,6 +320,10 @@ LETS_RUN: dict[str, str] = {
         "this PC's memory and a model server's own list of what it has installed; downloads "
         "nothing (model_download is a write, so it is held)"
     ),
+    "model_report": (
+        "says what the user's own models are good at (the intelligence plan, release 9): reads the "
+        "stored measurements and the guided state; measures nothing (model_measure acts, so it is held)"
+    ),
     "night_task_list": _RECORDS,
     "pack_status": _SELF,
     "page_open": _OWN_BROWSER,

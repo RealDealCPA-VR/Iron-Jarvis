@@ -4651,6 +4651,8 @@ const TOOL_WORDS_BUILTIN = {
   message_agent: "message a teammate",
   model_download: "download a model into your model server",
   model_library: "look at which models fit this PC",
+  model_measure: "start measuring one of your own models",
+  model_report: "look at what your own models are good at",
   model_server_add: "add a model server",
   model_server_default: "set the default model to one of a model server's",
   model_server_remove: "remove a model server",

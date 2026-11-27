@@ -5931,6 +5931,11 @@ def settings_ask_tools(
         from ..settings.records_library import library_tools_for
 
         names += library_tools_for(text)
+        # The intelligence plan, release 9: "What is this model good at?",
+        # "Measure my model." Pure words; both stay on the user's own models.
+        from ..settings.records_models import model_tools_for
+
+        names += model_tools_for(text)
         # Next leaps 46-a: what something cost ("what did the invoice rule
         # cost this month?"). Pure words; the tool only reads, through the
         # turn's client wall.

@@ -512,6 +512,11 @@ def default_permissions() -> dict[str, str]:
         # names the size and the free space after).
         "model_library": "allow",
         "model_download": "ask",
+        # The intelligence plan, release 9 (settings/records_models): what
+        # your own model is good at reads only; measuring it presses the
+        # Measure button (made-up text, your own model server, nothing paid).
+        "model_report": "allow",
+        "model_measure": "allow",
         # Next leaps 46-a (settings/records_usage): what everything cost, by
         # folder, client, automation or agent. Reads only, through the wall.
         "usage_report": "allow",

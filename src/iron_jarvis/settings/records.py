@@ -4532,11 +4532,20 @@ def record_tools(platform: Any) -> list[Tool]:
         *_peer_tools(platform),
         # Next leaps 43-a: the model library (what fits; download one).
         *_library_tools(platform),
+        # The intelligence plan, release 9: what your own model is good at;
+        # measure it.
+        *_model_tools(platform),
         # Next leaps 46-a: what everything cost (reads, through the wall).
         *_usage_tools(platform),
         # Next leaps 28-a: the folder's coding record (reads, through the wall).
         *_scoreboard_tools(platform),
     ]
+
+
+def _model_tools(platform: Any) -> list[Tool]:
+    from .records_models import model_tools
+
+    return model_tools(platform)
 
 
 def _library_tools(platform: Any) -> list[Tool]:

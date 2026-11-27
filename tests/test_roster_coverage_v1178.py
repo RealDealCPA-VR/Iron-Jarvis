@@ -380,6 +380,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # arms them (settings.records_library.library_tools_for). Pinned by
     # tests/test_next_leaps_43a_library.py.
     "model_library", "model_download",
+    # The intelligence plan, release 9: what the owner's own models are good
+    # at, and measuring one, asked in chat where the owner is present; chat
+    # arms them (settings.records_models.model_tools_for). An agent run has
+    # no reason to use the owner's model server for a measurement. Pinned by
+    # tests/test_intel_r9_chat_tools.py.
+    "model_report", "model_measure",
     # v1.564.0 (idea 31-a): sorting a scan is a PLAN the owner looks at on a
     # card and confirms there (the press answers `stack_apply`'s ask); chat
     # arms the plan (`autoselect.wants_stack`). An agent run has no card to

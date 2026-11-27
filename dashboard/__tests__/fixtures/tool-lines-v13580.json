@@ -516,6 +516,14 @@
       "ok": "looked at which models fit this PC",
       "failed": "tried a model library and it failed"
     },
+    "model_measure": {
+      "ok": "started measuring one of your own models",
+      "failed": "tried a model measure and it failed"
+    },
+    "model_report": {
+      "ok": "looked at what your own models are good at",
+      "failed": "tried a model check and it failed"
+    },
     "model_server_add": {
       "ok": "added a model server",
       "failed": "tried a model server addition and it failed"
