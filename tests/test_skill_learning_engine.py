@@ -36,6 +36,8 @@ from iron_jarvis.skills.learning_models import (
     SkillUseRecord,
 )
 from iron_jarvis.skills.loader import save_skill
+from iron_jarvis.learning import repeats as R
+from tests.test_intel_10_checked_drafts import three_runs
 
 
 @pytest.fixture
@@ -101,6 +103,31 @@ def _seed_session(
     return sid
 
 
+def _three(platform, *, task: str = TASK, tools=("read_file", "run_code", "write_file"), **kw) -> list[str]:
+    """The intelligence plan, release 10: a NEW skill comes only from the
+    same kind of task asked for on three days. Three such runs."""
+    return three_runs(platform.engine, words=(task,) * 3, tools=tools, **kw)
+
+
+def _detect(platform) -> int:
+    return R.detect(platform)
+
+
+def _repeat(platform, *, task: str = TASK, **kw) -> str:
+    """Three runs of ``task`` on three days, found by the night review's
+    repeat detector: the waiting candidate's id."""
+    before = {c.id for c in _rows(platform.engine, SkillCandidateRecord)}
+    _three(platform, task=task, **kw)
+    assert _detect(platform) == 1
+    (cid,) = [c.id for c in _rows(platform.engine, SkillCandidateRecord) if c.id not in before]
+    return cid
+
+
+def _waiting(platform) -> list[str]:
+    """Every waiting candidate, named, as the night review names its own."""
+    return [c.id for c in _rows(platform.engine, SkillCandidateRecord) if c.status == "pending"]
+
+
 def _add_user_skill(
     platform,
     name: str = "invoice-chaser",
@@ -162,80 +189,75 @@ class _CfgOverride:
 # -- create-lane gating -------------------------------------------------------
 
 
-def test_qualifying_session_mints_create_candidate(platform, learning):
-    sid = _seed_session(platform)
-    learning.observe_session(sid)
-    cands = _rows(platform.engine, SkillCandidateRecord)
-    assert len(cands) == 1
-    c = cands[0]
-    assert c.kind == "create" and c.status == "pending"
-    assert c.session_id == sid and c.task == TASK
-    assert c.signature.startswith("create::")
-
-
-def test_failed_session_mints_no_create_candidate(platform, learning):
-    sid = _seed_session(platform, status=SessionStatus.FAILED)
-    learning.observe_session(sid)
+def test_one_qualifying_run_mints_no_create_candidate(platform, learning):
+    """The intelligence plan, release 10: one run is no longer enough."""
+    learning.observe_session(_seed_session(platform))
     assert _count(platform.engine, SkillCandidateRecord) == 0
+
+
+def test_qualifying_runs_on_three_days_mint_one_create_candidate(platform, learning):
+    ids = _three(platform)
+    for sid in ids:
+        learning.observe_session(sid)
+    assert _count(platform.engine, SkillCandidateRecord) == 0  # never from observe
+    assert _detect(platform) == 1
+    (c,) = _rows(platform.engine, SkillCandidateRecord)
+    assert c.kind == "create" and c.status == "pending" and c.source == "run"
+    assert c.session_id == ids[0] and c.task == TASK
+    assert c.signature.startswith("run::")
+    assert [u["run"] for u in R.load_evidence(c.evidence_json)["units"]] == ids
+
+
+def test_failed_runs_mint_no_create_candidate(platform, learning):
+    _three(platform, status=SessionStatus.FAILED)
+    assert _detect(platform) == 0
 
 
 def test_too_few_tool_calls_no_candidate(platform, learning):
-    sid = _seed_session(platform, tools=QUALIFYING_TOOLS[:2])
-    learning.observe_session(sid)
-    assert _count(platform.engine, SkillCandidateRecord) == 0
+    _three(platform, tools=("read_file", "run_code"))
+    assert _detect(platform) == 0
 
 
 def test_too_few_distinct_tools_no_candidate(platform, learning):
-    sid = _seed_session(platform, tools=(("shell", True, "{}"),) * 3)
-    learning.observe_session(sid)
-    assert _count(platform.engine, SkillCandidateRecord) == 0
+    _three(platform, tools=("shell",) * 3)
+    assert _detect(platform) == 0
 
 
 def test_empty_task_no_candidate(platform, learning):
-    sid = _seed_session(platform, task="   ")
-    learning.observe_session(sid)
-    assert _count(platform.engine, SkillCandidateRecord) == 0
+    _three(platform, task="   ")
+    assert _detect(platform) == 0
 
 
 def test_existing_skill_dedups_create_lane(platform, learning):
     # The builtin "research" skill's name+description covers this task text.
-    sid = _seed_session(platform, task="research investigation sources")
-    learning.observe_session(sid)
-    assert _count(platform.engine, SkillCandidateRecord) == 0
+    _three(platform, task="research investigation sources for the quarterly report")
+    assert _detect(platform) == 0
 
 
 def test_pending_candidate_dedups_same_task(platform, learning):
-    learning.observe_session(_seed_session(platform))
-    learning.observe_session(_seed_session(platform))  # same TASK, new session
+    _three(platform)
+    assert _detect(platform) == 1
+    assert _detect(platform) == 0  # the same runs are never found twice
     assert _count(platform.engine, SkillCandidateRecord) == 1
 
 
-def test_pending_and_rejected_proposals_suppress_create(platform, learning):
+def test_a_rejected_one_run_draft_suppresses_the_repeat(platform, learning):
+    """A run's draft the owner rejected before release 10 still says "not
+    this" (its signature holds the task's words)."""
     from iron_jarvis.skills.learning import _signature
 
-    for status in ("pending", "rejected"):
-        with session_scope(platform.engine) as db:
-            db.add(
-                SkillProposalRecord(
-                    kind="create",
-                    skill_name=f"x-{status}",
-                    body_md="b",
-                    signature=_signature(TASK),
-                    status=status,
-                )
-            )
-            db.commit()
-        learning.observe_session(_seed_session(platform))
-        assert _count(platform.engine, SkillCandidateRecord) == 0
-        with session_scope(platform.engine) as db:  # reset for the next status
-            for p in db.exec(select(SkillProposalRecord)):
-                db.delete(p)
-            db.commit()
+    with session_scope(platform.engine) as db:
+        db.add(SkillProposalRecord(kind="create", skill_name="x", body_md="b", signature=_signature(TASK),
+                                   status="rejected"))
+        db.commit()
+    _three(platform)
+    assert _detect(platform) == 0
 
 
 def test_disabled_flag_blocks_candidates_but_not_use_stats(platform, learning):
     platform.config = _CfgOverride(platform.config, skill_learning_enabled=False)
-    learning.observe_session(_seed_session(platform))
+    _three(platform)
+    assert _detect(platform) == 0
     assert _count(platform.engine, SkillCandidateRecord) == 0
 
     name = _add_user_skill(platform)
@@ -269,7 +291,8 @@ def test_observe_is_idempotent(platform, learning):
     sid2 = _seed_session(platform)
     learning.observe_session(sid2)
     learning.observe_session(sid2)
-    assert _count(platform.engine, SkillCandidateRecord) == 2  # 1 refine + 1 create
+    # 1 refine; one run never makes a create candidate (release 10)
+    assert [c.kind for c in _rows(platform.engine, SkillCandidateRecord)] == ["refine"]
 
 
 def test_observe_unknown_session_is_a_noop(platform, learning):
@@ -466,10 +489,10 @@ def test_stats_never_raises_with_poisoned_db(platform, learning):
 async def test_distill_create_happy_path_mints_proposal(platform, learning):
     seen: list[SkillProposalRecord] = []
     learning.on_proposal = seen.append
-    learning.observe_session(_seed_session(platform))
+    _repeat(platform)
 
     complete = _completer(_skill_md_reply())
-    out = await learning.distill_candidates(complete)
+    out = await learning.distill_candidates(complete, ids=_waiting(platform))
 
     assert out["reviewed"] == 1 and out["dismissed"] == 0
     props = _rows(platform.engine, SkillProposalRecord)
@@ -487,45 +510,45 @@ async def test_distill_create_happy_path_mints_proposal(platform, learning):
     # The prompt carried real session evidence (task + tool history).
     system, prompt = complete.calls[0]
     assert "SKILL.md" in system and TASK in prompt and "read_file" in prompt
+    # Release 10: the draft says what was checked when it was written.
+    assert R.load_evidence(p.evidence_json)["checked"] is True
 
 
 async def test_distill_garbage_reply_retries_then_dismisses(platform, learning):
-    learning.observe_session(_seed_session(platform))
+    cid = _repeat(platform)
     complete = _completer("cannot help with that")
 
     for expected_attempts in (1, 2):
-        out = await learning.distill_candidates(complete)
+        out = await learning.distill_candidates(complete, ids=[cid])
         assert out["proposals"] == [] and out["dismissed"] == 0
         cand = _rows(platform.engine, SkillCandidateRecord)[0]
         assert cand.status == "pending" and cand.attempts == expected_attempts
 
-    out = await learning.distill_candidates(complete)
+    out = await learning.distill_candidates(complete, ids=[cid])
     assert out["dismissed"] == 1
     cand = _rows(platform.engine, SkillCandidateRecord)[0]
     assert cand.status == "dismissed" and cand.attempts == 3
     assert _count(platform.engine, SkillProposalRecord) == 0
 
     # A dismissed candidate never re-enters a sweep.
-    out = await learning.distill_candidates(complete)
+    out = await learning.distill_candidates(complete, ids=[cid])
     assert out["reviewed"] == 0
 
 
 async def test_distill_name_conflict_with_registry_is_unusable(platform, learning):
-    learning.observe_session(_seed_session(platform))
+    _repeat(platform)
     complete = _completer(_skill_md_reply(name="research"))  # builtin exists
-    out = await learning.distill_candidates(complete)
+    out = await learning.distill_candidates(complete, ids=_waiting(platform))
     assert out["proposals"] == []
     cand = _rows(platform.engine, SkillCandidateRecord)[0]
     assert cand.status == "pending" and cand.attempts == 1
 
 
 async def test_distill_name_conflict_with_pending_proposal(platform, learning):
-    learning.observe_session(_seed_session(platform))
-    learning.observe_session(
-        _seed_session(platform, task="draft the monthly newsletter from blog posts")
-    )
+    _repeat(platform)
+    _repeat(platform, task="draft the monthly newsletter from the latest blog posts")
     # The model proposes the SAME name for both candidates.
-    out = await learning.distill_candidates(_completer(_skill_md_reply()))
+    out = await learning.distill_candidates(_completer(_skill_md_reply()), ids=_waiting(platform))
     assert out["reviewed"] == 2 and len(out["proposals"]) == 1
     cands = sorted(_rows(platform.engine, SkillCandidateRecord), key=lambda c: c.status)
     assert {c.status for c in cands} == {"distilled", "pending"}
@@ -584,18 +607,18 @@ async def test_distill_refine_vanished_skill_dismisses_without_model_call(
 
 
 async def test_distill_disabled_is_a_noop(platform, learning):
-    learning.observe_session(_seed_session(platform))
+    _repeat(platform)
     platform.config = _CfgOverride(platform.config, skill_learning_enabled=False)
     complete = _completer(_skill_md_reply())
-    out = await learning.distill_candidates(complete)
+    out = await learning.distill_candidates(complete, ids=_waiting(platform))
     assert out["reviewed"] == 0 and complete.calls == []
 
 
 async def test_distill_debounces_overlapping_sweeps(platform, learning):
-    learning.observe_session(_seed_session(platform))
+    _repeat(platform)
     learning._distilling = True  # a sweep is "already running"
     complete = _completer(_skill_md_reply())
-    out = await learning.distill_candidates(complete)
+    out = await learning.distill_candidates(complete, ids=_waiting(platform))
     assert out["reviewed"] == 0 and complete.calls == []
     assert "already running" in out["note"]
 
@@ -604,9 +627,10 @@ async def test_distill_auto_approve_writes_skill_immediately(platform, learning)
     seen: list[SkillProposalRecord] = []
     learning.on_proposal = seen.append
     platform.config = _CfgOverride(platform.config, skill_learning_auto_approve=True)
-    learning.observe_session(_seed_session(platform))
+    _repeat(platform)
 
-    out = await learning.distill_candidates(_completer(_skill_md_reply()))
+    # Release 10: a draft from repeated RUNS follows the owner's own setting.
+    out = await learning.distill_candidates(_completer(_skill_md_reply()), ids=_waiting(platform))
 
     assert len(out["proposals"]) == 1
     p = _rows(platform.engine, SkillProposalRecord)[0]
@@ -623,8 +647,8 @@ async def test_on_proposal_callback_errors_are_swallowed(platform, learning):
         raise RuntimeError("notify failed")
 
     learning.on_proposal = _boom
-    learning.observe_session(_seed_session(platform))
-    out = await learning.distill_candidates(_completer(_skill_md_reply()))
+    _repeat(platform)
+    out = await learning.distill_candidates(_completer(_skill_md_reply()), ids=_waiting(platform))
     assert len(out["proposals"]) == 1  # the mint survived the bad callback
     assert _rows(platform.engine, SkillProposalRecord)[0].status == "pending"
 
@@ -742,8 +766,8 @@ def test_approve_unknown_or_decided_raises(platform, learning):
 
 
 async def test_reject_suppresses_the_same_procedure(platform, learning):
-    learning.observe_session(_seed_session(platform))
-    out = await learning.distill_candidates(_completer(_skill_md_reply()))
+    _repeat(platform)
+    out = await learning.distill_candidates(_completer(_skill_md_reply()), ids=_waiting(platform))
     pid = out["proposals"][0]
 
     rejected = learning.reject(pid)
@@ -753,8 +777,10 @@ async def test_reject_suppresses_the_same_procedure(platform, learning):
         platform.config.home / "skills" / "vendor-ledger-reconciliation"
     ).exists()
 
-    # The same procedure finishing again must NOT be re-proposed.
-    learning.observe_session(_seed_session(platform))
+    # The same procedure asked for again on three more days must NOT be
+    # re-proposed.
+    _three(platform)
+    assert _detect(platform) == 0
     pending = [
         c
         for c in _rows(platform.engine, SkillCandidateRecord)
@@ -779,14 +805,14 @@ async def test_distill_body_with_inner_code_fence_still_parses(platform, learnin
     # REGRESSION: the old fence-stripper grabbed the FIRST ``` block anywhere,
     # so a valid unfenced reply whose BODY contained a fenced template was
     # gutted (frontmatter lost -> "unusable" -> eventually dismissed).
-    learning.observe_session(_seed_session(platform))
+    _repeat(platform)
     reply = (
         "---\nname: chase-invoices\n"
         "description: Use when chasing overdue invoices.\n---\n\n"
         "# Steps\n\n1. Use this email template:\n\n"
         "```\nDear {client},\nPlease pay invoice {number}.\n```\n\n2. Send it.\n"
     )
-    out = await learning.distill_candidates(_completer(reply))
+    out = await learning.distill_candidates(_completer(reply), ids=_waiting(platform))
     assert len(out["proposals"]) == 1
     p = _rows(platform.engine, SkillProposalRecord)[0]
     assert p.skill_name == "chase-invoices"
@@ -834,19 +860,19 @@ async def test_distill_complete_exception_releases_debounce(platform, learning):
     # A provider blow-up mid-sweep must release the debounce flag (the finally)
     # and leave the candidate pending WITHOUT burning a retry attempt (a
     # transport failure is not an unusable reply).
-    learning.observe_session(_seed_session(platform))
+    cid = _repeat(platform)
 
     async def boom(system: str, prompt: str) -> str:
         raise RuntimeError("provider down")
 
     with pytest.raises(RuntimeError):
-        await learning.distill_candidates(boom)
+        await learning.distill_candidates(boom, ids=[cid])
     assert learning._distilling is False
     cand = _rows(platform.engine, SkillCandidateRecord)[0]
     assert cand.status == "pending" and cand.attempts == 0
 
     # The next sweep is not debounced and completes normally.
-    out = await learning.distill_candidates(_completer(_skill_md_reply()))
+    out = await learning.distill_candidates(_completer(_skill_md_reply()), ids=[cid])
     assert len(out["proposals"]) == 1
 
 

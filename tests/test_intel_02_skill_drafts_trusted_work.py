@@ -33,6 +33,8 @@ from iron_jarvis.skills.learning_models import (
     SkillUseRecord,
 )
 from iron_jarvis.skills.loader import save_skill
+from iron_jarvis.learning import repeats as R
+from tests.test_intel_10_checked_drafts import three_runs
 
 TASK = "reconcile q3 vendor ledger balances against bank statements"
 TOOLS = (("read_file", True), ("run_code", True), ("write_file", True))
@@ -115,17 +117,27 @@ def _completer(reply: str):
 # --------------------------------------------------------------------------- #
 # (1) A low-trust run leaves no draft.
 # --------------------------------------------------------------------------- #
-def test_a_low_trust_run_leaves_no_candidate_and_a_trusted_one_does(platform, learning):
-    low = _seed(platform, trust="low")
-    learning.observe_session(low)
+def _repeat(platform, *, task: str = TASK, **kw) -> str:
+    """The intelligence plan, release 10: a new skill comes only from the
+    same kind of task asked for on three days. Three such runs, found by the
+    night review's detector; the new candidate's id."""
+    before = {c.id for c in _rows(platform.engine, SkillCandidateRecord)}
+    three_runs(platform.engine, words=(task,) * 3, **kw)
+    assert R.detect(platform) == 1
+    (cid,) = [c.id for c in _rows(platform.engine, SkillCandidateRecord) if c.id not in before]
+    return cid
+
+
+def test_low_trust_runs_leave_no_candidate_and_trusted_ones_do(platform, learning):
+    three_runs(platform.engine, words=(TASK,) * 3, trust="low")
+    assert R.detect(platform) == 0
     assert _rows(platform.engine, SkillCandidateRecord) == [], (
-        "a run that read untrusted content was noted as a skill candidate"
+        "runs that read untrusted content were noted as a skill candidate"
     )
 
-    full = _seed(platform, trust="full", task=TASK + " for the second quarter close")
-    learning.observe_session(full)
+    _repeat(platform, task=TASK + " for the second quarter close")
     made = _rows(platform.engine, SkillCandidateRecord)
-    assert [c.session_id for c in made] == [full]
+    assert len(made) == 1 and made[0].source == "run"
 
 
 def test_the_runs_own_row_decides_not_a_stale_object(platform, learning):
@@ -184,30 +196,31 @@ def test_a_candidate_from_a_low_trust_run_never_reaches_the_drafting_model(
 
 def test_a_low_trust_candidate_does_not_use_up_the_sweeps_turn(platform, learning):
     """Dropping one costs no request, so the trusted one behind it is drafted."""
-    low = _seed(platform, trust="low")
-    full = _seed(platform, trust="full", task=TASK + " for the second quarter close")
-    with session_scope(platform.engine) as db:
-        db.add(SkillCandidateRecord(session_id=low, task=TASK, kind="create", signature="create::low"))
+    low = _repeat(platform)
+    with session_scope(platform.engine) as db:  # one of its runs is lowered after it was found
+        cand = db.get(SkillCandidateRecord, low)
+        run = db.get(Session, cand.session_id)
+        run.trust = "low"
+        db.add(run)
         db.commit()
-    learning.observe_session(full)
+    full = _repeat(platform, task="draft the monthly newsletter from the latest blog posts")
     complete, calls = _completer(_reply())
 
-    out = asyncio.run(learning.distill_candidates(complete, limit=1))
+    out = asyncio.run(learning.distill_candidates(complete, limit=1, ids=[low, full]))
 
     assert len(calls) == 1 and len(out["proposals"]) == 1
     prop = _rows(platform.engine, SkillProposalRecord)[0]
-    assert json.loads(prop.source_session_ids) == [full]
+    with session_scope(platform.engine) as db:
+        assert json.loads(prop.source_session_ids)[0] == db.get(SkillCandidateRecord, full).session_id
 
 
 # --------------------------------------------------------------------------- #
 # (2) What the drafting model is sent: masked, and marked as information.
 # --------------------------------------------------------------------------- #
-def _draft_request(platform, learning, **seed) -> str:
-    sid = _seed(platform, **seed)
-    learning.observe_session(sid)
-    assert len(_rows(platform.engine, SkillCandidateRecord)) == 1
+def _draft_request(platform, learning, *, task: str = TASK, tools=TOOLS, **seed) -> str:
+    cid = _repeat(platform, task=task, tools=tuple(t for t, _ok in tools), **seed)
     complete, calls = _completer(_reply())
-    asyncio.run(learning.distill_candidates(complete))
+    asyncio.run(learning.distill_candidates(complete, ids=[cid]))
     assert len(calls) == 1
     return calls[0][1]
 
@@ -282,12 +295,11 @@ def test_a_candidate_whose_run_cannot_be_read_waits_and_is_not_called_local_only
 ):
     """Left for the next sweep, under its own name: it is not a Local only
     hold, and no request is built."""
-    sid = _seed(platform)
-    learning.observe_session(sid)
+    cid = _repeat(platform)
     monkeypatch.setattr(learning, "_candidate_trusted", lambda cand: None)
     complete, calls = _completer(_reply())
 
-    out = asyncio.run(learning.distill_candidates(complete))
+    out = asyncio.run(learning.distill_candidates(complete, ids=[cid]))
 
     assert calls == [] and out["proposals"] == []
     assert out.get("held_unreadable") == 1 and "held_local_only" not in out

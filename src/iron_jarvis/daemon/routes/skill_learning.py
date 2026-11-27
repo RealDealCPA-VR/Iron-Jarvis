@@ -39,6 +39,9 @@ def _evidence(text: Any) -> dict[str, Any]:
         "tools": [str(t) for t in got.get("tools") or []],
         "kinds_in": [str(k) for k in got.get("kinds_in") or []],
         "kinds_out": [str(k) for k in got.get("kinds_out") or []],
+        # The intelligence plan, release 10: the draft's final text was
+        # found clean when it was written (``skills/draft_check``).
+        "checked": got.get("checked") is True,
     }
 
 

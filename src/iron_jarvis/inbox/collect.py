@@ -301,14 +301,17 @@ def skill_item(view: dict[str, Any]) -> dict[str, Any]:
     runs = len(sources) if isinstance(sources, (list, tuple)) else 0
     # Next leaps 19-a: a draft from repeated chat tasks says when it was
     # asked for and the tools every one of those tasks used (its evidence,
-    # read from the record), never "earlier runs".
-    evidence = view.get("evidence") if isinstance(view.get("evidence"), dict) else {}
-    if str(view.get("source") or "") == "chat" and evidence:
-        from ..learning import repeats
+    # read from the record), never "earlier runs". The intelligence plan,
+    # release 10: so does a draft from repeated runs; and a draft whose
+    # final text was found clean when it was written says so.
+    from ..learning import repeats
 
+    evidence = view.get("evidence") if isinstance(view.get("evidence"), dict) else {}
+    if evidence.get("units"):
         lines = [repeats.times_line(evidence), repeats.tools_line(evidence)]
     else:
         lines = [f"Written from {_plural(runs, 'earlier run')}"] if runs else []
+    lines = [line for line in (*lines, repeats.checked_line(evidence)) if line]
     detail = (
         detail_diff(view.get("prev_body_md"), view.get("body_md"), f"The skill {name}") if refine
         else detail_text(view.get("body_md"), f"The skill {name}")

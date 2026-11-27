@@ -817,11 +817,27 @@ def _bell_types() -> set[str]:
     return types
 
 
-def _skill_candidate(desk, sid: str, task: str, *, at: datetime | None = None) -> str:
+def _user_skill(desk, name: str = "sort-reports-folder") -> str:
+    from iron_jarvis.skills.loader import save_skill, slugify
+
+    p = desk.platform
+    if not (p.config.home / "skills" / slugify(name)).exists():
+        save_skill(p.config.home / "skills", name, "Sort a folder of reports.", "1. List the folder.")
+        p.skills.repopulate(p.config.home, None)
+    return name
+
+
+def _skill_candidate(desk, sid: str, task: str, *, at: datetime | None = None,
+                     skill: str = "sort-reports-folder") -> str:
+    """A waiting skill draft of the run lane: an IMPROVEMENT to a skill the
+    owner has (the intelligence plan, release 10: a NEW skill comes only
+    from the same kind of task on three days, the ``repeat`` row's)."""
     from iron_jarvis.skills.learning_models import SkillCandidateRecord
 
+    _user_skill(desk, skill)
     with session_scope(desk.engine) as db:
-        cand = SkillCandidateRecord(session_id=sid, task=task, kind="create", signature=f"create::{task}")
+        cand = SkillCandidateRecord(session_id=sid, task=task, kind="refine", skill_name=skill,
+                                    signature=f"refine::{skill}")
         if at is not None:
             cand.created_at = at
         db.add(cand)
@@ -938,10 +954,8 @@ def test_a_waiting_skill_draft_is_written_on_the_run_s_own_model(desk):
     from iron_jarvis.skills.learning_models import SkillCandidateRecord, SkillProposalRecord
 
     (sid,) = _ran_out_of_steps(desk, "builder", 1, provider="claude-cli", model="claude-haiku-4-5")
-    with session_scope(desk.engine) as db:
-        db.add(SkillCandidateRecord(session_id=sid, task="sort the reports folder", kind="create",
-                                    signature="create::sort the reports folder"))
-        db.commit()
+    _skill_candidate(desk, sid, "sort the reports folder")
+    assert SkillCandidateRecord  # the run lane's waiting draft, made above
     desk.router.text = SKILL_MD
     out = _pass(desk)
     calls = [c for c in desk.router.calls]
@@ -952,7 +966,8 @@ def test_a_waiting_skill_draft_is_written_on_the_run_s_own_model(desk):
     assert len(props) == 1 and out["made"] == 1
     (made,) = [m for m in json.loads(_row(desk).made_json) if m["kind"] == "skill"]
     assert made["ref"] == props[0].id
-    assert made["why"] == "A run did something worth keeping as a skill, and its draft was waiting: “sort the reports folder”."
+    assert made["why"] == ("A run that used the skill “sort-reports-folder” did not go well, and an "
+                           "improvement to it was waiting.")
 
 
 def test_a_skill_draft_kept_by_the_owner_s_own_setting_is_not_a_suggestion(desk):
@@ -984,7 +999,8 @@ def test_a_draft_the_budget_refuses_never_holds_up_the_newer_ones(desk):
 
     (paid,) = _ran_out_of_steps(desk, "builder", 1, provider="openai", model="gpt-5")
     (plan,) = _ran_out_of_steps(desk, "builder", 1, at=YESTERDAY + timedelta(hours=1))
-    old_id = _skill_candidate(desk, paid, "an older paid task", at=YESTERDAY - timedelta(days=3))
+    old_id = _skill_candidate(desk, paid, "an older paid task", at=YESTERDAY - timedelta(days=3),
+                              skill="older-paid-skill")
     new_id = _skill_candidate(desk, plan, "sort the reports folder")
     desk.router.text = SKILL_MD
     out = _pass(desk)
@@ -1015,14 +1031,10 @@ def test_a_skill_sweep_named_to_one_draft_never_takes_another(desk):
     is never handed another run's waiting draft (an older one included)."""
     from iron_jarvis.skills.learning_models import SkillCandidateRecord
 
-    with session_scope(desk.engine) as db:
-        older = SkillCandidateRecord(session_id="s_old", task="an older task", signature="create::older")
-        older.created_at = YESTERDAY - timedelta(days=3)
-        mine = SkillCandidateRecord(session_id="s_mine", task="my task", signature="create::mine")
-        db.add(older)
-        db.add(mine)
-        db.commit()
-        mine_id = mine.id
+    older_id = _skill_candidate(desk, "s_old", "an older task", at=YESTERDAY - timedelta(days=3),
+                                skill="an-older-skill")
+    mine_id = _skill_candidate(desk, "s_mine", "my task", skill="my-own-skill")
+    assert older_id and SkillCandidateRecord
     asked: list[str] = []
 
     async def complete(system, prompt):
@@ -1031,7 +1043,7 @@ def test_a_skill_sweep_named_to_one_draft_never_takes_another(desk):
 
     out = asyncio.run(desk.platform.skill_learning.distill_candidates(complete, limit=1, ids=[mine_id]))
     assert out["reviewed"] == 1 and len(asked) == 1
-    assert "my task" in asked[0] and "an older task" not in asked[0]
+    assert "my-own-skill" in asked[0] and "an-older-skill" not in asked[0]
 
 
 # --------------------------------------------------------------------------- #

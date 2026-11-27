@@ -3,13 +3,20 @@
 ``skill_create`` (v1.90.0) lets an agent SAVE a proven approach, but only when
 someone thinks to ask. This engine closes the loop autonomously, in two lanes:
 
-* **create** — a finished session that solved a real multi-step task WITHOUT a
-  skill becomes a :class:`~.learning_models.SkillCandidateRecord`; a distill
-  sweep turns it into a draft SKILL.md (agentskills.io format) for review.
+* **create** — the same kind of task asked for on THREE different days (in
+  chat, or as runs the owner started: ``learning/repeats``, the night
+  review's detector; the intelligence plan's release 10 — one run is no
+  longer enough) becomes a :class:`~.learning_models.SkillCandidateRecord`
+  with its evidence; the night review turns it into a draft SKILL.md
+  (agentskills.io format) for review, on the newest task's own model.
 * **refine** — every skill use (derived post-session from successful
   ``skill_load`` invocations) accumulates outcome stats; when a skill's session
   fails or scores low, a refinement candidate is minted and distilled into a
   full replacement body (with the previous body kept for the diff).
+
+Every draft, either lane, reaches Improvements through ONE door,
+:meth:`SkillLearningEngine._checked_mint`: its final text is checked
+(``skills/draft_check``) and a draft that fails is never shown.
 
 Both lanes are SUGGEST-ONLY: nothing lands in the skills directory until
 :meth:`SkillLearningEngine.approve` runs — unless the user flips the explicit
@@ -72,9 +79,6 @@ _INJECT_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="skill-i
 #: A session at or below this score counts as low (parity with the
 #: ImprovementEngine's ``_LOW_SCORE``) and sends its skills to the refine lane.
 _LOW_SCORE = 0.6
-#: Create-lane bar: a task is only skill-worthy past this much tool work.
-_MIN_TOOL_CALLS = 3
-_MIN_DISTINCT_TOOLS = 2
 #: Unusable distillation replies before a candidate is dismissed for good.
 _MAX_ATTEMPTS = 3
 #: v1.502.0: pending candidates a sweep looks at past its ``limit``, so the
@@ -136,6 +140,15 @@ _REFINE_SYSTEM = (
 _CHAT_CREATE_SYSTEM = (
     _CREATE_SYSTEM
     + " These chats are the same kind of task asked for on different days: keep "
+    "the STEPS they share, never the values. Write no name of a person, client "
+    "or company, no figure, amount, date, account number or file name from "
+    "them; say what kind of thing goes there instead."
+)
+#: The intelligence plan, release 10: the request for a draft written from
+#: the same kind of task asked for as a TASK (an agent run) on three days.
+_RUNS_CREATE_SYSTEM = (
+    _CREATE_SYSTEM
+    + " These runs are the same kind of task asked for on different days: keep "
     "the STEPS they share, never the values. Write no name of a person, client "
     "or company, no figure, amount, date, account number or file name from "
     "them; say what kind of thing goes there instead."
@@ -229,11 +242,38 @@ def _is_chat(cand: Any) -> bool:
     return str(getattr(cand, "source", "") or SOURCE_RUN) == SOURCE_CHAT
 
 
+def _is_repeat(cand: Any) -> bool:
+    """Release 10: a candidate found from the same kind of task asked for on
+    three days (chats or runs): it carries its evidence."""
+    return bool(str(getattr(cand, "evidence_json", "") or "").strip())
+
+
 def _not_chat(column: Any) -> Any:
     """SQL: not a chat candidate (an older row's NULL is a run's)."""
     from sqlalchemy import or_
 
     return or_(column.is_(None), column != SOURCE_CHAT)  # type: ignore[union-attr]
+
+
+def _not_repeat(column: Any) -> Any:
+    """SQL on ``evidence_json``: not a repeat candidate (release 10: a repeat,
+    chats or runs, is drafted only by the night review, on its own model)."""
+    from sqlalchemy import or_
+
+    return or_(column.is_(None), column == "")  # type: ignore[union-attr]
+
+
+def _with_checked(evidence_json: str, clean: bool) -> str:
+    """The draft's evidence with ``checked`` set (release 10): True only when
+    its final text was found clean (``draft_check``)."""
+    from ..learning.repeats import load_evidence
+
+    got = load_evidence(evidence_json)
+    if clean:
+        got["checked"] = True
+    else:
+        got.pop("checked", None)
+    return json.dumps(got) if got else ""
 
 
 def _signature(task: str) -> str:
@@ -348,13 +388,12 @@ class SkillLearningEngine:
             score, success = self._session_outcome(sid, status)
             self._record_uses(sid, task, used, score, success, candidates=not low)
             return  # skill-assisted runs feed the refine lane, never create
-        if low:
-            # A run that read untrusted content leaves no lesson (v1.501.0)
-            # and, by the same test, no skill draft: a kept skill reaches
-            # every later prompt. The use counts above are measurements and
-            # are kept; nothing of the run's text goes to a drafting model.
-            return
-        self._maybe_create_candidate(sid, task, status, invocations)
+        # A NEW skill is no longer drafted from one run (the intelligence
+        # plan, release 10): the same kind of task asked for on three days
+        # is found by the night review's repeat detector (``learning/
+        # repeats.run_units``), which reads the runs themselves. A low-trust
+        # run is never one of them (release 2).
+        return
 
     def _skill_uses(self, invocations: list[ToolInvocation]) -> list[str]:
         """Registry-resolved skill names loaded in the session (deduped order).
@@ -500,47 +539,6 @@ class SkillLearningEngine:
             )
             db.commit()
 
-    def _maybe_create_candidate(
-        self, sid: str, task: str, status: str, invocations: list[ToolInvocation]
-    ) -> None:
-        if not self._enabled():
-            return
-        if status != "completed" or not task:
-            return
-        if len(invocations) < _MIN_TOOL_CALLS:
-            return
-        if len({i.tool for i in invocations if i.tool}) < _MIN_DISTINCT_TOOLS:
-            return
-        if self._matches_existing_skill(task):
-            return
-        sig = _signature(task)
-        with self._lock, session_scope(self.engine) as db:
-            cand = db.exec(
-                select(SkillCandidateRecord).where(
-                    SkillCandidateRecord.signature == sig,
-                    SkillCandidateRecord.status == "pending",
-                )
-            ).first()
-            if cand is not None:
-                return
-            props = list(
-                db.exec(
-                    select(SkillProposalRecord).where(
-                        SkillProposalRecord.signature == sig
-                    )
-                )
-            )
-            # A pending proposal is a dup; a REJECTED one is the user saying
-            # "not this" — suppress re-proposing the same procedure.
-            if any(p.status in ("pending", "rejected") for p in props):
-                return
-            db.add(
-                SkillCandidateRecord(
-                    session_id=sid, task=task, kind="create", signature=sig
-                )
-            )
-            db.commit()
-
     def _matches_existing_skill(self, task: str) -> bool:
         """True when a registry skill already covers this task (token overlap
         of the task vs the hit's name+description clears the dedup bar)."""
@@ -614,7 +612,8 @@ class SkillLearningEngine:
                 # 19-a: a chat candidate is drafted ONLY by the night review
                 # (``ids``), pinned to its own chats' model; the sweep after a
                 # run and "Distill now" use whatever model is the default.
-                stmt = stmt.where(_not_chat(SkillCandidateRecord.source))
+                # Release 10: so is a repeat of runs.
+                stmt = stmt.where(_not_repeat(SkillCandidateRecord.evidence_json))
             candidates = list(
                 db.exec(
                     stmt.order_by(SkillCandidateRecord.created_at.asc())
@@ -632,14 +631,22 @@ class SkillLearningEngine:
         for cand in candidates:
             if reviewed >= want:
                 break
+            if cand.kind != "refine" and not _is_repeat(cand):
+                # Release 10: a new skill from ONE run, noted before the
+                # three-times bar. It is never drafted: the run still counts
+                # toward a repeat if it is one. No request is spent.
+                self._set_candidate_status(cand.id, "dismissed")
+                dismissed += 1
+                continue
             # LOW TRUST (the intelligence plan, release 2): a candidate noted
             # before this rule, or whose run was lowered after it was noted,
             # is dropped HERE, before any request is built. It spends no
             # request, so it does not count toward ``want``. A row that
             # cannot be read is left for the next sweep (fail closed).
-            chat = _is_chat(cand)
+            chat = _is_repeat(cand)
             # 19-a: a chat candidate's checks read its chats again (bounded,
-            # but not small): off the event loop.
+            # but not small): off the event loop. Release 10: a run repeat's
+            # read its runs again.
             trusted = (await asyncio.to_thread(self._candidate_trusted, cand) if chat
                        else self._candidate_trusted(cand))
             if trusted is None:
@@ -670,18 +677,21 @@ class SkillLearningEngine:
             reviewed += 1
             if outcome == HELD:
                 # 19-a: the draft named a client. It is never shown; it waits
-                # for client-only skills (19-c).
+                # for client-only skills (19-c). Release 10: whatever its
+                # source (``_checked_mint``).
                 self._set_candidate_status(cand.id, HELD)
                 held_client += 1
                 continue
             if isinstance(outcome, SkillProposalRecord):
                 self._set_candidate_status(cand.id, "distilled")
-                if not local and not chat:
+                if not local and not _is_chat(cand):
                     # A draft written from a Local only run is never added
                     # unasked: once kept, a skill reaches every later prompt,
                     # a cloud model's included. It waits for the owner. 19-a:
                     # nor is a draft from the owner's chats (suggest, never
                     # act: "Approve learned skills automatically" is for runs).
+                    # Release 10: a draft from repeated RUNS follows that
+                    # setting, as every run's draft did: the owner chose it.
                     outcome = self._maybe_auto_approve(outcome)
                 proposal_ids.append(outcome.id)
                 if announce:
@@ -722,6 +732,15 @@ class SkillLearningEngine:
             if found is None:
                 return None
             return not any(unit.low_trust or unit.remote for unit, _lines in found)
+        if _is_repeat(cand):
+            # Release 10: a repeat of runs. Its runs are read again; any now
+            # low trust makes it untrusted.
+            from ..learning import repeats
+
+            runs = repeats.reread_runs(self.engine, repeats.load_evidence(cand.evidence_json))
+            if runs is None:
+                return None
+            return not any(unit.low_trust for unit, _rows in runs)
         try:
             with session_scope(self.engine) as db:
                 sess = db.get(Session, cand.session_id)
@@ -751,6 +770,19 @@ class SkillLearningEngine:
             # A task a model on the owner's own PC or network answered keeps
             # the whole request home too (``repeats._home_if_here``).
             return any(repeats._home_if_here(self.p, unit).local_only for unit, _lines in found)
+        if _is_repeat(cand):
+            # Release 10: a repeat of runs is Local only when ANY of its runs
+            # was (as noted, or now), or was answered on this network.
+            from ..learning import repeats
+
+            evidence = repeats.load_evidence(cand.evidence_json)
+            noted = [u for u in evidence.get("units") or [] if isinstance(u, dict)]
+            if not noted or any(bool(u.get("local_only", True)) for u in noted):
+                return True
+            runs = repeats.reread_runs(self.engine, evidence)
+            if runs is None:
+                return True
+            return any(repeats._home_if_here(self.p, unit).local_only for unit, _rows in runs)
         try:
             from ..agents.orchestrator import session_local_only
 
@@ -767,36 +799,77 @@ class SkillLearningEngine:
     ) -> "SkillProposalRecord | str | None":
         if _is_chat(cand):
             return await self._distill_chat_create(cand, complete)
-        task, summary, tool_lines = self._session_context(cand.session_id, cand.task)
-        # The intelligence plan, release 2: the record is masked
-        # (`_session_context`) and handed over as fenced information, with
-        # the request itself outside the fence, after it.
-        record = (
-            f"Task: {task}\n"
-            f"Outcome summary: {summary or '(none recorded)'}\n"
-            f"Tool history:\n{tool_lines or '(no tool detail available)'}"
-        )
+        if _is_repeat(cand):
+            return await self._distill_runs_create(cand, complete)
+        # Release 10: a new skill is never drafted from ONE run (``_distill``
+        # ends such a candidate before a request is built).
+        return "dismiss"
+
+    async def _distill_runs_create(
+        self, cand: SkillCandidateRecord, complete: Complete
+    ) -> "SkillProposalRecord | str | None":
+        """Release 10: one draft from the RUNS the owner asked for the same
+        kind of task in, on three days. The runs are read AGAIN
+        (``repeats.reread_runs``): a run gone, or no longer finished well,
+        is left out, and too few left ends the candidate. Each run's record
+        is masked (``_session_context``) and the whole is fenced."""
+        from ..learning import repeats
+
+        evidence = repeats.load_evidence(cand.evidence_json)
+        context = await asyncio.to_thread(self._runs_context, evidence)
+        if context is None:
+            return None  # unreadable now: a bounded retry
+        record, units, raw = context
+        days = {repeats.day_of(u.start) for u in units}
+        if len(units) < repeats.MIN_UNITS or len(days) < repeats.MIN_DAYS:
+            return "dismiss"  # the runs no longer hold three tasks on three days
         prompt = (
-            "A finished agent session solved a task successfully. Capture "
-            "the repeatable procedure as a skill.\n\n"
+            f"The owner asked for the same kind of task in {len(units)} runs, on "
+            f"{len(days)} different days. Capture the repeatable procedure as a skill.\n\n"
             f"{_fenced_record(record)}\n\n"
             "Write the full SKILL.md now."
         )
-        reply = await complete(_CREATE_SYSTEM, prompt)
+        reply = await complete(_RUNS_CREATE_SYSTEM, prompt)
         name, description, body = self._parse_skill_md(reply)
         if not name:
             return None
         if self._slug_taken(slugify(name)):
-            return None  # must be unique vs registry AND other pending drafts
-        return self._mint_proposal(
+            return None
+        return await self._checked_mint(
+            raw,
             kind="create",
             skill_name=name,
             description=description,
             body_md=_compose_skill_md(name, description, body),
             prev_body_md="",
-            source_session_ids=[cand.session_id],
+            source_session_ids=list(dict.fromkeys(u.ref for u in units)),
             signature=cand.signature,
+            source=SOURCE_RUN,
+            evidence_json=json.dumps(repeats.evidence_of(repeats.group_of(units), words=False)),
         )
+
+    def _runs_context(self, evidence: dict) -> "tuple[str, list[Any], list[str]] | None":
+        """``(record, units, raw)`` for a run repeat's request, or None when
+        the runs cannot be read: per run its task, summary and tool history,
+        masked then cut (``_session_context``); ``raw`` is every piece as
+        saved, for the draft's check. BLOCKING."""
+        from ..learning import repeats
+
+        found = repeats.reread_runs(self.engine, evidence)
+        if found is None:
+            return None
+        parts: list[str] = []
+        raw: list[str] = []
+        units = []
+        for k, (unit, _rows) in enumerate(found, 1):
+            units.append(unit)
+            task, summary, tool_lines = self._session_context(unit.ref, unit.words)
+            parts.append(
+                f"Run {k}:\nTask: {task}\nOutcome summary: {summary or '(none recorded)'}\n"
+                f"Tool history:\n{tool_lines or '(no tool detail available)'}"
+            )
+            raw += self._session_raw(unit.ref)
+        return "\n\n".join(parts), units, raw
 
     async def _distill_chat_create(
         self, cand: SkillCandidateRecord, complete: Complete
@@ -812,7 +885,7 @@ class SkillLearningEngine:
         context = await asyncio.to_thread(self._chat_context, evidence)
         if context is None:
             return None  # unreadable now: a bounded retry
-        record, units = context
+        record, units, raw = context
         days = {repeats.day_of(u.start) for u in units}
         if len(units) < repeats.MIN_UNITS or len(days) < repeats.MIN_DAYS:
             return "dismiss"  # the chats no longer hold three tasks on three days
@@ -829,9 +902,10 @@ class SkillLearningEngine:
         if self._slug_taken(slugify(name)):
             return None
         body_md = _compose_skill_md(name, description, body)
-        if await asyncio.to_thread(names_a_client, self.engine, body_md):
-            return HELD
-        return self._mint_proposal(
+        # Release 10: the client-name check (19-a's HELD) is now one of the
+        # draft's checks, made for every source at ``_checked_mint``.
+        return await self._checked_mint(
+            raw,
             kind="create",
             skill_name=name,
             description=description,
@@ -846,20 +920,25 @@ class SkillLearningEngine:
             evidence_json=json.dumps(repeats.evidence_of(repeats.group_of(units), words=False)),
         )
 
-    def _chat_context(self, evidence: dict) -> "tuple[str, list[Any]] | None":
-        """``(record, units)`` for a chat draft's request, or None when the
-        chats cannot be read. Per task: the owner's own lines, the tools the
-        ledger shows in order, the replies clipped; every line masked and
-        scanned (``_scanned_line``). The caller fences the record. BLOCKING."""
+    def _chat_context(self, evidence: dict) -> "tuple[str, list[Any], list[str]] | None":
+        """``(record, units, raw)`` for a chat draft's request, or None when
+        the chats cannot be read. Per task: the owner's own lines, the tools
+        the ledger shows in order, the replies clipped; every line masked
+        and scanned (``_scanned_line``). The caller fences the record.
+        ``raw`` (release 10): every line of every task as saved, for the
+        draft's check. BLOCKING."""
         from ..learning import repeats
 
         found = repeats.reread(self.engine, evidence)
         if found is None:
             return None
         parts: list[str] = []
+        raw: list[str] = []
         units = []
         for k, (unit, lines) in enumerate(found, 1):
             units.append(unit)
+            raw.append(unit.words)
+            raw += [str(m.get("content") or "") for m in lines if isinstance(m, dict)]
             owner = [m for m in lines if m.get("role") == "user"][:_CHAT_OWNER_LINES]
             replies = [m for m in lines if m.get("role") == "assistant"]
             chunk = [f"Chat {k}:"]
@@ -879,7 +958,7 @@ class SkillLearningEngine:
                 if line:
                     chunk.append(f"- Iron Jarvis's reply, clipped: {line}")
             parts.append("\n".join(chunk))
-        return "\n\n".join(parts), units
+        return "\n\n".join(parts), units, raw
 
     async def _distill_refine(
         self, cand: SkillCandidateRecord, complete: Complete
@@ -903,7 +982,10 @@ class SkillLearningEngine:
         # Refine always targets the ORIGINAL skill, whatever the model wrote.
         name = skill.name
         description = description or skill.description
-        return self._mint_proposal(
+        raw = await asyncio.to_thread(self._session_raw, cand.session_id)
+        return await self._checked_mint(
+            raw,
+            before=prev_body,
             kind="refine",
             skill_name=name,
             description=description,
@@ -953,6 +1035,30 @@ class SkillLearningEngine:
             output = _record_text(str(t.get("output") or "").replace("\n", " "), _SNIPPET)
             lines.append(f"- {tool} ({status}) args={args} -> {output}")
         return _record_text(task, 4000), _record_text(summary, 2000), "\n".join(lines)
+
+    def _session_raw(self, sid: str) -> list[str]:
+        """Release 10: every piece of one run's record AS SAVED (its task,
+        summary, each call's arguments and output), for the draft's check:
+        nothing masked or cut, so a figure or name the model was never shown
+        still counts. Bounded by ``draft_check.RECORD_MAX`` (past it the
+        draft is not called clean). BLOCKING."""
+        from .draft_check import RECORD_MAX
+
+        out: list[str] = []
+        size = 0
+        with session_scope(self.engine) as db:
+            sess = db.get(Session, sid)
+            if sess is not None:
+                out += [str(sess.task or ""), str(sess.summary or "")]
+            for args, output in db.exec(
+                select(ToolInvocation.args_json, ToolInvocation.output).where(ToolInvocation.session_id == sid)
+            ):
+                piece = f"{args or ''}\n{output or ''}"
+                out.append(piece)
+                size += len(piece)
+                if size > RECORD_MAX:
+                    break  # the check sees a record cut short: never clean
+        return out
 
     def _refine_evidence(self, cand: SkillCandidateRecord) -> str:
         parts: list[str] = []
@@ -1035,6 +1141,30 @@ class SkillLearningEngine:
             )
         taken |= {slugify(p.skill_name) for p in pending if p.skill_name}
         return slug in taken
+
+    async def _checked_mint(
+        self, record: list[str], *, before: str = "", **fields: Any
+    ) -> "SkillProposalRecord | str | None":
+        """THE one door a draft reaches Improvements by (the intelligence plan,
+        release 10): its FINAL text is checked first (``draft_check.check``,
+        off the loop). A draft that names a client is ``HELD``, whatever its
+        source; one that holds a secret-shaped value or an identifier, or a
+        line read as an instruction, is an unusable reply (None: a bounded
+        retry). A draft that passes is minted, its evidence saying
+        ``checked`` only when no figure and no name from ``record`` is in
+        it. ``before``: an improved skill's current text (only what the
+        draft adds is checked for refusal)."""
+        from . import draft_check
+
+        body = str(fields.get("body_md") or "")
+        verdict = await asyncio.to_thread(draft_check.check, self.engine, body, record, before=before)
+        if verdict.refused == draft_check.CLIENT:
+            return HELD
+        if verdict.refused:
+            log.info("skill draft: refused when written (%s); nothing is shown", verdict.refused)
+            return None
+        fields["evidence_json"] = _with_checked(str(fields.get("evidence_json") or ""), verdict.clean)
+        return self._mint_proposal(**fields)
 
     def _mint_proposal(
         self,
@@ -1265,12 +1395,13 @@ class SkillLearningEngine:
             )
             # 19-a: a chat candidate waits for the night review, not for
             # "Distill now", so the Skills page's count leaves it out.
+            # Release 10: so does a repeat of runs.
             pending_candidates = len(
                 list(
                     db.exec(
                         select(SkillCandidateRecord.id).where(
                             SkillCandidateRecord.status == "pending",
-                            _not_chat(SkillCandidateRecord.source),
+                            _not_repeat(SkillCandidateRecord.evidence_json),
                         )
                     )
                 )

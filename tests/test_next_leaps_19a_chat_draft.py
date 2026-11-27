@@ -155,6 +155,8 @@ def test_three_mondays_leave_one_draft_in_improvements_the_next_morning(desk):
     assert item["evidence"] == [
         f"You asked for this 3 times, on {_days()}.",
         "Each time Iron Jarvis used: excel read, excel edit.",
+        # The intelligence plan, release 10: its text was checked when written.
+        "No names or figures from your work are in it.",
     ]
     assert item["extra"]["night"]["why"] == NR.repeat_why(3)
     assert "Read the export" in item["detail"]["after"]
