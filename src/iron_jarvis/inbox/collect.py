@@ -293,6 +293,13 @@ def library_item(view: dict[str, Any], folder_name: str) -> dict[str, Any]:
     )
 
 
+#: The intelligence plan, release 10: approving an improvement keeps the
+#: version before (``SkillLearningEngine._keep_before``: refused, nothing
+#: changed, when it cannot be kept), and Your day's Undo puts it back.
+REFINE_NOTE = ("Approving updates that skill with this version. The version before is kept: "
+               "Activity › Your day can put it back.")
+
+
 def skill_item(view: dict[str, Any]) -> dict[str, Any]:
     pid = str(view.get("id") or "")
     name = str(view.get("skill_name") or "a skill")
@@ -322,7 +329,7 @@ def skill_item(view: dict[str, Any]) -> dict[str, Any]:
         evidence=lines,
         created_at=view.get("created_at"), detail=detail,
         accept=action("Approve", f"/skills/proposals/{_seg(pid)}/approve",
-                      note=("Approving updates that skill with this version." if refine
+                      note=(REFINE_NOTE if refine
                             else "Approving saves this as a skill agents and chat can use.")),
         decline=action("Reject", f"/skills/proposals/{_seg(pid)}/reject"), home="/skills",
     )

@@ -465,7 +465,10 @@ def test_an_update_to_a_skill_is_shown_as_a_change(desk):
     it = _only(desk, "skill")
     assert it["title"] == "Update the skill: month-end-close"
     assert it["detail"]["mode"] == "diff" and it["detail"]["before"].endswith("Old.")
-    assert it["accept"]["note"] == "Approving updates that skill with this version."
+    assert it["accept"]["note"] == (
+        "Approving updates that skill with this version. The version before is kept: "
+        "Activity › Your day can put it back."
+    )
 
 
 def test_the_newest_comes_first(desk):

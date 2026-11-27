@@ -8,7 +8,8 @@ model); time is the night review's own injected moment (no sleep). Pinned,
 each with the way it would fail:
 
 * DONE WHEN: a draft that names a client is dropped, for BOTH sources (the
-  same task asked for in chat, or as a task, on three days);
+  same task asked for in chat, or as a task, on three days); an improvement
+  approved and then put back restores the old text exactly;
 * DO-NOTHING CHECK: the same job on three days leaves a suggestion whose
   lines say what was checked: "No names or figures from your work are in
   it." — and only when it is true (a figure or a name from the work in the
@@ -34,7 +35,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import select
 
 from iron_jarvis.core.db import session_scope
-from iron_jarvis.core.models import AgentRun, AgentType, Session, SessionStatus, ToolInvocation
+from iron_jarvis.core.models import AgentRun, AgentType, Session, SessionStatus, ToolInvocation, UndoJournal
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.improve import budget as B
 from iron_jarvis.improve import night_review as NR
@@ -465,6 +466,95 @@ def test_a_deleted_run_is_not_counted_and_leaves_no_words(desk):
     units = R.load_evidence(cand.evidence_json)["units"]
     assert [u["run"] for u in units] == ids[1:]
     assert ids[0] not in cand.evidence_json
+
+
+# --------------------------------------------------------------------------- #
+# DONE WHEN: an improvement approved and then put back restores the old text
+# --------------------------------------------------------------------------- #
+#: The owner's own file, with things a rewrite would lose: a key of their
+#: own in the front matter, a trailing space, no newline at the end.
+OWN = (
+    "---\nname: invoice-chaser\ndescription: Chase overdue invoices.\nmine: kept as I wrote it\n---\n\n"
+    "1. Find overdue invoices. \n2. Draft a polite nudge."
+).encode("utf-8")
+BETTER = (
+    "---\nname: invoice-chaser\ndescription: Chase overdue invoices.\n---\n\n"
+    "1. Find overdue invoices.\n2. Draft a polite nudge.\n3. Note who paid.\n"
+)
+
+
+def _improvement(desk) -> tuple[str, "object"]:
+    p = desk.platform
+    folder = p.config.home / "skills" / "invoice-chaser"
+    folder.mkdir(parents=True)
+    (folder / SKILL_FILE).write_bytes(OWN)
+    p.skills.repopulate(p.config.home, None)
+    prop = SkillProposalRecord(kind="refine", skill_name="invoice-chaser", description="Chase overdue invoices.",
+                               body_md=BETTER, prev_body_md=OWN.decode("utf-8"), signature="refine::invoice-chaser")
+    with session_scope(desk.engine) as db:
+        db.add(prop)
+        db.commit()
+        db.refresh(prop)
+    return prop.id, folder / SKILL_FILE
+
+
+def _approve(desk, pid: str) -> str:
+    res = desk.client.post(f"/skills/proposals/{pid}/approve", json={})
+    assert res.status_code == 200, res.text
+    day = desk.client.get("/changes/day").json()
+    (group,) = [g for g in day["groups"] if g["source"].get("id") == "improvements"]
+    assert group["source"]["name"] == "In Improvements" and group["source"]["href"] == "/improvements"
+    (row,) = group["rows"]
+    assert row["what"] == "changed a skill: the skill “invoice-chaser”" and row["state"] == "can"
+    return row["id"]
+
+
+def test_an_improvement_approved_then_put_back_restores_the_old_text_exactly(desk):
+    pid, path = _improvement(desk)
+    change = _approve(desk, pid)
+    assert path.read_bytes() != OWN and "Note who paid" in path.read_text(encoding="utf-8")
+    # The skill keeps its earlier version beside it.
+    (kept,) = list((path.parent / ".history").iterdir())
+    assert kept.read_bytes() == OWN
+    # Your day shows it, with its before and after.
+    ba = desk.client.get(f"/changes/{change}/before-after").json()
+    assert ba["state"] == "can" and "the skill" in ba["what"]
+    assert "Draft a polite nudge" in ba["items"][0]["before"]["text"]
+    res = desk.client.post("/changes/undo", json={"action_ids": [change]})
+    assert res.status_code == 200, res.text
+    assert [r["id"] for r in res.json()["reverted"]] == [change]
+    assert path.read_bytes() == OWN  # byte for byte
+    assert desk.platform.skills.get("invoice-chaser").instructions.startswith("1. Find overdue invoices.")
+    with session_scope(desk.engine) as db:
+        assert db.get(SkillProposalRecord, pid).status == "undone"
+
+
+def test_put_back_is_refused_when_the_skill_was_changed_again_since(desk):
+    pid, path = _improvement(desk)
+    change = _approve(desk, pid)
+    path.write_text(path.read_text(encoding="utf-8") + "\n4. My own later step.\n", encoding="utf-8")
+    edited = path.read_bytes()
+    res = desk.client.post("/changes/undo", json={"action_ids": [change]})
+    out = res.json()
+    assert out["reverted"] == [] and "changed again since" in out["skipped"][0]["reason"]
+    assert path.read_bytes() == edited
+
+
+def test_an_improvement_whose_earlier_version_cannot_be_kept_changes_nothing(desk, monkeypatch):
+    from iron_jarvis.tools import undo as U
+
+    pid, path = _improvement(desk)
+
+    def _no_room(*a, **k):
+        raise OSError("the disk is full")
+
+    monkeypatch.setattr(U, "save_preimage", _no_room)
+    res = desk.client.post(f"/skills/proposals/{pid}/approve", json={})
+    assert res.status_code == 409 and "earlier version" in res.json()["detail"]
+    assert path.read_bytes() == OWN
+    with session_scope(desk.engine) as db:
+        assert db.get(SkillProposalRecord, pid).status == "pending"
+        assert list(db.exec(select(UndoJournal))) == []
 
 
 # --------------------------------------------------------------------------- #

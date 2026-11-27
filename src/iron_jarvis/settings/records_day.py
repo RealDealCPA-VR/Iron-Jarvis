@@ -70,6 +70,7 @@ _NOT_A_CHANGE = frozenset({"change_undo", "config_undo"})
 CHAT_HREF = "/chat"
 SETTINGS_HREF = "/settings"
 CODE_HREF = "/chat?view=code"
+IMPROVEMENTS_HREF = "/improvements"
 #: The day view itself (the Activity page's tab, ``?view=day``).
 DAY_HREF = "/activity?view=day"
 
@@ -228,14 +229,14 @@ def sources_for(db: Any, session_ids: Any, *, engine: Any = None) -> dict[str, d
     ids = sorted({str(s or "") for s in (session_ids or [])})
     out: dict[str, dict[str, Any]] = {}
     build = {s: s[len("build:"):] for s in ids if s.startswith("build:")}
-    plain = [s for s in ids if s and s not in ("chat", "settings") and s not in build]
+    plain = [s for s in ids if s and s not in ("chat", "settings", "improvements") and s not in build]
     titles: dict[str, str] = {}
     sessions: dict[str, Any] = {}
     try:
         local = H.local_only_sessions(db, engine if engine is not None else db.get_bind(), ids)
     except Exception:  # noqa: BLE001 — unknown: every run and coding session counts (fail closed)
         log.debug("your day: Local only sources unread", exc_info=True)
-        local = {s for s in ids if s not in ("", "chat", "settings")}
+        local = {s for s in ids if s not in ("", "chat", "settings", "improvements")}
     try:
         if build:
             for tid, title in db.exec(
@@ -255,6 +256,11 @@ def sources_for(db: Any, session_ids: Any, *, engine: Any = None) -> dict[str, d
             out[sid] = {"kind": "chat", "name": "In chat", "id": sid, "href": CHAT_HREF, "started": None}
         elif sid == "settings":
             out[sid] = {"kind": "settings", "name": "On a settings page", "id": sid, "href": SETTINGS_HREF, "started": None}
+        elif sid == "improvements":
+            # The intelligence plan, release 10: an improved skill approved
+            # in Improvements (or kept by the owner's own setting).
+            out[sid] = {"kind": "other", "name": "In Improvements", "id": sid, "href": IMPROVEMENTS_HREF,
+                        "started": None}
         elif sid in build:
             tid = build[sid]
             name = _clip(titles.get(tid, "")) or "A coding session"
@@ -1350,6 +1356,21 @@ def before_after(platform: Any, action_id: str, *, current_setting: Callable[...
             kept = before is not None
         items.append(_file_item(path.name if path else "a memory note", before, jkind == "memory_restore", kept,
                                 path, note_text=True))
+    elif jkind == "skill_restore":
+        # The intelligence plan, release 10: an improved skill's text before
+        # the approval, beside its text now.
+        raw = str(meta.get("path") or "")
+        path = Path(raw) if raw and Path(raw).is_absolute() else None
+        existed = meta.get("existed") is not False
+        before, kept = None, True
+        if existed:
+            try:
+                before = U.resolve_prior_bytes(home, desc, meta)
+            except (OSError, ValueError):
+                before = None
+            kept = before is not None
+        items.append(_file_item(f"the skill {meta.get('name') or ''}".strip(), before, existed, kept, path,
+                                note_text=True))
     elif jkind == "setting_restore":
         prior = meta.get("prior") if isinstance(meta.get("prior"), dict) else {}
         device = str(meta.get("device_id") or "")

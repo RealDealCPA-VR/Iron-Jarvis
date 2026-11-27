@@ -16,7 +16,9 @@ someone thinks to ask. This engine closes the loop autonomously, in two lanes:
 
 Every draft, either lane, reaches Improvements through ONE door,
 :meth:`SkillLearningEngine._checked_mint`: its final text is checked
-(``skills/draft_check``) and a draft that fails is never shown.
+(``skills/draft_check``) and a draft that fails is never shown. An approved
+IMPROVEMENT keeps the version before, and Activity › Your day can put it
+back (:func:`put_back`).
 
 Both lanes are SUGGEST-ONLY: nothing lands in the skills directory until
 :meth:`SkillLearningEngine.approve` runs — unless the user flips the explicit
@@ -291,6 +293,79 @@ def _first_source_session(source_session_ids: str) -> str:
     if isinstance(ids, list) and ids:
         return str(ids[0] or "").strip()
     return ""
+
+
+#: The intelligence plan, release 10: an improved skill's change record.
+#: Its journal kind (``routes/undo.perform_undo`` puts the text back), the
+#: tool its row is filed under (the one that changes a skill), and where it
+#: came from (Activity › Your day names it "In Improvements").
+SKILL_RESTORE = "skill_restore"
+SKILL_CHANGE_TOOL = "skill_update"
+IMPROVEMENTS_SOURCE = "improvements"
+
+
+def put_back(platform: Any, desc: dict[str, Any]) -> tuple[str, bool]:
+    """Put an improved skill's earlier version back, EXACTLY as it was
+    (``desc``: its ``skill_restore`` journal row). Refused, in words, when
+    the skill was changed again since the approval (its text is not what the
+    approval wrote) or the earlier copy is gone. A skill that had no file of
+    its own (it shipped built in) loses the copy the approval made. Marks the
+    draft ``undone`` so the results of accepted changes stop counting it.
+    ``(words, done)``. BLOCKING."""
+    from ..tools import undo as U
+
+    try:
+        meta = json.loads(desc.get("pre_inline") or "{}")
+    except (TypeError, ValueError):
+        meta = {}
+    meta = meta if isinstance(meta, dict) else {}
+    name = str(meta.get("name") or "the skill")
+    raw = str(meta.get("path") or "")
+    path = Path(raw) if raw and Path(raw).is_absolute() else None
+    skills_root = Path(platform.config.home) / "skills"
+    if path is None or path.name != SKILL_FILE or path.parent.parent != skills_root:
+        # Only a skill of the owner's own, in their skills folder.
+        return f"The skill {name} could not be put back: Iron Jarvis does not know where it is.", False
+    try:
+        now = path.read_bytes() if path.is_file() else None
+    except OSError:
+        now = None
+    post = str(desc.get("post_sha256") or "")
+    if now is None or not post or U.sha256_bytes(now) != post:
+        return f"The skill {name} was not put back: it was changed again since this improvement.", False
+    home = Path(platform.config.home)
+    try:
+        if meta.get("existed") is False:
+            path.unlink()
+            try:
+                path.parent.rmdir()  # only when nothing else is in it
+            except OSError:
+                pass
+        else:
+            before = U.resolve_prior_bytes(home, desc, meta)
+            if before is None:
+                return f"The skill {name} was not put back: no copy of how it was is kept any more.", False
+            path.write_bytes(before)
+    except OSError as exc:
+        return f"The skill {name} was not put back ({type(exc).__name__}).", False
+    registry = getattr(platform, "skills", None)
+    if registry is not None:
+        try:
+            registry.repopulate(platform.config.home, getattr(platform.config, "extra_skill_paths", None))
+        except Exception:  # noqa: BLE001 — the file is back; the next scan reads it
+            log.warning("skill put back: the skills could not be read again", exc_info=True)
+    pid = str(meta.get("proposal") or "")
+    if pid:
+        try:
+            with session_scope(platform.engine) as db:
+                row = db.get(SkillProposalRecord, pid)
+                if row is not None and row.status == "approved":
+                    row.status = "undone"
+                    db.add(row)
+                    db.commit()
+        except Exception:  # noqa: BLE001 — the text is back; the record follows
+            log.warning("skill put back: the draft could not be marked", exc_info=True)
+    return f"put back the earlier version of the skill {name}", True
 
 
 def _compose_skill_md(name: str, description: str, body: str) -> str:
@@ -1279,12 +1354,28 @@ class SkillLearningEngine:
         # is passed): a refined skill the user wrote is still the user's, and
         # must not become a sweep candidate because the engine touched it.
         provenance: dict[str, Any] = {}
-        if not (skills_root / slugify(name) / SKILL_FILE).is_file():
+        target = skills_root / slugify(name) / SKILL_FILE
+        if not target.is_file():
             provenance = {
                 "created_by": "proposal",
                 "created_session": _first_source_session(source_ids),
             }
-        save_skill(skills_root, name, description, instructions, **provenance)
+        # The intelligence plan, release 10: an IMPROVED skill keeps its
+        # earlier version, so "put it back" works. The version before is kept
+        # beside the skill (``.history``, as ``skill_update`` keeps one) and
+        # in the change record (Activity › Your day), BEFORE anything is
+        # written; when it cannot be kept, nothing is changed.
+        change_id = ""
+        if kind == "refine" and name == prop_name:
+            change_id = self._keep_before(proposal_id, name, target)
+        try:
+            save_skill(skills_root, name, description, instructions, **provenance)
+        except Exception:
+            if change_id:
+                self._forget_change(change_id)
+            raise
+        if change_id:
+            self._note_after(change_id, target)
 
         if registry is not None:
             try:
@@ -1303,6 +1394,93 @@ class SkillLearningEngine:
             db.commit()
             db.refresh(row)
             return row
+
+    # -- put it back (the intelligence plan, release 10) ----------------------
+
+    def _keep_before(self, proposal_id: str, name: str, target: Path) -> str:
+        """Keep an improved skill's current text before the approval writes
+        over it: a copy in the skill's ``.history`` and ONE change record
+        (``ToolInvocation`` + ``UndoJournal`` of kind :data:`SKILL_RESTORE`,
+        the bytes in ``<home>/undo/``), so Activity › Your day lists the
+        change with Before and after and Undo. A skill that only shipped
+        built in has no file of its own yet: putting it back removes the
+        copy the approval makes. The change's id. Raises ``ValueError``
+        ("nothing was changed: …") when the earlier version cannot be kept.
+        BLOCKING."""
+        import time
+
+        from ..core.ids import new_id
+        from ..core.models import PermissionMode, UndoJournal
+        from ..tools import undo as U
+        from ..tools.base import Reversibility
+
+        home = Path(self._config().home)
+        existed = target.is_file()
+        change_id = new_id("tool")
+        try:
+            before = target.read_bytes() if existed else b""
+            if existed:
+                history = target.parent / ".history"
+                history.mkdir(exist_ok=True)
+                (history / f"{time.strftime('%Y%m%d-%H%M%S')}-{SKILL_FILE}").write_bytes(before)
+            ref = U.save_preimage(home, change_id, before) if existed else None
+            with session_scope(self.engine) as db:
+                db.add(ToolInvocation(
+                    id=change_id, session_id=IMPROVEMENTS_SOURCE, agent_run_id="", tool=SKILL_CHANGE_TOOL,
+                    args_json=json.dumps({"name": name}), verdict=PermissionMode.ALLOW, ok=True,
+                    output=f"improved the skill {name}; the version before is kept",
+                    reversibility=Reversibility.REVERSIBLE.value,
+                ))
+                db.add(UndoJournal(
+                    action_id=change_id, session_id=IMPROVEMENTS_SOURCE, tool=SKILL_CHANGE_TOOL,
+                    kind=SKILL_RESTORE, reversible=True, pre_ref=ref,
+                    pre_inline=json.dumps({"path": str(target), "name": name, "existed": existed,
+                                           "proposal": proposal_id}),
+                    pre_sha256=U.sha256_bytes(before) if existed else None,
+                ))
+                db.commit()
+        except (OSError, ValueError, TypeError) as exc:
+            log.warning("skill improvement: the earlier version could not be kept", exc_info=True)
+            raise ValueError(
+                f"nothing was changed: the earlier version of {name} could not be kept ({type(exc).__name__})"
+            ) from exc
+        return change_id
+
+    def _note_after(self, change_id: str, target: Path) -> None:
+        """What the approval wrote, by its hash, so putting it back refuses
+        when the skill was changed again since. BLOCKING."""
+        from ..core.models import UndoJournal
+        from ..tools import undo as U
+
+        try:
+            after = U.sha256_bytes(target.read_bytes())
+            with session_scope(self.engine) as db:
+                row = db.get(UndoJournal, change_id)
+                if row is not None:
+                    row.post_sha256 = after
+                    db.add(row)
+                    db.commit()
+        except Exception:  # noqa: BLE001 — no hash: putting it back refuses (fail closed)
+            log.warning("skill improvement: what was written could not be noted", exc_info=True)
+
+    def _forget_change(self, change_id: str) -> None:
+        """The write failed after the change was recorded: no Undo for a
+        change that did not happen. BLOCKING; never raises."""
+        from ..core.models import UndoJournal
+        from ..tools import undo as U
+
+        try:
+            with session_scope(self.engine) as db:
+                j = db.get(UndoJournal, change_id)
+                if j is not None:
+                    U.delete_preimage(Path(self._config().home), j.pre_ref)
+                    db.delete(j)
+                inv = db.get(ToolInvocation, change_id)
+                if inv is not None:
+                    db.delete(inv)
+                db.commit()
+        except Exception:  # noqa: BLE001
+            log.warning("skill improvement: a change that did not happen could not be unrecorded", exc_info=True)
 
     def reject(self, proposal_id: str) -> SkillProposalRecord:
         """Mark a pending proposal rejected; its signature suppresses
