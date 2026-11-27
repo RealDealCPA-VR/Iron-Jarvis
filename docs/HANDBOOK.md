@@ -129,6 +129,167 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## Every finished job says what was checked (v1.579.0)
+
+When a reply or a task makes or changes a file, Iron Jarvis now looks at
+the file itself before it calls the job done, and tells you what it
+found. Under the reply there is one quiet line:
+
+**Checked by Iron Jarvis: the spreadsheet opens, no error cells, 1 total
+adds up.**
+
+Press the line to see the list: each check, what it found, and who
+checked ("by Iron Jarvis", or the name of the model that did the
+checking).
+
+Every phrase on the line is something Iron Jarvis itself did or read, and
+it is said only where it is true of every file, not of most. Where saying
+it would take a guess about what the file was meant to be, Iron Jarvis
+says nothing at all. So the line is often short. That is on purpose: a
+short line you can rely on beats a long one you cannot.
+
+The line has three more words, and each one means one thing:
+
+- **Problem** is a short list of plain facts, and nothing else: Iron
+  Jarvis could not open the file ("Checked by Iron Jarvis: a problem in
+  the document: Iron Jarvis could not open “letter.docx”." It says that
+  and no more, because the reason would be a guess); a cell the file
+  itself stores as an error ("Problem in the spreadsheet: C7 holds
+  #DIV/0!.", or "C7 holds an error" for an error Iron Jarvis does not
+  name); a test that ran to its end and failed; a file the task had to
+  make that is not where the task asked for it ("Problem in required file
+  “OUTPUT/summary.xlsx”: not on disk.").
+- **Worth a look** is what Iron Jarvis worked out itself, or was told by a
+  model. It says what it found and stops there: it is not saying the file
+  is wrong. A total written in the sheet that differs from the plain list
+  right above it ("Worth a look: B4 says 650 and the cells above it add up
+  to 600"; both figures are shown in full, never rounded). A formula it
+  works out to an error. A document that is empty
+  ("Worth a look: “notes.txt” is empty") or in which it found no text
+  ("Iron Jarvis found no text in it"). A reply that may say a file was
+  saved that no step wrote, when Iron Jarvis caught that and could not get
+  it put right ("it may say": Iron Jarvis read that out of the reply's own
+  words, and a reading can be wrong). A step or a review a model did not
+  pass.
+- **Not checked** is something Iron Jarvis could not check, with the
+  reason: the file is protected with a password, another program has it
+  open, it is too large, a formula could not be worked out, the tests did
+  not finish in their time or could not be run.
+
+A Problem and something Worth a look both show in the warning colour, so
+you will not miss either. The word tells you which one it is. The line
+opens with a tick only when every check in its list passed.
+
+What Iron Jarvis looks at:
+
+- **A spreadsheet.** "Opens" means Iron Jarvis opened it, with the same
+  reader its own tools use. Then one of two things is said about its
+  cells, whichever is true. "Its 3 formulas work out": Iron Jarvis worked
+  the formulas out itself, and none came to an error. That is what you
+  will read for a spreadsheet Iron Jarvis wrote: such a file asks Excel to
+  work every formula out again when it opens, so the results inside it are
+  not taken as final. "No error cells": no cell is stored as an error,
+  and every formula has a result the file stands by (a file saved from
+  Excel, or a sheet with no formulas). A date typed as a plain number
+  (20261126) under a date format is not an error cell: it reads Not
+  checked, "B2 holds a date this check cannot read".
+  A formula that comes to an error reads "Worth a
+  look: D3 works out to an error". A formula Iron Jarvis cannot work out
+  reads Not checked. A newer function written in a way Excel was seen not
+  to recognise reads "Worth a look: A2 may show #NAME? when opened in
+  Excel". "Work out" means no formula came to an error. It does not mean
+  each formula is the right one for the job.
+- **Its totals.** Only one plain layout is judged: a cell that says Total,
+  Subtotal, Grand total or Sum, the only one in its column, with two or
+  more typed numbers right above it, each beside a name in words, no gap,
+  under a heading. "Adds up" then means exactly its sum: the total equals
+  all of those numbers added together, to the last digit, with nothing
+  allowed for rounding. A total that differs reads Worth a
+  look, with both figures, unless something on the sheet plainly explains
+  it (rows that are taken away, an average, a count). For every other
+  layout Iron Jarvis says nothing about the totals, right or wrong: a
+  sheet with a subtotal or with sections, a column of line totals, a list
+  with a gap, a word or a formula in it, rows named by a date or a number,
+  a row that is itself the sum of the rows above it, a total rounded to
+  whole numbers. Most everyday sheets are like that, so most lines say
+  nothing about totals. A total is never called a Problem.
+- **A Word document, a text file, a table of text.** It opens, and it has
+  text. A Word document's text is what Iron Jarvis's reader reads: the
+  page, its tables, the headers, the footers and the notes. Words that sit
+  only in a text box read Not checked, never "no text found". A table of
+  text that holds only its commas has no text, and neither does a text
+  file that holds only characters nobody sees.
+- **A PDF.** It opens, how many pages it has ("the PDF opens, 12 pages":
+  said only when Iron Jarvis went through the pages and counted that
+  many), and whether text was found in it.
+  Nothing the reply says about the PDF
+  is compared with it. A scanned PDF reads "Iron Jarvis found no text in
+  it": the words are a picture.
+- **Code, settings and data files.** That Iron Jarvis could read them as
+  text. It does not say they are valid. An empty one is what it was meant
+  to be, and gets no line.
+- **A file protected with a password** reads Not checked. It is never
+  called a Problem.
+- **A file another program has open**, or one Iron Jarvis is not let
+  read, reads Not checked ("it could not be read here"). It is never
+  called a Problem either.
+- **Anything else** (an older Excel or Word file, a picture, slides):
+  Iron Jarvis does not open these here, so it says nothing about them. It
+  never says "opens" about a file it did not open.
+
+A name somebody else chose is shown inside quotation marks: a file's
+name, a sheet's name ("B4 on “Summary”"). A cell is named the way you
+would say it, and just "B4" when the workbook has one sheet.
+
+These are the words coding replies already use. They now cover documents,
+spreadsheets and tasks too, and a task's result card shows the same line.
+When a task carries on and puts a file right or removes it, the card says
+what its files hold now. A check says what a file held when it was
+checked: once the file has changed, its checks are taken off the card,
+and off the line under an earlier reply when you open that chat again.
+When a task was done by a team, the card can
+list files a helper made: the line names the files on the card it did not
+check.
+
+You can also ask in the chat: **What did you check?** Iron Jarvis answers
+from its own record of that chat's checks, newest reply first. The record
+also holds the checks Iron Jarvis has been making for a while: the files
+a task had to produce (each one is on disk, or it is not); tests; a
+reviewer's verdict; and each step of a larger task. A test run that was
+stopped at its time limit, that could not be run (the program was not
+found, the sandbox did not start, it was stopped from outside) or that
+found no tests reads Not checked. It is a Problem only when the tests ran
+to their end and failed. Tests
+that failed and then passed when they were run again after a fix read
+"they failed, then passed after a fix", and that is not a Problem.
+
+Good to know:
+
+- A reply that made no file shows no line.
+- These checks are rules, not a model. They use none of your plan, they
+  work offline, and Iron Jarvis does not send the model back to redo the
+  work over them: it tells you what it found.
+- Iron Jarvis only opens the files that reply or task itself wrote.
+- The line and the list hold Iron Jarvis's own words only, never a
+  model's.
+- Local only stays Local only. What Iron Jarvis checked in a Local only
+  chat, or on a task that ran Local only (its file names, sheet names and
+  figures), is kept out of any chat that is not Local only itself. That
+  holds after you switch a chat off Local only too: its earlier checks are
+  not handed to a model until you switch it back. A Local only task's
+  line shows on its card only in a chat that is Local only.
+- The check never holds a reply up for long: it has three seconds in all.
+  If it cannot finish, the reply arrives anyway: the line says what was
+  not checked, or there is no line. A reply to your phone does not wait
+  for it at all.
+- The line shows under a chat reply and on a task's result card. The file
+  list on a task's own page, the browser sidebar and replies on your
+  phone do not show it yet.
+- The record stays on this PC and is kept for 90 days. Deleting a chat
+  deletes its checks.
+
+There is nothing to set up, no new page, and no new notice.
+
 ## Local only: memory search stays on this PC (v1.588.1)
 
 Two gaps in Local only are closed.

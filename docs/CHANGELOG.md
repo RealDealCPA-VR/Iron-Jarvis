@@ -52,7 +52,7 @@
 
 ## v1.579.0
 
-**Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
+**Every finished job says what was checked.** When a reply or a task makes or changes a file, Iron Jarvis now looks at the file itself before it calls the job done, and tells you what it found. **Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
 
 ## v1.578.0
 
