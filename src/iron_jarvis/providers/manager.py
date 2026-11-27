@@ -278,13 +278,11 @@ class ProviderManager:
         # untrusted provider reads as the default floor profile. The platform
         # passes ``config.home``.
         self._envelope_home: Path | None = Path(envelope_home) if envelope_home else None
-        #: ``capability_profile`` cache: (provider, model) -> (store-file
-        #: signature, profile). Signature is ``(st_mtime_ns, st_size)`` of the
-        #: profile file, or None when it does not exist — see
-        #: ``capability_profile`` for why a signature beats a TTL here.
-        self._profile_cache: dict[
-            tuple[str, str], tuple[tuple[int, int] | None, CapabilityProfile]
-        ] = {}
+        #: ``capability_profile`` cache: (provider, model) -> ((profile-file
+        #: signature, ledger-file signature), profile, guided). A signature is
+        #: ``(st_mtime_ns, st_size)``, or None when the file does not exist —
+        #: see ``capability_profile`` for why a signature beats a TTL here.
+        self._profile_cache: dict[tuple[str, str], tuple[Any, CapabilityProfile, bool]] = {}
         #: Resolver for the LOCAL models OpenCode may serve. Injected (and
         #: defaulting to "none") so a bare ProviderManager() never shells out.
         self._opencode_resolver: Callable[[], list[str]] = opencode_allowed or (lambda: [])
@@ -1071,20 +1069,37 @@ class ProviderManager:
         model = (model or "").strip()
         if self.is_trusted_provider(provider):
             return trusted_profile(provider, model)
+        return self._envelope_entry(provider, model)[0]
+
+    def _envelope_entry(self, provider: str, model: str) -> "tuple[CapabilityProfile, bool]":
+        """``(profile, guided)`` for one untrusted model, cached by the
+        signatures of BOTH files it is read from: the stored profile and,
+        since release 9 of the intelligence plan, its outcome ledger. A
+        model the ledger says is being guided step by step answers the
+        TUNED profile (``outcomes.apply_tuning``: the rung it stumbled on
+        lowered, so the frozen ladder falls to the next rung by itself);
+        everything else answers the stored measurement as before. Never
+        raises."""
         try:
             home = self._envelope_home
             if home is None:
-                return CapabilityProfile(model_id=model, provider=provider)
-            path = envelope_store.profile_path(home, provider, model)
-            try:
-                st = path.stat()
-                sig: tuple[int, int] | None = (st.st_mtime_ns, st.st_size)
-            except OSError:  # missing/unreadable = unprobed
-                sig = None
+                return CapabilityProfile(model_id=model, provider=provider), False
+            from ..envelope import outcomes as envelope_outcomes
+
+            def _sig(path: Path) -> "tuple[int, int] | None":
+                try:
+                    st = path.stat()
+                    return (st.st_mtime_ns, st.st_size)
+                except OSError:  # missing/unreadable = nothing there
+                    return None
+
+            sig = _sig(envelope_store.profile_path(home, provider, model))
+            ledger_sig = _sig(envelope_outcomes.OutcomeLedger.path_for(home, provider, model))
+            both = (sig, ledger_sig)
             key = (provider, model)
             cached = self._profile_cache.get(key)
-            if cached is not None and cached[0] == sig:
-                return cached[1]
+            if cached is not None and cached[0] == both:
+                return cached[1], bool(cached[2])
             profile: CapabilityProfile | None = None
             if sig is not None:
                 # load_profile never raises; a corrupt file answers None (and
@@ -1092,10 +1107,51 @@ class ProviderManager:
                 profile = envelope_store.load_profile(home, provider, model)
             if profile is None:
                 profile = CapabilityProfile(model_id=model, provider=provider)
-            self._profile_cache[key] = (sig, profile)
-            return profile
+            guided = False
+            if ledger_sig is not None:
+                ledger = envelope_outcomes.OutcomeLedger.load(home, provider, model)
+                guided = envelope_outcomes.guided_now(profile, ledger)
+                if guided:
+                    profile = envelope_outcomes.apply_tuning(
+                        profile, ledger, rate_rule=False
+                    ).profile
+            self._profile_cache[key] = (both, profile, guided)
+            return profile, guided
         except Exception:  # noqa: BLE001 — per contract: never raises
-            return CapabilityProfile(model_id=model, provider=provider)
+            return CapabilityProfile(model_id=model, provider=provider), False
+
+    def reply_guided(self, provider: str, model: str) -> bool:
+        """Release 9: is this user's own model being guided step by step
+        right now (five unusable replies running moved it; ten usable ones
+        running at the more guided form move it back)? Trusted providers
+        never are. Read from the same cache as :meth:`capability_profile`
+        (one ``stat`` per file). Never raises."""
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        if not provider or self.is_trusted_provider(provider):
+            return False
+        return self._envelope_entry(provider, model)[1]
+
+    def note_reply_form(self, provider: str, model: str, form: str, ok: bool) -> str:
+        """Release 9's feed: record whether one tool-carrying reply of a
+        user's own model came back in a usable form, asked in ``form``.
+        Returns what it moved (``"guided"`` / ``"recovered"`` / ``""``).
+        Trusted providers and a manager with no envelope home record
+        nothing. BLOCKING (one small file): the router calls it through
+        ``asyncio.to_thread``. Never raises."""
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        try:
+            if not provider or not model or self.is_trusted_provider(provider):
+                return ""
+            home = self._envelope_home
+            if home is None:
+                return ""
+            from ..envelope.outcomes import record_reply_form
+
+            return record_reply_form(home, provider, model, form, ok)
+        except Exception:  # noqa: BLE001
+            return ""
 
     def measured_context_window(self, provider: str, model: str) -> "int | None":
         """The MEASURED honest context window (tokens), or ``None`` when the
