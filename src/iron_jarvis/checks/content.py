@@ -1595,6 +1595,41 @@ def _docx_checks(path: Path, name: str, folder: str = "", late: Callable[[], boo
     return out + [row(DOC_TEXT, LOOK, NO_TEXT)]
 
 
+#: The most page-tree nodes counted before the count is given up (not said).
+MAX_PDF_TREE_NODES = 200_000
+
+
+def _tree_pages(reader: Any) -> int:
+    """The pages a PDF's page tree really holds, counted leaf by leaf
+    through ``/Kids`` (never from any stated ``/Count``: a locked file's
+    reader walks as many pages as the file states). -1 when the tree
+    cannot be counted (a loop, a broken node, too many nodes): the count
+    is then not said."""
+    try:
+        stack = [reader.trailer["/Root"].get_object()["/Pages"]]
+        seen: set[tuple[int, int]] = set()
+        leaves = nodes = 0
+        while stack:
+            ref = stack.pop()
+            nodes += 1
+            if nodes > MAX_PDF_TREE_NODES:
+                return -1
+            key = (getattr(ref, "idnum", None), getattr(ref, "generation", None))
+            if key[0] is not None:
+                if key in seen:
+                    return -1
+                seen.add(key)
+            node = ref.get_object()
+            if "/Kids" in node:
+                stack.extend(node["/Kids"].get_object())
+            else:
+                leaves += 1
+        return leaves
+    except Exception:  # noqa: BLE001 — a tree that cannot be counted: the count is not said
+        log.debug("a made PDF's page tree could not be counted", exc_info=True)
+        return -1
+
+
 def _pdf_checks(path: Path, name: str, folder: str = "", late: Callable[[], bool] = _never_late) -> list[Check]:
     """A PDF, through the reader the app's own tools use (pypdf). "opens":
     that reader counted its pages; the count is said as a fact ("12 pages")
@@ -1636,7 +1671,7 @@ def _pdf_checks(path: Path, name: str, folder: str = "", late: Callable[[], bool
     except Exception:  # noqa: BLE001 — the walk broke: the count is not said
         log.debug("a made PDF's pages could not be walked", exc_info=True)
         walked = -1
-    if walked != pages:
+    if walked != pages or _tree_pages(reader) != pages:
         return out
     if pages == 0:
         return out + [row(DOC_TEXT, LOOK, "it has no pages")]

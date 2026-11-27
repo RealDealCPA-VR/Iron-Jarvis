@@ -2809,6 +2809,50 @@ def test_a_pdf_whose_stated_page_count_lies_gets_no_pages_row(tmp_path, locked):
     assert [c.detail for c in _by(content.check_files([str(_pdf(tmp_path / "true.pdf", 3))]), PDF_PAGES)] == ["3 pages"]
 
 
+@pytest.mark.parametrize("stated", [9, 1, 0])
+@pytest.mark.parametrize("locked", [False, True])
+def test_a_pdf_whose_stated_count_is_not_its_pages_never_says_a_count(tmp_path, stated, locked):
+    """Sixth check. Two real pages under a stated /Count of 9, 1 or 0. A
+    locked file's reader walks as many pages as the file states (1 for a
+    stated 1), so the walk agreeing with the count is not enough: the page
+    tree is counted leaf by leaf, and no count is said unless all three
+    agree. "1 page" for a file of two is never said."""
+    from pypdf import PdfWriter
+    from pypdf.generic import NameObject, NumberObject
+
+    w = PdfWriter()
+    w.add_blank_page(200, 200)
+    w.add_blank_page(200, 200)
+    if locked:
+        w.encrypt(user_password="", owner_password="o", algorithm="RC4-128")
+    w._root_object["/Pages"][NameObject("/Count")] = NumberObject(stated)
+    p = tmp_path / f"count{stated}.pdf"
+    w.write(p)
+    got = content.check_files([str(p)])
+    assert [c.detail for c in _by(got, PDF_PAGES)] in ([], ["2 pages"]), got
+    assert not [c for c in got if "page" in c.detail and c.detail != "2 pages"], got
+
+
+def test_the_stamp_is_the_file_as_it_was_before_it_was_read(tmp_path, monkeypatch):
+    """S7, pinned. The file is rewritten while it is being read: every row
+    carries the stamp taken BEFORE the read, so the row no longer matches
+    the file and is not shown for it."""
+    p = tmp_path / "notes.txt"
+    p.write_text("first words", encoding="utf-8")
+    before = R.file_stamp(p)
+    real = content._text_checks
+
+    def rewritten(*a, **k):
+        got = real(*a, **k)
+        p.write_text("other words, and longer than before", encoding="utf-8")
+        return got
+
+    monkeypatch.setattr(content, "_text_checks", rewritten)
+    got = content.check_files([str(p)])
+    assert got and {c.stamp for c in got} == {before}
+    assert R.file_stamp(p) != before
+
+
 def test_a_workbook_that_lists_a_sheet_the_reader_did_not_load_claims_nothing_about_its_cells(tmp_path):
     """N1. The workbook lists two sheets and the second one's part is
     missing: the reader loads one and says nothing. It read "opens, no
