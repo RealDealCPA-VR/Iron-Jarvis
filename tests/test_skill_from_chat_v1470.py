@@ -135,7 +135,9 @@ def test_both_lanes_append_the_brief():
     assert "_skill_brief = _chat_turn.skill_block({*armed, *ask_armed})" in stream
     for src in (post, stream):
         at = src.index("_skill_brief = ")
-        assert 'system += "\\n\\n" + _skill_brief' in src[at: at + 200]
+        # (Release 7: through ``later``, so the brief rides beside the newest
+        # message it was armed for, never in the system text.)
+        assert 'system += _stable.later("\\n\\n" + _skill_brief)' in src[at: at + 200]
 
 
 def _ctx(p, tmp_path, session_id):

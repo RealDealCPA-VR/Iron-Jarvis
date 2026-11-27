@@ -33,6 +33,7 @@ from iron_jarvis.computeruse.policy import ComputerUsePolicy
 from iron_jarvis.core.turns import TURNS
 from iron_jarvis.daemon import chat_turn
 from tests._fakes.panel_harness import RealApp
+from tests._fakes.sent import beside, with_beside
 from tests.test_browser_agent_v1262 import _ACT_TIER, _NEUTRAL, _READ_TIER
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis"
@@ -154,8 +155,13 @@ def test_the_prompt_tells_the_model_to_work_in_the_current_tab(tmp_path, monkeyp
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
+        # Release 7: the browser agent's brief follows a tool armed for THIS
+        # message, so it rides beside the newest message, not in the system text.
         system = str(seen[0].get("system") or "")
-        assert "WORK IN THE TAB THE USER IS LOOKING AT" in system, "the sentence never reached the panel turn's prompt"
+        placed = beside(seen[0].get("messages"))
+        assert "WORK IN THE TAB THE USER IS LOOKING AT" in placed, "the sentence never reached the panel turn's model"
+        assert "WORK IN THE TAB THE USER IS LOOKING AT" not in system
+        assert with_beside(system, seen[0].get("messages")).count("WORK IN THE TAB THE USER IS LOOKING AT") == 1
 
 
 def test_the_tool_descriptions_point_at_the_tab_the_user_is_looking_at(tmp_path, monkeypatch):
