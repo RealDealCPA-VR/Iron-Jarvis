@@ -16943,11 +16943,19 @@ async def run_chat_turn(
     # done-frame carries the same conditional key from the same call.
     from ..checks.turn import checked_for_turn as _checked_for_turn
 
+    # 5b of the intelligence plan: where the line goes out, the once-only
+    # offer of a second model's double-check, or that double-check started in
+    # the background (``checks/second``): the conditional key ``double_check``,
+    # right after ``checked``. MIRROR NOTE (lock-step): both chat lanes.
+    _second: dict = {}
     _checked = await _checked_for_turn(
         platform, turn_id=_usage_turn, thread_id=str(getattr(body, "thread_id", "") or ""),
         made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
         coding=_harness is not None, escalate=bool(escalate),
+        request=_last_user_text(getattr(body, "messages", None) or []), second=_second,
     )
     if _checked is not None:
         out["checked"] = _checked
+        if _second.get("double_check"):
+            out["double_check"] = _second["double_check"]
     return out

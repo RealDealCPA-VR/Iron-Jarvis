@@ -4625,6 +4625,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
     from .routes import meaning as _meaning_routes
 
     _meaning_routes.register(app, d)
+    # The intelligence plan, 5b: the second model's double-check
+    # (/checks/double-check, ``checks/second``).
+    from .routes import checks as _checks_routes
+
+    _checks_routes.register(app, d)
     _routes.profile.register(app, d)
     _routes.learning.register(app, d)
     _routes.computeruse.register(app, d)

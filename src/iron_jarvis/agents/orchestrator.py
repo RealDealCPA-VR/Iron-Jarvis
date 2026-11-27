@@ -1669,13 +1669,24 @@ class Orchestrator:
                 from ..daemon.chat_turn import _claimed_write_note, custom_tools_used
 
                 _kept: list[str] = []
+                _made: list[str] = []
                 tools_used, outcome = await asyncio.to_thread(
                     self._settle_finished_run,
                     session,
                     getattr(run, "id", None),  # test doubles carry no id
                     session.status,
                     _kept,
+                    _made,
                 )
+                # 5b of the intelligence plan: a FINISHED run whose files were
+                # checked gets the second model's double-check, when the owner
+                # said yes to one (``checks/second``): in the background, on
+                # the chosen account only, nothing sent for a run whose words
+                # stay on this PC. Never waited on here; never raises.
+                if session.status is SessionStatus.COMPLETED and _made:
+                    from ..checks.second import for_run as _double_check_run
+
+                    await _double_check_run(self.p, session, _made, reply=str(run.result or ""))
                 # v1.351.0: a user-made command tool that ran may have changed
                 # the file the summary names (same rule as both chat lanes).
                 note = _claimed_write_note(
@@ -2134,7 +2145,7 @@ class Orchestrator:
 
     def _settle_finished_run(
         self, session: Session, run_id: str, status: SessionStatus,
-        kept: "list[str] | None" = None,
+        kept: "list[str] | None" = None, made: "list[str] | None" = None,
     ) -> tuple[list[str], str | None]:
         """One off-loop read at finalize: release the run's worklist claims,
         then read the ledger ONCE for both the claimed-write check and the
@@ -2160,6 +2171,9 @@ class Orchestrator:
         from ..checks.turn import run_owner as _checks_owner
         from ..checks.turn import settle_run as _settle_checks
 
+        if made is not None:
+            # 5b: the files just checked, for the second model's double-check.
+            made.extend(str(p) for p in (result.get("documents") or ()) if p)
         _settle_checks(
             self.p.engine, session.id, result.get("documents"),
             reply=str(result.get("summary") or ""),

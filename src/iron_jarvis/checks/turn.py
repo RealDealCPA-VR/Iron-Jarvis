@@ -86,6 +86,8 @@ async def checked_for_turn(
     record_wait_s: "float | None" = None,
     wait: "bool | None" = None,
     spawn: "Callable[[Callable[[], Any]], Any] | None" = None,
+    request: str = "",
+    second: "dict[str, Any] | None" = None,
 ) -> "dict[str, Any] | None":
     """One chat reply's checks, written, and its line read back from the
     record (``record.payload``: ``{line, tone, checks, more, more_words}``),
@@ -106,7 +108,15 @@ async def checked_for_turn(
     back at once. "What did you check?" still finds them. Left out (None),
     the lanes tell by the one marker they already set: a reply that answers
     a PHONE channel (:func:`draws_no_line`) does not wait; every other reply
-    does."""
+    does.
+
+    *second* (5b, ``checks/second``): a dict the lanes hand over. When the
+    line goes out, ``second["double_check"]`` is the once-only offer
+    (``{"offer": {...}}``) or the second model's double-check started in the
+    background (``{"token", "who"}``); the lanes put it on the answer as
+    ``double_check``. *request* is the person's message, which that model
+    reads (fenced as data). Only where the line goes out: never for a phone
+    reply, a coding session or a hand-off."""
     try:
         engine = getattr(platform, "engine", None)
         if engine is None:
@@ -133,7 +143,8 @@ async def checked_for_turn(
         try:
             return await asyncio.wait_for(
                 _checked(engine, turn, str(thread_id or "").strip(), docs if made else [], str(reply or ""),
-                         until, deliverables, escalate, clock, files_wait),
+                         until, deliverables, escalate, clock, files_wait,
+                         platform=platform, request=str(request or ""), second=second),
                 cap,
             )
         except asyncio.TimeoutError:
@@ -150,7 +161,8 @@ async def checked_for_turn(
 
 async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", reply: str, until: Any,
                    deliverables: Any, escalate: bool, clock: Callable[[], float],
-                   files_wait: float) -> "dict[str, Any] | None":
+                   files_wait: float, *, platform: Any = None, request: str = "",
+                   second: "dict[str, Any] | None" = None) -> "dict[str, Any] | None":
     """The work :func:`checked_for_turn` bounds. *docs* is empty for a reply
     that gets no line (it made no file, a coding session, a hand-off)."""
     # The checks of the made files come first in the record (and so in the
@@ -185,7 +197,19 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
     if not docs:
         return None
     kept = await asyncio.to_thread(record.by_ids, engine, mine)
-    return record.payload(kept) if record.has_content(kept) else None
+    if not record.has_content(kept):
+        return None
+    line = record.payload(kept)
+    if second is not None and platform is not None and line is not None:
+        # 5b: the line goes out, so the once-only offer, or the second
+        # model's double-check (in the background: never waited on here).
+        from . import second as _second
+
+        extra = await _second.for_reply(platform, turn=turn, thread_id=thread_id, ids=mine, request=request,
+                                        reply=reply, docs=docs, local_only=home, chat_of=_chat_of)
+        if extra:
+            second["double_check"] = extra
+    return line
 
 
 def reply_is_local_only(engine: Any, thread_id: str) -> bool:
@@ -523,6 +547,10 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
             shown = {key for key, path in took.items() if _as_checked(rows, key, path)}
             rows = [r for r in rows if r.get("check") not in record.CONTENT_CHECKS or not r.get("file")
                     or _row_key(r) in shown]
+            if len(shown) < len(took):
+                # 5b: a second model read the files as they WERE; one of them
+                # has changed or gone, so its verdict is not shown.
+                rows = [r for r in rows if r.get("check") != record.DOUBLE_CHECK]
             docs = [d for d in docs if _on_disk(d)]
         if not record.has_content([r for r in rows if r.get("file")] if listed else rows):
             return None
@@ -588,10 +616,18 @@ def reopened(engine: Any, thread_id: str, messages: Any) -> Any:
                 continue
             took, _missing = _match(rows, [d for d in m["documents"] if isinstance(d, str)])
             stale = {key for key, path in took.items() if not _as_checked(rows, key, path)}
-            if not stale:
+            # 5b: the second model's verdict landed after the reply's line
+            # was saved: the line is built again from the record, with it.
+            late = (any(r.get("check") == record.DOUBLE_CHECK for r in rows)
+                    and not any(isinstance(c, dict) and c.get("check") == record.DOUBLE_CHECK
+                                for c in (m["checked"].get("checks") or [])))
+            if not stale and not late:
                 continue
             left = [r for r in rows if not (r.get("check") in record.CONTENT_CHECKS and r.get("file")
                                             and _row_key(r) in stale)]
+            if stale:
+                # It read the files as they WERE: one has changed or gone.
+                left = [r for r in left if r.get("check") != record.DOUBLE_CHECK]
             fresh = record.payload(left) if record.has_content(left) else None
             if fresh is None:
                 m.pop("checked", None)

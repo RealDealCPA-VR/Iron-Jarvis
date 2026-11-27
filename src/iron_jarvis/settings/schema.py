@@ -319,6 +319,20 @@ def _account_groups_shape(v: Any) -> None:
             seen[pid] = name
 
 
+
+def _double_check_value(value: Any) -> None:
+    """5b: the row holds "" (no) or a whole choice; a yes is turned into the
+    choice by ``checks/second.value_for`` before it is written."""
+    if value is None or value == "":
+        return
+    parts = value.split("|") if isinstance(value, str) else []
+    if len(parts) != 3 or not all(p.strip() for p in parts):
+        raise ValueError(
+            "is turned on with a yes on its card, in Settings › Models, or by asking in chat, and keeps "
+            "the model and account that yes named"
+        )
+
+
 S = SettingDef
 
 SETTINGS: tuple[SettingDef, ...] = (
@@ -380,6 +394,26 @@ SETTINGS: tuple[SettingDef, ...] = (
       "Claude plan), ordinary questions included. A tool that changes something still shows "
       "its approval card.",
       tier="allow", aliases=("capability lookup first",)),
+    # The intelligence plan, 5b (``checks/second``): a second model account
+    # double-checks finished work. Its value is the EXACT model and account
+    # the yes was for (``<account id>|<provider>|<model>``), "" for no, unset
+    # = not answered (offered once, under a reply that made a file). Its one
+    # control is its own section on the Models page (never a text box) with
+    # its own routes (/checks/double-check), so the generic PUT /settings
+    # skips it. Chat changes it through the writer; turning it on asks on a
+    # card that names the model and the account. The label is NOT a plain
+    # request ("double-check my work" must not arm the settings tools).
+    S("double_check", "Second model double-check", "models", "string",
+      "Only when you have more than one model account. After a reply or a task that made or "
+      "changed a file, one small request to the model you said yes to, on the account named with "
+      "it, reads what was asked, the reply and the files' text, and says whether it found anything "
+      "wrong. Its answer is shown under that model's name, never as Iron Jarvis's own. Only that "
+      "model and that account are used; when the account is gone, turned off or at its limit, "
+      "nothing is sent and the line says so. Nothing is sent from a Local only chat. Off: Iron "
+      "Jarvis's own checks only. Not set: Iron Jarvis offers it once.",
+      tier="ask", unset_ok=True, put=False, check=_double_check_value,
+      aliases=("second model check", "double-check with a second model",
+               "second opinion on finished work", "double check with another model")),
     # v1.435.0 (chat-first plan, Wave 3 group I, D3): the starting point for a
     # NEW chat's Local only switch (the chat page reads it). Turning it off is
     # ask-floor: it widens what new chats may send off this network.

@@ -147,6 +147,17 @@ def _coerce(d: schema.SettingDef, value: Any) -> Any:
     if d.key == "meaning_search" and isinstance(value, bool):
         # Next leaps 16-a: a switch's words for a row whose value is a model.
         return "on" if value else "off"
+    if d.key == "double_check":
+        # 5b: a switch's words for a row whose value is a model and an
+        # account; ``checks/second.value_for`` turns a yes into that choice.
+        if isinstance(value, bool):
+            return "yes" if value else ""
+        if isinstance(value, str) and "|" not in value:
+            v = value.strip().lower()
+            if v in ("true", "on", "yes", "1", "enabled", "enable"):
+                return "yes"
+            if v in ("false", "off", "no", "0", "disabled", "disable", "not now"):
+                return ""
     if d.type == "bool" and isinstance(value, str):
         v = value.strip().lower()
         if v in ("true", "on", "yes", "1", "enabled", "enable"):
@@ -186,6 +197,10 @@ def _shown_value(platform: Any, key: str, value: Any) -> Any:
     that card. Read from the CACHED snapshot (never a call); an id Iron-Proxy
     does not list stays as it is. Every other setting is shown exactly as
     sent. Never raises."""
+    if key == "double_check":
+        # 5b: the model and the account a yes names ("Sonnet 4.5 on “Work”"),
+        # never the stored ids.
+        return _double_check_words(platform, value)
     if key != "account_groups":
         return value
     try:
@@ -215,6 +230,20 @@ def _shown_value(platform: Any, key: str, value: Any) -> Any:
                 shown.append(f"{row['name']} ({row['vendor_label']})" if row else str(raw))
             parts.append(f"{name}: {', '.join(shown)}")
         return "; ".join(parts)
+    except Exception:  # noqa: BLE001 — the words never break a card
+        return value
+
+
+def _double_check_words(platform: Any, value: Any) -> Any:
+    """5b: a value of ``double_check`` as a card shows it. Never raises."""
+    try:
+        from ..checks import second
+
+        coerced = _coerce(schema.get("double_check"), value)
+        if coerced == "yes":
+            cand = second.candidate(platform)
+            return second.choice_words(platform, cand.id) if cand is not None else "On"
+        return second.choice_words(platform, coerced)
     except Exception:  # noqa: BLE001 — the words never break a card
         return value
 
@@ -258,6 +287,11 @@ def value_label(d: Any, value: Any, manager: Any = None) -> str | None:
 
     Never raises."""
     try:
+        if str(getattr(d, "key", "") or "") == "double_check":
+            # 5b: "Sonnet 4.5 on “Work”", "Off", "Not set"; never the ids.
+            from ..checks.second import choice_words
+
+            return choice_words(None, value) if value is None or "|" not in str(value) else None
         if str(getattr(d, "key", "") or "") == "meaning_search":
             # Next leaps 16-a: "nomic-embed-text on this PC", "Off", "Not set";
             # never the stored "<kind>:<model> @ <address>".
@@ -380,7 +414,9 @@ class ConfigListTool(Tool):
 
             meaning_line = await asyncio.to_thread(chat_line, self.platform)
         lines = [
-            f"{r['label']} ({r['key']}) = {_show(r['value'])} → {r['tool']}"
+            f"{r['label']} ({r['key']}) = "
+            f"{_show(_double_check_words(self.platform, r['value']) if r['key'] == 'double_check' else r['value'])}"
+            f" → {r['tool']}"
             + _what_it_does(r["key"])
             + (ACCOUNT_GROUPS_HOW if r["key"] == "account_groups" else "")
             + (THEME_COLORS_HOW if r["key"] == "device.theme_colors" else "")
@@ -621,6 +657,28 @@ class _ConfigChangeBase(Tool):
             from ..memory.meaning import card_check
 
             return await asyncio.to_thread(card_check, self.platform, value)
+        if key == "double_check" and d.tier_for(value) == self.TIER:
+            # 5b: turning the second model's double-check on asks on a card
+            # with the plan's own words, naming the EXACT model and account
+            # (``checks/second.offer_words``); turning it off runs at once
+            # (Undo).
+            from ..checks import second
+
+            def _card() -> "SpendCheck | None":
+                if not value:
+                    return SpendCheck(ask=False, cost_note="second model double-check off")
+                try:
+                    chosen = second.parse(second.value_for(self.platform, value))
+                except ValueError:
+                    chosen = None
+                if chosen is None:
+                    # Nothing a yes can store: no card (an Allow that execute
+                    # then refuses would be a lie); execute says why in words.
+                    return SpendCheck(ask=False, cost_note="nothing to turn on")
+                return SpendCheck(ask=True, words=second.offer_words(self.platform, chosen),
+                                  cost_note="about one small request per task")
+
+            return await asyncio.to_thread(_card)
         if not getattr(d, "destination", "") or d.pattern:
             return None
         if not isinstance(value, str) or not value.strip() or d.tier_for(value) != self.TIER:
@@ -682,6 +740,16 @@ class _ConfigChangeBase(Tool):
             value, named_problem = await asyncio.to_thread(named_setting_value, self.platform, key, value)
             if named_problem:
                 return ToolResult(ok=False, output="", error=f"{d.label}: {named_problem}.")
+        if key == "double_check":
+            # 5b: a yes stores the EXACT model and account a yes names now
+            # (the card's); none to name, or a choice that is not that one,
+            # is refused in words (``checks/second.value_for``).
+            from ..checks.second import value_for
+
+            try:
+                value = await asyncio.to_thread(value_for, self.platform, value)
+            except ValueError as exc:
+                return ToolResult(ok=False, output="", error=str(exc))
         try:
             writes = await asyncio.to_thread(self._writes, key, value, ctx.device_id)
         except Exception:  # noqa: BLE001 — unreadable: the plain one-row write

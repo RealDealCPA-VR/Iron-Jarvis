@@ -75,6 +75,9 @@ ENDED_UNSAVED_WORDS = (
 TOOL_WORDS: dict[str, str] = {
     "view_image": "A picture was looked at for a step",
     "browser_screenshot": "A screenshot was looked at for a step",
+    # The intelligence plan, 5b (``checks/second``): the second model's one
+    # request over finished work, on the account the owner said yes to.
+    "double_check": "Finished work was double-checked by a second model",
 }
 #: Every other tool's row.
 TOOL_WORDS_DEFAULT = "Model calls made by a step"
