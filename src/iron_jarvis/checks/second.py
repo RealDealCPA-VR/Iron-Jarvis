@@ -794,10 +794,18 @@ async def for_run(platform: Any, session: Any, docs: "Iterable[Any] | None", *, 
                 if busy:
                     check = record.Check(record.DOUBLE_CHECK, record.NOT_CHECKED, WHY_BUSY, by=choice.model)
                 else:
+                    def still_home() -> bool:
+                        # The run's chat switched Local only after the run
+                        # finished: asked again just before the request.
+                        from .turn import _is_local_only
+
+                        chat = str(owner.get("thread_id") or "")
+                        return bool(chat) and _is_local_only(engine, chat)
+
                     check = await double_check(platform, choice, request=request, reply=reply, docs=made,
                                                local_only=bool(owner.get("kept_home")),
                                                thread_id=str(owner.get("thread_id") or ""), clock=clock,
-                                               local_model=local_model)
+                                               local_model=local_model, still_home=still_home)
                 await record.note(engine, [check], session_id=sid, thread_id=str(owner.get("thread_id") or ""),
                                   kept_home=bool(owner.get("kept_home")))
             except asyncio.CancelledError:

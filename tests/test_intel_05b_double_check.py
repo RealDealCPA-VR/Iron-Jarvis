@@ -775,3 +775,27 @@ async def test_the_daemon_stopping_ends_a_running_double_check():
     assert S._TASKS
     await S.shutdown(timeout_s=1.0)
     assert not S._TASKS
+
+
+async def test_a_run_whose_chat_turns_local_only_before_the_request_sends_nothing(platform, monkeypatch, tmp_path):
+    """Re-check: the run path asks again just before the request, as chat does."""
+    monkeypatch.setattr(S, "_vendor_model", lambda vendor: MODELS.get(vendor, ""))
+    monkeypatch.setattr(platform, "iron_proxy", _Accounts(TWO))
+    platform.config.double_check = "acct-work|claude-cli|claude-sonnet-4-5"
+    made = tmp_path / "a.txt"
+    made.write_text("hello", encoding="utf-8")
+    session = type("S", (), {"id": "ses-switch", "task": "t", "provider": "claude-cli", "model": "claude-sonnet-4-5"})()
+    monkeypatch.setattr(T, "run_owner", lambda engine, s: {"thread_id": "chat_switch", "kept_home": False})
+    monkeypatch.setattr(T, "_is_local_only", lambda engine, chat: chat == "chat_switch")
+    asked: list = []
+
+    async def never(*a, **k):
+        asked.append(a)
+        return '{"verdict": "fine"}'
+
+    monkeypatch.setattr(S, "_ask", never)
+    assert await S.for_run(platform, session, [str(made)]) is True
+    await asyncio.gather(*list(S._TASKS))
+    rows = [r for r in _rows(platform, session_id="ses-switch") if r.check == R.DOUBLE_CHECK]
+    assert [(r.result, r.detail) for r in rows] == [(R.NOT_CHECKED, S.WHY_LOCAL)]
+    assert asked == []
