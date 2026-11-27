@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.591.0 (2026-11-19).*
+holds itself to. Current as of v1.592.0 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,41 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## A skill draft from the work you keep asking for (v1.592.0)
+
+When you ask Iron Jarvis in chat for the same kind of task on three
+different days within five weeks (say, turning a bank export into a
+summary sheet), the night review notices it and writes a skill draft from
+those chats. The next morning it waits in **Improvements** under **Skill
+drafts**:
+
+- **New skill: bank-export-summary**
+- "You asked for this 3 times, on 3, 10 and 17 November."
+- "Each time Iron Jarvis used: excel read, excel edit."
+- the full text of the skill, to read before you decide.
+
+**Approve** saves it as a skill that agents and chat can use; **Reject**
+means the same kind of task is not suggested again. Nothing is kept or used
+until you approve, even when "Approve learned skills automatically" is on.
+
+What it takes: the night review must be on. If you have not answered its
+offer on Improvements ("up to 6 requests a night on your plan"), say Yes
+there once.
+
+Good to know:
+
+- The draft is written on the model AND the account of your newest of those
+  chats, never one that bills per use. If that account is gone or switched
+  off, nothing is written that night and no other account is tried.
+- Local stays local: if any of those chats was Local only, or was answered
+  by a model on this PC or your network, the request stays on this PC or
+  your network.
+- A chat that read a web page or a message from outside is never used, and a
+  draft that names one of your clients is not shown.
+- Delete one of those chats and it is no longer counted: what was taken from
+  it is removed, and with fewer than three times left there is no draft.
+- Asking again in the same chat on another day counts as another time.
 
 ## Replies start sooner in a long chat (v1.591.0)
 

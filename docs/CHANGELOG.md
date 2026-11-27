@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.592.0
+
+**A skill draft from the work you keep asking for.** When you ask Iron Jarvis in chat for the same kind of task on three different days within five weeks (say, turning a bank export into a summary sheet), the night review notices it and writes a skill draft from those chats.
+
 ## v1.591.0
 
 **Replies start sooner in a long chat.** In a long chat, Iron Jarvis now starts answering sooner.
@@ -77,7 +81,3 @@
 ## v1.576.0
 
 **Hand Jarvis a recording.** Drop a meeting recording, a call or a voice memo into a chat (an .m4a, .mp3, .wav, .ogg or another sound file, or a video, whose sound is used) and ask what you want to know, such as "what did we decide?".
-
-## v1.575.0
-
-**Auto in chat: tools Jarvis looks up no longer ask every time.** In a chat, Iron Jarvis looks up which of its tools fit your message and brings them into the reply.
