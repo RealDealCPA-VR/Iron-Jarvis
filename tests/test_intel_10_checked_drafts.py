@@ -441,6 +441,17 @@ def test_a_local_only_run_keeps_the_request_on_this_network(desk):
     assert call["provider"] == "ollama" and call["local_only"] is True
 
 
+def test_a_local_only_run_with_a_model_off_this_network_sends_nothing(desk):
+    three_runs(desk.engine)
+    with session_scope(desk.engine) as db:
+        rows = list(db.exec(select(Session)))
+        rows[2].options_json = json.dumps({"local_only": True})
+        db.add(rows[2])
+        db.commit()
+    _pass(desk)
+    assert desk.router.calls == [] and _proposals(desk) == []
+
+
 def test_the_runs_reach_the_model_masked_and_fenced(desk):
     from iron_jarvis.computeruse.safety import wrap_untrusted
 
