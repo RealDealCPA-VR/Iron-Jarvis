@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.590.0
+
+**Every finished job says what was checked.** When a reply or a task makes or changes a file, Iron Jarvis now looks at the file itself before it calls the job done, and tells you what it found.
+
 ## v1.589.0
 
 **Long files and long results are read to the end.** Some of what Iron Jarvis reads for you is long: a long Word, PDF or text document, a long list of files, a web page, a long answer from one of your extensions.
@@ -77,7 +81,3 @@
 ## v1.574.0
 
 **Your day: everything Iron Jarvis changed, and Undo for one or many.** The Activity page has a second tab, **Your day**, beside the **Timeline** (Everything › Activity, or Ctrl K and "your day").
-
-## v1.573.0
-
-**Local models waste fewer steps in a coding session.** A benchmark of a local model (GLM) in **Chat › Code** showed that no task was lost to a mistake with a tool, but about 6 in every 100 tool calls were spent on three avoidable ones.
