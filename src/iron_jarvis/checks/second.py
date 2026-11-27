@@ -58,6 +58,7 @@ import asyncio
 import contextvars
 import logging
 import os
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -299,23 +300,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: The once-only card's read and its mark are ONE step (two replies at one
+#: moment never both carry it).
+_OFFER_LOCK = threading.Lock()
+
+
 def offer_once(platform: Any) -> "dict[str, Any] | None":
     """BLOCKING. The once-only card for the reply going out now, or None:
     not answered, never shown, and a model and account to name. Marks it
     shown FIRST (``config.double_check_offered``), so it is drawn once
     whatever happens next. Never raises."""
     try:
-        config = getattr(platform, "config", None)
-        if config is None or getattr(config, SETTING, None) is not None or getattr(config, OFFERED, ""):
-            return None
-        choice = candidate(platform)
-        if choice is None:
-            return None
-        from ..core.config import persist_config_values
+        with _OFFER_LOCK:
+            config = getattr(platform, "config", None)
+            if config is None or getattr(config, SETTING, None) is not None or getattr(config, OFFERED, ""):
+                return None
+            choice = candidate(platform)
+            if choice is None:
+                return None
+            from ..core.config import persist_config_values
 
-        at = _now_iso()
-        setattr(config, OFFERED, at)
-        persist_config_values(config.home, {OFFERED: at})
+            at = _now_iso()
+            setattr(config, OFFERED, at)
+            persist_config_values(config.home, {OFFERED: at})
         return {
             "offer": {
                 "choice": choice.id,
@@ -648,6 +655,44 @@ def status(engine: Any, token: str) -> dict[str, Any]:
 def reset() -> None:
     """Tests: forget every run (as a restart does)."""
     _RUNS.clear()
+
+
+def own_task(session: Any, *, nested: bool) -> bool:
+    """Is this run a task of its OWN (one request per task)? Not a run
+    started inside another run (a delegation, a team member), a mission's
+    member or an assignment's run: only the parent's finished work is
+    double-checked."""
+    if nested:
+        return False
+    try:
+        from ..agents.model_team import MEMBER_RUN
+
+        if MEMBER_RUN.get():
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    origin = str(getattr(session, "origin", "") or "").strip()
+    return not (origin == "job:mission-member" or origin.startswith("assignment:"))
+
+
+async def shutdown(timeout_s: float = 5.0) -> None:
+    """The daemon is stopping: every double-check still running is cancelled
+    and waited for, at most *timeout_s* (its row is not written; the line
+    simply lacks it). Never raises."""
+    tasks = [t for t in list(_TASKS) if not t.done()]
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        try:
+            await asyncio.wait(tasks, timeout=max(0.0, float(timeout_s)))
+        except Exception:  # noqa: BLE001
+            pass
+    for t in tasks:
+        if t.done():
+            _TASKS.discard(t)
+    for token, run in list(_RUNS.items()):
+        if run.get("running"):
+            _RUNS[token] = {**run, "running": False}
 
 
 def _spawn(coro: Any, spawn: "Callable[[Any], Any] | None") -> None:

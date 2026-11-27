@@ -1683,7 +1683,11 @@ class Orchestrator:
                 # said yes to one (``checks/second``): in the background, on
                 # the chosen account only, nothing sent for a run whose words
                 # stay on this PC. Never waited on here; never raises.
-                if session.status is SessionStatus.COMPLETED and _made:
+                # One request per TASK: a run inside another run, a team
+                # member's or an assignment's gets none (``own_task``).
+                from ..checks.second import own_task as _own_task
+
+                if session.status is SessionStatus.COMPLETED and _made and _own_task(session, nested=nested):
                     from ..checks.second import for_run as _double_check_run
 
                     await _double_check_run(self.p, session, _made, reply=str(run.result or ""))

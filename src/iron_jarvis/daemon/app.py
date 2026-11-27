@@ -2860,6 +2860,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.wait_for(_media_jobs_svc.drain(), timeout=5.0)
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     pass
+            # 5b: a second model's double-check still running stops with the
+            # daemon (bounded); its row is not written, so no line claims it.
+            try:
+                from ..checks import second as _second_checks
+
+                await _second_checks.shutdown(timeout_s=5.0)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             # Idea 33-a: a recording still being heard stops with the daemon
             # (its worker's tree too); the next boot starts it again once.
             try:

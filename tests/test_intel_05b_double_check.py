@@ -693,3 +693,85 @@ def test_a_chat_switched_to_local_only_after_the_reply_sends_nothing(client, mon
         client.log.release.set()
     assert got["line"].endswith(f"({S.WHY_LOCAL}).")
     assert client.log.calls == []
+
+
+async def test_a_run_started_inside_another_run_gets_no_request_of_its_own(platform, orchestrator, monkeypatch):
+    """Review 5: one request per TASK: a run inside another run (a team
+    member, a delegation) never gets its own; only the parent run does."""
+    from iron_jarvis.agents import orchestrator as O
+    from tests.test_intel_05_existing_checks import _split_run
+
+    log = _Log()
+    platform.providers.register("claude-cli", lambda model=None: _Checker("claude-cli", model, log))
+    real = platform.providers.available
+    monkeypatch.setattr(platform.providers, "available", lambda name: True if name == "claude-cli" else real(name))
+    monkeypatch.setattr(S, "_vendor_model", lambda vendor: MODELS.get(vendor, ""))
+    monkeypatch.setattr(platform, "iron_proxy", _Accounts(TWO))
+    platform.config.double_check = "acct-work|claude-cli|claude-sonnet-4-5"
+    token = O._IN_RUN.set(True)
+    try:
+        row = await _split_run(platform, orchestrator, "local-r5b-nested", '{"pass": true, "reason": "ok"}')
+    finally:
+        O._IN_RUN.reset(token)
+    await asyncio.gather(*list(S._TASKS))
+    assert [r for r in _rows(platform, session_id=row.id) if r.check == R.DOUBLE_CHECK] == []
+    assert log.calls == []
+
+
+@pytest.mark.parametrize("origin,own", [
+    (None, True), ("chat", True), ("job:mission-member", False), ("assignment:a1", False)])
+def test_which_runs_are_a_task_of_their_own(origin, own):
+    session = type("S", (), {"origin": origin})()
+    assert S.own_task(session, nested=False) is own
+    assert S.own_task(session, nested=True) is False
+
+
+async def test_a_run_a_model_on_this_pc_did_sends_nothing(platform, monkeypatch, tmp_path):
+    monkeypatch.setattr(S, "_vendor_model", lambda vendor: MODELS.get(vendor, ""))
+    monkeypatch.setattr(platform, "iron_proxy", _Accounts(TWO))
+    platform.config.double_check = "acct-work|claude-cli|claude-sonnet-4-5"
+    made = tmp_path / "a.txt"
+    made.write_text("hello", encoding="utf-8")
+    session = type("S", (), {"id": "ses-local", "task": "t", "provider": "mock", "model": "mock"})()
+    monkeypatch.setattr(T, "run_owner", lambda engine, s: {"thread_id": "", "kept_home": False})
+    assert await S.for_run(platform, session, [str(made)]) is True
+    await asyncio.gather(*list(S._TASKS))
+    rows = [r for r in _rows(platform, session_id="ses-local") if r.check == R.DOUBLE_CHECK]
+    assert [(r.result, r.detail) for r in rows] == [(R.NOT_CHECKED, S.WHY_LOCAL_MODEL)]
+
+
+async def test_an_offer_is_marked_once_under_two_replies_at_the_same_moment(platform, monkeypatch):
+    """Review 5: the read and the mark of the once-only card are one step."""
+    import threading as th
+
+    monkeypatch.setattr(S, "_vendor_model", lambda vendor: MODELS.get(vendor, ""))
+    monkeypatch.setattr(platform, "iron_proxy", _Accounts(TWO))
+    gate = th.Barrier(2)
+    real = S.candidate
+
+    def slow(p):
+        got = real(p)
+        try:
+            gate.wait(timeout=2)
+        except th.BrokenBarrierError:
+            pass
+        return got
+
+    monkeypatch.setattr(S, "candidate", slow)
+    got = await asyncio.gather(asyncio.to_thread(S.offer_once, platform), asyncio.to_thread(S.offer_once, platform))
+    assert sum(1 for g in got if g) == 1, got
+
+
+async def test_the_daemon_stopping_ends_a_running_double_check():
+    """Review 5: shutdown cancels what still runs, bounded."""
+    started = asyncio.Event()
+
+    async def forever():
+        started.set()
+        await asyncio.Event().wait()
+
+    S._spawn(forever(), None)
+    await started.wait()
+    assert S._TASKS
+    await S.shutdown(timeout_s=1.0)
+    assert not S._TASKS
