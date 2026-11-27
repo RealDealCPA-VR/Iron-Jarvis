@@ -440,7 +440,7 @@ def test_chat_schedule_update_cannot_take_local_only_off(desk):
 
     sched = _accepted_local(desk)
     out = asyncio.run(ScheduleUpdateTool(desk.platform).execute(
-        {"name": sched.name, "payload": {"task": WORDS, "provider": "claude-cli", "model": "claude-sonnet-4-6"}},
+        {"name": sched.name, "payload": {"task": WORDS, "provider": "ollama", "model": "qwen3:8b"}},
         SimpleNamespace()))
     assert out.ok, out.error
     assert json.loads(desk.platform.scheduler.get(sched.name).payload_json)["local_only"] is True
@@ -548,3 +548,65 @@ def test_two_rehearse_presses_at_once_start_one_rehearsal(desk):
     a, b = asyncio.run(go())
     assert sorted([a.status_code, b.status_code])[0] == 200
     assert len(_rehearsals(desk)) == 1
+
+
+# --------------------------------------------------------------------------- #
+# re-check: a stale Rehearse claim, and an edit onto a model off this network
+# --------------------------------------------------------------------------- #
+def _claim_left(desk, offer_id: str, at: float) -> str:
+    claim = f"claim:{int(at)}:c_dead"
+    with session_scope(desk.engine) as db:
+        row = db.get(O.ScheduleOfferRecord, offer_id)
+        row.rehearsal_id = claim
+        db.add(row)
+        db.commit()
+    return claim
+
+
+def test_a_claim_left_by_a_failed_rehearse_is_free_after_a_few_minutes(desk, monkeypatch):
+    _three(desk)
+    _night(desk)
+    (offer,) = _offers(desk)
+    now = {"t": 1_900_000_000.0}
+    monkeypatch.setattr(O, "CLOCK", lambda: now["t"])
+    _claim_left(desk, offer.id, now["t"])
+    assert call(desk, "POST", f"/schedules/offers/{offer.id}/rehearse").status_code == 409  # fresh: one is starting
+    now["t"] += O.CLAIM_STALE_S + 1
+    desk.platform.router.stream = _scripted([])
+
+    async def go():
+        res = await _call(desk, "POST", f"/schedules/offers/{offer.id}/rehearse")
+        if res.status_code == 200:
+            await _settled(desk, res.json()["id"])
+        return res
+
+    res = asyncio.run(go())
+    assert res.status_code == 200, res.text
+    assert len(_rehearsals(desk)) == 1
+
+
+def test_claims_are_cleared_at_start_up(desk):
+    _three(desk)
+    _night(desk)
+    (offer,) = _offers(desk)
+    _claim_left(desk, offer.id, O.CLOCK())
+    assert O.clear_claims(desk.engine) == 1
+    assert O.get(desk.engine, offer.id).rehearsal_id == ""
+
+
+def test_an_edit_cannot_move_a_local_only_schedule_off_this_network(desk):
+    from iron_jarvis.settings.records import ScheduleUpdateTool
+
+    sched = _accepted_local(desk)
+    res = call(desk, "PATCH", f"/schedules/{sched.name}",
+               {"payload_set": {"provider": "claude-cli", "model": "claude-sonnet-4-6"}})
+    assert res.status_code == 409 and res.json()["detail"] == O.LOCAL_ONLY_OFF_NETWORK
+    out = asyncio.run(ScheduleUpdateTool(desk.platform).execute(
+        {"name": sched.name, "payload": {"task": WORDS, "provider": "claude-cli", "model": "claude-sonnet-4-6"}},
+        SimpleNamespace()))
+    assert not out.ok and out.error == O.LOCAL_ONLY_OFF_NETWORK
+    payload = json.loads(desk.platform.scheduler.get(sched.name).payload_json)
+    assert (payload["provider"], payload["model"]) == ("ollama", "qwen3:8b")
+    # a change that stays home is still fine
+    ok = call(desk, "PATCH", f"/schedules/{sched.name}", {"payload_set": {"task": WORDS + " please"}})
+    assert ok.status_code == 200, ok.text

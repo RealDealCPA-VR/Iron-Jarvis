@@ -76,6 +76,20 @@ KIND_TASK = "task"
 #: Chat skill drafts looked at in one pass, and offers made at most.
 LOOK = 20
 OFFERS_MAX = 2
+#: 19-b re-check: a Rehearse claim older than this was left by a press
+#: that failed (or a daemon that stopped): it is free again.
+CLAIM_STALE_S = 300.0
+
+
+def _now() -> float:
+    import time
+
+    return time.time()
+
+
+#: The clock claims are stamped and judged by (tests set it; never a sleep).
+CLOCK = _now
+
 #: A schedule's name, at most (the Schedules page's own bound is wider).
 NAME_MAX = 60
 
@@ -591,7 +605,7 @@ def claim_rehearsal(engine: Any, offer_id: str, seen: str) -> str:
     when another press won."""
     from sqlalchemy import update
 
-    claim = f"claim:{new_id('c')}"
+    claim = f"claim:{int(CLOCK())}:{new_id('c')}"
     with session_scope(engine) as db:
         res = db.exec(
             update(ScheduleOfferRecord)  # type: ignore[call-overload]
@@ -600,6 +614,34 @@ def claim_rehearsal(engine: Any, offer_id: str, seen: str) -> str:
         )
         db.commit()
     return claim if getattr(res, "rowcount", 0) else ""
+
+
+def claim_is_live(rehearsal_id: str) -> bool:
+    """Is ``rehearsal_id`` a Rehearse claim younger than
+    :data:`CLAIM_STALE_S`? A claim with no readable time is stale."""
+    rid = str(rehearsal_id or "")
+    if not rid.startswith("claim:"):
+        return False
+    try:
+        at = float(rid.split(":", 2)[1])
+    except (IndexError, ValueError):
+        return False
+    return CLOCK() - at < CLAIM_STALE_S
+
+
+def clear_claims(engine: Any) -> int:
+    """At start-up: every Rehearse claim is a press the stopped daemon never
+    finished, so each is cleared. How many. BLOCKING."""
+    from sqlalchemy import update
+
+    with session_scope(engine) as db:
+        res = db.exec(
+            update(ScheduleOfferRecord)  # type: ignore[call-overload]
+            .where(ScheduleOfferRecord.rehearsal_id.like("claim:%"))  # type: ignore[attr-defined]
+            .values(rehearsal_id="")
+        )
+        db.commit()
+    return int(getattr(res, "rowcount", 0) or 0)
 
 
 def set_rehearsal(engine: Any, offer_id: str, rehearsal_id: str) -> None:
@@ -614,7 +656,7 @@ def set_rehearsal(engine: Any, offer_id: str, rehearsal_id: str) -> None:
 __all__ = [
     "ACCEPTED", "DECLINED", "DECLINED_NOTE", "KIND_TASK", "OFFERS_MAX", "OfferRefused", "ScheduleOfferRecord",
     "WAITING", "accept", "accepted_note", "check", "decline", "drop_thread", "evidence", "get",
-    "LOCAL_ONLY_OFF_NETWORK", "claim_rehearsal", "make_offers", "newest_day", "offer_for", "payload_of",
+    "CLAIM_STALE_S", "LOCAL_ONLY_OFF_NETWORK", "claim_is_live", "claim_rehearsal", "clear_claims", "make_offers", "newest_day", "offer_for", "payload_of",
     "rhythm_of", "runs_home", "schedule_name", "set_rehearsal",
     "task_of",
 ]

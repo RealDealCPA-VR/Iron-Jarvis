@@ -231,9 +231,9 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
         raise RehearsalRefused("There is no such offer.", status=404)
     if row.status != O.WAITING:
         raise RehearsalRefused("This offer was already answered, so it is not rehearsed.", status=409)
-    if row.rehearsal_id.startswith("claim:"):
+    if O.claim_is_live(row.rehearsal_id):
         raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
-    if row.rehearsal_id:
+    if row.rehearsal_id and not row.rehearsal_id.startswith("claim:"):
         before = await asyncio.to_thread(_store(platform).get, row.rehearsal_id)
         if before is not None and before.status == "running":
             return await asyncio.to_thread(report, platform, before.id)
@@ -254,6 +254,7 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
         rid = getattr(now, "rehearsal_id", "") or ""
         if rid and not rid.startswith("claim:"):
             return await asyncio.to_thread(report, platform, rid)
+        # (a stale claim was taken by the other press, which won)
         raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
     store = _store(platform)
     try:

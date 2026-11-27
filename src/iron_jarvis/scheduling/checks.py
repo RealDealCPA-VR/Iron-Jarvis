@@ -107,6 +107,22 @@ def check_payload(platform: Any, name: str, kind: str, payload: dict, *, from_us
                 detail=f"unknown destination(s): {', '.join(unknown)} — "
                 f"add them on the Notifications page first",
             )
+    # Next leaps 19-b re-check: a Local only schedule (this payload says so,
+    # or the stored one does: no edit takes it off, ``update_task``) must
+    # name a model that stays on this network, or every fire is refused.
+    if kind == "task":
+        stored: dict = {}
+        sched = getattr(platform, "scheduler", None)
+        try:
+            row = sched.get(name) if sched is not None and name else None
+            stored = row.decoded_payload() if row is not None else {}
+        except Exception:  # noqa: BLE001 - unreadable: this payload decides
+            stored = {}
+        if payload.get("local_only") is True or (isinstance(stored, dict) and stored.get("local_only") is True):
+            from .offers import LOCAL_ONLY_OFF_NETWORK, _model_stays_home
+
+            if not _model_stays_home(platform, str(payload.get("provider") or ""), str(payload.get("model") or "")):
+                raise ScheduleRefused(status_code=409, detail=LOCAL_ONLY_OFF_NETWORK)
     # v1.299.0: the knobs, ONE rule set (scheduling/knobs.validate_knobs)
     # for POST, PATCH and the agent-made tool. A route is the user.
     try:

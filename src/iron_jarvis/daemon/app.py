@@ -801,6 +801,20 @@ async def _kept_results_boot_tidy(platform) -> int:
         return 0
 
 
+async def _offer_claims_boot_tidy(platform) -> int:
+    """19-b: clear every Rehearse claim left on an offer (``scheduling/
+    offers.clear_claims``), off the loop. Never raises."""
+    from ..scheduling.offers import clear_claims
+
+    try:
+        return int(await asyncio.to_thread(clear_claims, platform.engine))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - a tidy-up never stops the daemon
+        log.warning("the schedule offers' start-up tidy did not finish", exc_info=True)
+        return 0
+
+
 async def _tool_failure_pass(platform, tick=None) -> list[dict]:
     """ONE daily read of tool failures (v1.507.0, north-star plan 7.2): the
     improvement engine's ``sweep`` (a tool that failed repeatedly in the last
@@ -2110,6 +2124,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
         # left behind) runs BESIDE start-up, never in it: it reads every kept
         # result's record, which took seconds on a large store.
         bg_tasks["kept_results_tidy"] = asyncio.create_task(_kept_results_boot_tidy(platform))
+        # Next leaps 19-b: a Rehearse press the stopped daemon never finished
+        # left a claim on its offer; every one is cleared, off the loop.
+        bg_tasks["schedule_offer_claims"] = asyncio.create_task(_offer_claims_boot_tidy(platform))
 
         # EVENT-LOOP STALL TELEMETRY (v1.245.0). The daemon is ONE loop: a
         # blocking call anywhere freezes every terminal, chat stream and poll,
