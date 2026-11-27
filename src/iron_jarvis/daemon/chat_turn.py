@@ -14445,7 +14445,7 @@ async def run_chat_turn(
         # Release 7: the readers this chat already holds stay (a definition
         # to send, never a permission). MIRROR NOTE (lock-step): routes/chat.py.
         armed, auto_armed = _stable.keep_auto(
-            d, body, armed, auto_armed, _arm_ceiling, _MAX_ARMED_TOOLS,
+            d, body, armed, auto_armed, _tool_cap, _MAX_ARMED_TOOLS,
             provider=provider_choice,
         )
         # "adapted" MUST MEAN THE LOOP BENT, not that a budget existed (the

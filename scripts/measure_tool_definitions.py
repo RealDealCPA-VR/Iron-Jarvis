@@ -36,6 +36,16 @@ THREE REPORTS.
    A record of a shape this script does not know (a newer version's, or a
    damaged one) is left out and counted, never read as zeros.
 
+   REPLY NUMBERS count from the chat's TRUE first reply. Every usage row of a
+   chat is counted, whenever it was written (also before ``--days``). The app
+   deletes usage rows older than its history setting (90 days unless
+   changed), so an old chat's first rows may be gone: for a saved chat that
+   was created before the oldest row this database still holds, the count
+   starts from the replies the saved chat itself holds (its messages, counted
+   by role; never read as text) that have no row any more. Such a chat's
+   replies are never "reply 1", and the report says how many chats were
+   numbered that way (their numbers are a lower bound).
+
 3. Do replies start sooner (the intelligence plan, release 7), only when
    ``--split`` gives a moment (ISO, UTC: when the new version was installed).
    For plain chat, the replies before that moment and the replies from it on,
@@ -90,6 +100,11 @@ OLDER_LABELS = (
     "A chat's rows for follow-up suggestions and for a coding session's look back for a lesson are "
     "skipped by their label; rows of those two kinds written before this version have no label and "
     "still count as replies."
+)
+OLDER_CHATS = (
+    "{n} chat{s} older than the oldest usage row this database still holds (the app deletes "
+    "older rows): {their} reply numbers start from the replies the saved chat itself still holds, "
+    "so they are a lower bound, and never \"reply 1\"."
 )
 LEFT_BEHIND = (
     "This database's app stopped before folding its newest changes into the main file (there is a "
@@ -226,6 +241,41 @@ def _table(title: str, unit: str, rows: list, max_number: int, out) -> None:
               f"\"messages\" is what the chat held, not what was sent.", file=out)
 
 
+def _replies_before_the_rows(db: sqlite3.Connection, all_rows: list) -> dict:
+    """``{chat id: n}``: for a saved chat created BEFORE the oldest usage row
+    this database still holds, how many of its replies have no row any more
+    (at least 1: its first reply's row is gone). The saved chat's own
+    messages are counted by role inside SQLite; their text is never read
+    here. A chat created after the oldest row has every row: it is not in
+    the answer. Never raises: a database with no chat table, or one this
+    SQLite cannot read that way, numbers by the rows alone, as before."""
+    oldest = min((str(r[2]).replace("T", " ") for r in all_rows), default="")
+    if not oldest:
+        return {}
+    rows_of: dict = collections.Counter(
+        r[1] for r in all_rows if r[0] == "chat" and r[1] and not r[10]
+    )
+    try:
+        chats = db.execute(
+            "select t.id, t.created_at, case when json_valid(t.messages_json) then (select count(*) from "
+            "json_each(t.messages_json) e where json_extract(e.value, '$.role') = 'assistant') else 0 end "
+            "from chatthreadrecord t"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict = {}
+    for chat_id, created, replies in chats:
+        if chat_id in rows_of and created and str(created).replace("T", " ") < oldest:
+            out[chat_id] = max(1, int(replies or 0) - rows_of[chat_id])
+    return out
+
+
+def _older_note(rows: list) -> str:
+    """The one line for chats numbered from their saved messages ("" = none)."""
+    n = len({r["group"] for r in rows if r.get("older")})
+    return OLDER_CHATS.format(n=n, s=" is" if n == 1 else "s are", their="its" if n == 1 else "their") if n else ""
+
+
 def _collect(db: sqlite3.Connection, days: int, now: "datetime | None"):
     """Every reply and run with a record inside the window, numbered in its
     chat: ``(chat, code, runs, unsaved, unknown)`` (*unknown*: records of a
@@ -246,6 +296,11 @@ def _collect(db: sqlite3.Connection, days: int, now: "datetime | None"):
         "order by created_at, id"
     ).fetchall()
     numbers: dict = collections.Counter()
+    # A chat older than the oldest row still held starts past the replies
+    # whose rows the app has deleted (see the module's note on reply numbers).
+    before_rows = _replies_before_the_rows(db, all_rows)
+    for chat_id, gone in before_rows.items():
+        numbers[("chat", chat_id)] = gone
     chat, code, runs, unsaved, unknown = [], [], [], 0, 0
     for sid, thread, created, inp, steps, cache_read, parts_json, model_ms, calls, first_ms, label in all_rows:
         is_chat = sid == "chat"
@@ -269,6 +324,7 @@ def _collect(db: sqlite3.Connection, days: int, now: "datetime | None"):
             "calls": calls if calls is not None else (int(steps or 0) or None),
             "cache_read": cache_read, "record": record, "model_ms": model_ms, "first_word_ms": first_ms,
             "created": str(created).replace("T", " "),
+            "older": bool(is_chat and thread in before_rows),
         }
         (runs if not is_chat else code if record.get("kind") == "code" else chat).append(row)
     return chat, code, runs, unsaved, unknown
@@ -323,6 +379,9 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
               f"{'is' if unsaved == 1 else 'are'} left out (no chat to number them in).", file=out)
     if skipped:
         print(("" if unsaved else "\n") + skipped, file=out)
+    older = _older_note(chat + code)
+    if older:
+        print(("" if (unsaved or skipped) else "\n") + older, file=out)
     return total
 
 
@@ -351,6 +410,9 @@ def sooner(db: sqlite3.Connection, split: datetime, days: int = 7, now: "datetim
           "read the line for the second and later replies.", file=out)
     if unknown:
         print(_skipped(unknown), file=out)
+    older = _older_note(chat)
+    if older:
+        print(older, file=out)
     for label, part in (("before", [r for r in chat if r["created"] < at]),
                         ("from it on", [r for r in chat if r["created"] >= at])):
         later = [r for r in part if r["number"] >= 2]

@@ -195,9 +195,11 @@ def test_only_a_tool_named_on_the_list_may_stay(tmp_path):
     assert len(stays) >= 20, "the list names tools that exist"
     declared = {n for n in names if registry.get(n).reversibility == Reversibility.READONLY}
     assert declared - CP.STAY_READERS, "control: some tools declare they only read and still do not stay"
-    for name in ("web_search", "web_fetch", "view_image", "run_doctor", "code_load", "code_search",
+    for name in ("web_search", "web_fetch", "view_image", "run_doctor", "code_load", "code_run",
                  "browser_read_page", "browser_get_elements", "browser_screenshot", "browser_list_tabs",
-                 "write_file", "write_document", "excel_edit", "docx_edit", "ltm_append", "remember_preference"):
+                 "write_file", "write_document", "excel_edit", "docx_edit", "ltm_append", "remember_preference",
+                 # the two memory searches: each can ask a memory base that is not on this PC
+                 "recall", "ltm_search"):
         assert not CP.may_stay(registry, name), name
     assert not (CP.STAY_READERS & egress.INTERNET_TOOLS)
     assert not any(n.startswith(("browser_", "mcp__")) for n in CP.STAY_READERS)

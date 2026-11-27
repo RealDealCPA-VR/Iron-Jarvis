@@ -519,8 +519,11 @@ def test_a_saved_chats_instructions_hold_no_number_and_no_live_state(tmp_path, l
     """The page saves the chat between replies, other chats save messages and
     the memory index's count cache runs out: the index's "Past conversations:
     N indexed" changes on every reply. It rides beside the newest message
-    (and so does the roster, with each agent's live state); the instructions
-    and the tool list are the same bytes across five replies."""
+    (and so does the roster, with each agent's live state). AN AGENT RUN
+    STARTS AND FINISHES between two of the replies (a real run through the
+    app's own door, the stand-in model): the roster's line for that agent
+    really changes, beside the message. The instructions and the tool list
+    are the same bytes across five replies."""
     from iron_jarvis.memory import index_block
 
     chat = Chat(tmp_path / "home", lane, thread="")
@@ -528,7 +531,7 @@ def test_a_saved_chats_instructions_hold_no_number_and_no_live_state(tmp_path, l
     chat.thread = made.json()["id"]
     asks = ("hello there, good morning", "and how are you today?", "tell me something short",
             "one more thing please", "thanks, that is all for now")
-    calls, counts = [], []
+    calls, counts, runs = [], [], []
     for n, ask in enumerate(asks):
         call = chat.say(ask)
         calls.append(call)
@@ -545,11 +548,30 @@ def test_a_saved_chats_instructions_hold_no_number_and_no_live_state(tmp_path, l
             {"role": "user", "content": f"another chat's question {n}"},
             {"role": "assistant", "content": f"another chat's answer {n}"}]})
         index_block._history_cache.clear()
+        if n in (1, 2):
+            # An agent run, start to finish, before the next reply.
+            ran = chat.client.post("/sessions", json={"task": f"write a short note about bread, number {n}",
+                                                      "wait": True})
+            assert ran.status_code == 200 and ran.json()["status"] == "completed", ran.text[:400]
+            runs.append(ran.json()["id"])
     for a, b in zip(calls, calls[1:]):
         assert a["system"] == b["system"], "the instructions changed between two replies"
         assert a["tools"] == b["tools"]
     known = [c for c in counts if c is not None]
     assert len(known) >= 3 and len(set(known)) == len(known), f"the count really moved on every reply: {counts}"
+    # Control: the runs really happened and really showed, beside the message.
+    assert len(set(runs)) == 2
+    roster = [_roster_of(c) for c in calls]
+    assert roster[1] != roster[2] and roster[2] != roster[3], "the roster did not change after an agent run"
+    assert roster[0] == roster[1] and roster[3] == roster[4], "the roster changed with no run in between"
+
+
+def _roster_of(call: dict) -> str:
+    """The roster section beside a request's newest message."""
+    beside = once_of(call)
+    at = beside.index("# Who can take this work")
+    end = beside.find("\n\n", at)
+    return beside[at: end if end >= 0 else len(beside)]
 
 
 @pytest.mark.parametrize("lane", LANES)

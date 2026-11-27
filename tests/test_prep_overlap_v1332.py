@@ -219,18 +219,22 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
 
     beside_at = system.index(_prefix.ONCE_TOP)
     placed, system = system[beside_at:], system[:beside_at]
-    own = "PAGE-1\n\nREFS-1"
-    found = (
-        "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
+    # ONE exact, contiguous string, as before this release: every join of
+    # the block as it is laid out now, built from the block's own constants.
+    expected = (
+        "\n\nPAGE-1"
+        + "\n\nREFS-1"
+        + "\n\n" + _prefix.FOUND_TOP + "\n" + _prefix.FOUND_HEAD + "\n---\n"
+        + "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
         + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"
         + "\n---\n" + _prefix.FOUND_BOTTOM
-    )
-    last = (
-        "# Skill invoked by the user: prep-skill\n"
+        + "\n\n# Skill invoked by the user: prep-skill\n"
         "FOLLOW this playbook for this request.\n" + "SKILL-1"
     )
-    assert own in placed and found in placed and last in placed, f"{lane}: a prep section is missing:\n{placed!r}"
-    assert placed.index(own) < placed.index(found) < placed.index(last), f"{lane}: prep sections out of order:\n{placed!r}"
+    assert expected in placed, f"{lane}: prep sections out of order or joined differently:\n{placed!r}"
+    assert placed.startswith(_prefix.ONCE_TOP + "\n" + _prefix.ONCE_HEAD + "\n")
+    assert placed.endswith("\n" + _prefix.ONCE_BOTTOM)
+    assert all(placed.count(m) == 1 for m in ("ATT-1", "PAGE-1", "RES-1", "REFS-1", "SKILL-1"))
     assert not any(mark in system for mark in ("ATT-1", "PAGE-1", "RES-1", "REFS-1", "SKILL-1"))
     ws_block = chat_turn._workspace_grounding_block(str(ws), (ws, False))
     assert ws_block and ws_block in system

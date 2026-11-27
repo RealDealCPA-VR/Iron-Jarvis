@@ -157,6 +157,34 @@ _CLI_CARRIER = "claude_cli_native"
 _FOREIGN_CARRIERS = frozenset({_CLI_CARRIER, "gemini_native"})
 
 
+def _mark_last_block(anthropic_messages: "list[dict[str, Any]]") -> None:
+    """The message-level cache breakpoint: the LAST content block of the last
+    message of a real conversation (2+ messages) is marked, in place in
+    *anthropic_messages* (the request being built).
+
+    * A message whose text is blank is left as it is: the Messages API refuses
+      an empty text block, and a mark needs a block to sit on.
+    * A content LIST is copied before its last block is marked. The list may
+      be the caller's own object (content a caller handed over as blocks goes
+      through as it is), and a mark written into it would still be there on
+      the next call: marks would pile up past the four a request may carry.
+
+    With the system prompt, the last tool definition and the end of the
+    newest message's own words (:func:`_stable_text_blocks`) that is at most
+    four marks in a request."""
+    if len(anthropic_messages) < 2:
+        return
+    last = anthropic_messages[-1]
+    content = last.get("content")
+    if isinstance(content, str):
+        if content.strip():
+            last["content"] = [
+                {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+            ]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        last["content"] = [*content[:-1], {**content[-1], "cache_control": {"type": "ephemeral"}}]
+
+
 def _stable_text_blocks(m: LLMMessage) -> "list[dict[str, Any]] | None":
     """The intelligence plan, release 7 (``context/prefix``): the newest user
     message of a plain chat reply as TWO text blocks, cut where the chat's next
@@ -427,16 +455,8 @@ class AnthropicAdapter(LLMAdapter):
         # stops a multi-step loop re-paying for the entire history every step. Only
         # for a real conversation (2+ messages) — a lone first message has no prior
         # prefix to reuse, and adding it there would just alter the request shape.
-        # Fresh dicts each call, so this never accumulates across requests.
-        if len(anthropic_messages) > 1:
-            last = anthropic_messages[-1]
-            content = last.get("content")
-            if isinstance(content, str):
-                last["content"] = [
-                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
-                ]
-            elif isinstance(content, list) and content:
-                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+        # (:func:`_mark_last_block`: one place for both entry points.)
+        _mark_last_block(anthropic_messages)
         thinking_kw, max_tokens = self._thinking(reasoning)
         try:
             resp = await client.messages.create(
@@ -581,16 +601,8 @@ class AnthropicAdapter(LLMAdapter):
         # stops a multi-step loop re-paying for the entire history every step. Only
         # for a real conversation (2+ messages) — a lone first message has no prior
         # prefix to reuse, and adding it there would just alter the request shape.
-        # Fresh dicts each call, so this never accumulates across requests.
-        if len(anthropic_messages) > 1:
-            last = anthropic_messages[-1]
-            content = last.get("content")
-            if isinstance(content, str):
-                last["content"] = [
-                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
-                ]
-            elif isinstance(content, list) and content:
-                content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+        # (:func:`_mark_last_block`: one place for both entry points.)
+        _mark_last_block(anthropic_messages)
         thinking_kw, max_tokens = self._thinking(reasoning)
         try:
             # The SDK's streaming helper accumulates state for us. The events

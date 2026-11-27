@@ -261,11 +261,14 @@ def keep_auto(
 ) -> "list[str]":
     """The auto-armed tools of a reply: the ones the chat already holds
     (*kept*, in their order, each only when ``may_stay(name)``), then the ones
-    this message's words picked. Never more named tools than *ceiling* (the
-    lanes' own cap, or the answering model's measured one) together with the
-    *explicit* picks: when there is no room, a kept tool this message did not
-    ask for leaves, the most recently added first, and a tool this message
-    asked for is never the one that leaves."""
+    this message's words picked. *ceiling* bounds how many KEPT tools stay:
+    together with the *explicit* picks and this message's own, never more
+    named tools than it while a kept tool the message did not ask for is
+    still there; such a tool leaves, the most recently added first. A tool
+    this message asked for NEVER leaves here, also when the message's own
+    picks alone are past *ceiling* (the settings tools and the calculator are
+    armed outside the arming pass's cap on purpose: that pass's own rules
+    decide them)."""
     explicit = list(dict.fromkeys(explicit or ()))
     now = [n for n in dict.fromkeys(auto_now or ()) if n not in explicit]
     wanted = set(now)
@@ -281,7 +284,6 @@ def keep_auto(
                 break
             if name not in wanted:
                 out.remove(name)
-        out = out[:room] if len(out) > room else out
     return out
 
 

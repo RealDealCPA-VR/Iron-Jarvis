@@ -54,16 +54,23 @@ log = logging.getLogger(__name__)
 
 ATTACH_HEAD = "\n\n# Attachments (provided by the user this turn)"
 
-#: THE TOOLS THAT MAY STAY FOR A CHAT, BY NAME. Readers of Iron Jarvis's own
-#: local data: files the chat can already reach, memory, history, the work
-#: record, settings and lists. A tool that is NOT named here never stays,
-#: whatever it declares: a new read-only tool is not sticky until someone
-#: adds it on purpose (a registry-wide test holds that). NEVER here: anything
-#: in ``egress.INTERNET_TOOLS`` (the web is armed by a message that asks for
+#: THE TOOLS THAT MAY STAY FOR A CHAT, BY NAME. Each one only reads data that
+#: is already on this PC, starts no process and makes no network or model
+#: call (read line by line; the reasons are in ``docs/rules/chat.md``). A
+#: tool that is NOT named here never stays, whatever it declares: a new
+#: read-only tool is not sticky until someone adds it on purpose (a
+#: registry-wide test holds that). NEVER here: anything in
+#: ``egress.INTERNET_TOOLS`` (the web is armed by a message that asks for
 #: it), any ``browser_*`` tool (it reaches the person's live tab),
 #: ``view_image`` or anything else that makes a model call of its own,
-#: anything that starts a process (``run_doctor``, ``code_search``),
-#: ``code_load``, and every tool that changes something.
+#: anything that starts a process (``run_doctor``), ``code_load``, every tool
+#: that changes something, and the two memory searches ``recall`` and
+#: ``ltm_search``: each can send a query the MODEL wrote to a memory base
+#: that is not on this PC (Notion, a cloud drive, a retrieval service,
+#: another machine) which the reply's own grounding does not ask (``recall``
+#: searches every base in a Local only chat, where grounding searches only
+#: the ones on this PC; ``ltm_search`` searches every base in a project
+#: bound to a few). They are armed by the words of a message, as before.
 STAY_READERS = frozenset({
     # files on this PC (each read is still confined by the file policy)
     "read_file", "read_document", "list_files", "list_folder", "file_search",
@@ -71,19 +78,34 @@ STAY_READERS = frozenset({
     # a workbook's contents, read only
     "excel_profile", "excel_query", "excel_read", "excel_sheet_spec", "excel_formula_check",
     "excel_accounts_diff",
-    # memory, history and the work record (what every reply is already grounded in)
-    "recall", "ltm_search", "history_search", "work_history",
-    # Iron Jarvis's own guides, settings and lists
+    # history and the work record, in this PC's own database
+    "history_search", "work_history",
+    # Iron Jarvis's own guides, settings, lists and state (kept answers only: nothing is probed)
     "guide_search", "app_search", "app_status", "pack_status", "workflow_list", "chat_fullness",
-    "config_list",
+    "config_list", "app_health", "code_search", "downloads_list",
 })
 
 
-def may_stay(registry: Any, name: str) -> bool:
+def may_stay(registry: Any, name: str, permissions: Any = None) -> bool:
     """May the built-in tool *name* stay for a chat without its words? Only a
-    name on :data:`STAY_READERS` that is registered. Never raises."""
+    name on :data:`STAY_READERS` that is registered AND that the user's own
+    setting lets run without asking. A kept tool is armed like any other, and
+    arming grants the call: a tool the user set to "Ask before each use" or
+    "Never run" after the chat was sent it must not stay (the words of a
+    message arm it as before, by the arming pass's own rules). *permissions*
+    is the platform's permission engine; without one nothing is known to be
+    set otherwise. Never raises; cannot tell = it does not stay."""
     try:
-        return name in STAY_READERS and registry.get(name) is not None
+        if name not in STAY_READERS:
+            return False
+        tool = registry.get(name)
+        if tool is None:
+            return False
+        if permissions is None:
+            return True
+        perm_key = getattr(tool, "perm_key", None)
+        key = perm_key() if callable(perm_key) else name
+        return getattr(permissions.mode_for(key), "value", "") == "allow"
     except Exception:  # noqa: BLE001 — cannot tell: it does not stay
         return False
 
@@ -124,8 +146,12 @@ def is_local_model(d: Any, provider: str) -> bool:
     ``providers.local.is_local_provider`` (``ollama``, ``custom``, the
     ``fleet-*`` servers) asked of the reply's provider: the pick, else the
     configured default. By name only (no adapter is built: this runs on the
-    loop). True when the provider is not known at this point (Auto routing
-    picks later, or nothing can be read): the narrower cap."""
+    loop). True when the provider is not known at this point: the narrower
+    cap. Under Auto routing it CANNOT be known here: the router's routing
+    step picks the model from the finished request (its instructions,
+    messages and this very tool list) inside the model call, after the tool
+    list is settled, and it may fall back to another provider; asking it
+    earlier would be a second routing call whose answer could differ."""
     from ..providers.local import is_local_provider
 
     try:
@@ -261,17 +287,25 @@ class StableTurn:
     def keep_auto(self, d: Any, body: Any, armed: list, auto_armed: list, ceiling: "int | None",
                   standing: int, provider: str = "") -> "tuple[list, list]":
         """``(armed, auto_armed)`` with the readers the chat already holds
-        (see the module docstring). New lists; unchanged on any doubt."""
+        (see the module docstring). New lists; unchanged on any doubt.
+
+        *ceiling* is the answering model's MEASURED tool ceiling
+        (``CapabilityProfile.max_tools()``: None when nothing measured it),
+        never the arming pass's own effective one (``ArmedSelection.ceiling``
+        is the standing six whenever nothing was measured, so passing it
+        would cap every chat at six). It bounds only how many kept readers
+        stay: what this message's own words armed is never cut here."""
         if not self.active or self.low_trust or not self.kept.held:
             return armed, auto_armed
         try:
             if not bool(getattr(body, "auto_tools", False)):
                 return armed, auto_armed
             registry = d.platform.registry
+            permissions = getattr(d.platform, "permissions", None)
             explicit = [t for t in armed if t not in auto_armed]
             auto = P.keep_auto(
                 explicit, auto_armed, [n for n in self.kept.tools if n in self.kept.held],
-                may_stay=lambda name: may_stay(registry, name),
+                may_stay=lambda name: may_stay(registry, name, permissions),
                 ceiling=keep_ceiling(ceiling, standing, is_local_model(d, provider)),
             )
             return explicit + auto, auto

@@ -310,3 +310,134 @@ def test_without_a_split_the_script_prints_what_it_always_did(two_weeks, capsys)
     M.main(["--db", str(two_weeks), "--now", NOW_ARG, "--days", "1", "--split", "2026-11-25T12:00:00+00:00"])
     out = capsys.readouterr().out
     assert "before: 0 replies in 0 chats" in out and "from it on: 4 replies in 1 chats" in out
+
+
+def test_reply_numbers_count_from_the_chats_true_first_reply(tmp_path, capsys):
+    """A chat whose first replies are OLDER than the window (some written by
+    a version that kept no record): its replies inside the window are its
+    30th and 31st, never "reply 1" and "reply 2". So they count as second and
+    later replies, and a new chat's first reply does not."""
+    path = tmp_path / "home" / "ironjarvis.db"
+    path.parent.mkdir()
+    engine = open_db(str(path))
+    with session_scope(engine) as db:
+        # 29 replies, ten days ago (the window is 7 days): 20 with no record, 9 with one.
+        for i in range(29):
+            _row(db, thread="chat_old", hours_ago=240 - i * 0.1,
+                 record=None if i < 20 else _record(100, cache_input=6_000), cache_read=0, first_ms=9_000)
+        # A labelled row is not a reply, in or out of the window.
+        _row(db, thread="chat_old", hours_ago=236, record=_record(900), label="A summary of the conversation")
+        # Replies 30 and 31, inside the window, from the split on.
+        _row(db, thread="chat_old", hours_ago=5, record=_record(100, cache_input=6_000), cache_read=5_400, first_ms=3_000)
+        _row(db, thread="chat_old", hours_ago=4, record=_record(100, cache_input=6_000), cache_read=5_700, first_ms=2_000)
+        # A new chat's first and second reply, from the split on.
+        _row(db, thread="chat_new", hours_ago=3, record=_record(100, cache_input=6_000), cache_read=0, first_ms=8_000)
+        _row(db, thread="chat_new", hours_ago=2, record=_record(100, cache_input=6_000), cache_read=3_000, first_ms=4_000)
+        db.commit()
+    engine.dispose()
+    before = _digest(path)
+    code = M.main(["--db", str(path), "--now", NOW_ARG, "--split", "2026-11-25T12:00:00", "--max-replies", "40"])
+    out = capsys.readouterr().out
+    assert code == 0
+    report = out[out.index("Do replies start sooner"):]
+    assert "before: 0 replies in 0 chats" in report and "from it on: 4 replies in 2 chats" in report
+    # Replies 30 and 31 of the old chat and reply 2 of the new one: (5,400 + 5,700 + 3,000) of 18,000.
+    assert "second and later replies (3): reused 78.3%, first word after 3.0 s" in report
+    table = [ln.split() for ln in report.splitlines() if len(ln.split()) > 1 and ln.split()[0].isdigit() and ln.split()[1].isdigit()]
+    assert [row[0] for row in table] == ["1", "2", "30", "31"], table
+    assert ["1", "1", "6,000", "0.0%", "8.0"] in table, "only the NEW chat's first reply is a first reply"
+    assert ["30", "1", "6,000", "90.0%", "3.0"] in table and ["31", "1", "6,000", "95.0%", "2.0"] in table
+    # The first report numbers them the same way (one reader).
+    first = out[: out.index("Do replies start sooner")]
+    rows = [ln.split() for ln in first.splitlines() if len(ln.split()) > 1 and ln.split()[0].isdigit() and ln.split()[1].isdigit()]
+    assert [row[0] for row in rows] == ["1", "2", "30", "31"], rows
+    # Past the most rows printed, they share one row; still never "reply 1".
+    M.main(["--db", str(path), "--now", NOW_ARG, "--split", "2026-11-25T12:00:00"])
+    short = capsys.readouterr().out
+    short = short[short.index("Do replies start sooner"):]
+    assert [ln.split()[:2] for ln in short.splitlines() if ln.split()[:1] in (["1"], ["2"], ["13+"])] == [
+        ["1", "1"], ["2", "1"], ["13+", "2"]]
+    assert _digest(path) == before
+
+
+def _saved_chat(db, chat_id: str, *, days_ago: float, replies: int) -> None:
+    """A saved chat as the app keeps it: its own messages, *replies* of them
+    Iron Jarvis's."""
+    import json as _json
+    from datetime import timedelta
+
+    from iron_jarvis.core.models import ChatThreadRecord
+    from tests.test_intel_06_measure_script import NOW
+
+    messages = []
+    for i in range(replies):
+        messages += [{"role": "user", "content": f"ZQXPRIVATE question {i}"},
+                     {"role": "assistant", "content": f"ZQXPRIVATE answer {i}"}]
+    db.add(ChatThreadRecord(id=chat_id, title="a chat", messages_json=_json.dumps(messages),
+                            created_at=NOW - timedelta(days=days_ago), updated_at=NOW - timedelta(hours=1)))
+
+
+def test_a_chat_whose_first_rows_the_app_has_deleted_is_not_numbered_from_one(tmp_path, capsys):
+    """The app deletes usage rows older than its history setting. A chat
+    started 200 days ago holds 31 replies; only its two newest rows are left.
+    They are replies 30 and 31 (counted from the saved chat's own messages),
+    never "reply 1" and "reply 2"; a chat that has every row is numbered by
+    its rows, as before; and the report says one chat was numbered that way."""
+    path = tmp_path / "home" / "ironjarvis.db"
+    path.parent.mkdir()
+    engine = open_db(str(path))
+    with session_scope(engine) as db:
+        # The oldest row the database still holds: another chat's, 80 days ago.
+        _saved_chat(db, "chat_mid", days_ago=80, replies=3)
+        _row(db, thread="chat_mid", hours_ago=80 * 24, record=None, cache_read=0)
+        # The old chat: created 200 days ago, 31 replies, two rows left.
+        _saved_chat(db, "chat_old", days_ago=200, replies=31)
+        _row(db, thread="chat_old", hours_ago=5, record=_record(100, cache_input=6_000), cache_read=5_400, first_ms=3_000)
+        _row(db, thread="chat_old", hours_ago=4, record=_record(100, cache_input=6_000), cache_read=5_700, first_ms=2_000)
+        # A new chat with every row: two replies, and one message that is not a model reply.
+        _saved_chat(db, "chat_new", days_ago=0.2, replies=3)
+        _row(db, thread="chat_new", hours_ago=3, record=_record(100, cache_input=6_000), cache_read=0, first_ms=8_000)
+        _row(db, thread="chat_new", hours_ago=2, record=_record(100, cache_input=6_000), cache_read=3_000, first_ms=4_000)
+        # An old chat that was deleted: no saved chat to count in, numbered by its rows.
+        _row(db, thread="chat_gone", hours_ago=1, record=_record(100, cache_input=6_000), cache_read=0, first_ms=7_000)
+        db.commit()
+    engine.dispose()
+    before = _digest(path)
+    code = M.main(["--db", str(path), "--now", NOW_ARG, "--split", "2026-11-25T12:00:00", "--max-replies", "40"])
+    out = capsys.readouterr().out
+    assert code == 0 and "ZQXPRIVATE" not in out
+    report = out[out.index("Do replies start sooner"):]
+    table = [ln.split() for ln in report.splitlines() if len(ln.split()) > 1 and ln.split()[0].isdigit() and ln.split()[1].isdigit()]
+    assert [(row[0], row[1]) for row in table] == [("1", "2"), ("2", "1"), ("30", "1"), ("31", "1")], table
+    assert ["30", "1", "6,000", "90.0%", "3.0"] in table and ["31", "1", "6,000", "95.0%", "2.0"] in table
+    assert "second and later replies (3): reused 78.3%, first word after 3.0 s" in report
+    note = M.OLDER_CHATS.format(n=1, s=" is", their="its")
+    assert report.count(note) == 1 and out.count(note) == 2, "each report says it once"
+    first = out[: out.index("Do replies start sooner")]
+    rows = [ln.split() for ln in first.splitlines() if len(ln.split()) > 1 and ln.split()[0].isdigit() and ln.split()[1].isdigit()]
+    assert [(row[0], row[1]) for row in rows] == [("1", "2"), ("2", "1"), ("30", "1"), ("31", "1")], rows
+    assert _digest(path) == before, "it wrote to the database"
+    assert sorted(p.name for p in path.parent.iterdir()) == ["ironjarvis.db"]
+
+
+def test_an_old_chat_with_fewer_messages_than_rows_is_still_never_reply_one(tmp_path, capsys):
+    """The saved chat was trimmed (or holds fewer replies than rows): the
+    count cannot say how many replies came before, but its first reply's row
+    is gone for certain, so its oldest row left is reply 2 at least."""
+    path = tmp_path / "home" / "ironjarvis.db"
+    path.parent.mkdir()
+    engine = open_db(str(path))
+    with session_scope(engine) as db:
+        _saved_chat(db, "chat_mid", days_ago=80, replies=1)
+        _row(db, thread="chat_mid", hours_ago=80 * 24, record=None, cache_read=0)
+        _saved_chat(db, "chat_old", days_ago=200, replies=1)
+        _row(db, thread="chat_old", hours_ago=5, record=_record(100, cache_input=6_000), cache_read=5_400, first_ms=3_000)
+        _row(db, thread="chat_old", hours_ago=4, record=_record(100, cache_input=6_000), cache_read=5_700, first_ms=2_000)
+        db.commit()
+    engine.dispose()
+    M.main(["--db", str(path), "--now", NOW_ARG, "--split", "2026-11-25T12:00:00"])
+    report = capsys.readouterr().out
+    report = report[report.index("Do replies start sooner"):]
+    table = [ln.split() for ln in report.splitlines() if len(ln.split()) > 1 and ln.split()[0].isdigit() and ln.split()[1].isdigit()]
+    assert [(row[0], row[1]) for row in table] == [("2", "1"), ("3", "1")], table
+    assert "second and later replies (2): reused 92.5%" in report
