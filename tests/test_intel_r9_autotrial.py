@@ -285,16 +285,45 @@ def test_the_sampler_reading_a_plain_server_is_what_answers_itself_reads(tmp_pat
 
 def test_a_trial_that_measured_nothing_is_tried_again_never_done(tmp_path):
     """Release 9 review: an asleep model server's trial lands nothing; it is
-    counted like a cut and tried again, never marked done for ever."""
+    counted like a cut and tried again, never marked done for ever. Re-check:
+    ONE failure per idle period (three 30 s ticks must not retire it), and a
+    model left for that is looked at again a day later."""
     tried: list = []
-    trials = _trials(tmp_path, PC(), ran=tried, measured=lambda p, m: False)
+    pc = PC()
+    now = {"t": 1_000_000.0}
+    trials = _trials(tmp_path, pc, ran=tried, measured=lambda p, m: False)
+    trials.clock = lambda: now["t"]
     trials.note_used("fleet-spark", "glm:30b")
+
+    def new_idle_period():
+        pc.idle = 10.0
+        assert step(trials) == T.NOT_IDLE  # the user came back...
+        pc.idle = 900.0  # ...and left again
+
     for n in range(1, T.MAX_CUTS):
         assert step(trials) == T.FAILED
         assert trials.state_of("fleet-spark", "glm:30b") == T.PENDING
+        assert step(trials) == T.NOTHING  # not again in the same idle period
+        assert step(trials) == T.NOTHING
+        new_idle_period()
     assert step(trials) == T.FAILED
     assert trials.state_of("fleet-spark", "glm:30b") == T.LEFT
     assert len(tried) == T.MAX_CUTS
+    now["t"] += T.RETRY_FAILED_AFTER_S - 60
+    assert step(trials) == T.NOTHING  # still left, a minute short of a day
+    now["t"] += 60
+    assert step(trials) == T.FAILED  # looked at again a day later
+    assert len(tried) == T.MAX_CUTS + 1
+
+
+def test_a_model_refused_for_its_routing_is_not_retried_by_the_day_rule(tmp_path):
+    now = {"t": 1_000_000.0}
+    trials = _trials(tmp_path, PC(), ran=[], refusal=lambda p, m: "its model server may pass it on to a cloud service")
+    trials.clock = lambda: now["t"]
+    trials.note_used("custom", "fleet")
+    assert step(trials) == T.REFUSED
+    now["t"] += 3 * T.RETRY_FAILED_AFTER_S
+    assert step(trials) == T.NOTHING
 
 
 def test_emergency_stop_mid_trial_is_not_a_cut(tmp_path):

@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +56,10 @@ TICK_S = 30.0
 WATCH_S = 1.0
 #: A trial cut short this many times is left for Measure.
 MAX_CUTS = 3
+#: Release 9 re-check: a model left because its trials measured nothing (an
+#: asleep server) is looked at again after this long, in seconds.
+RETRY_FAILED_AFTER_S = 24 * 3600.0
+_MEASURED_NOTHING = "measured nothing"
 
 #: What :meth:`AutoTrials.step` reports (for the loop's health row and tests).
 NOTHING = "nothing"
@@ -104,6 +109,8 @@ class _Entry:
     #: What the last verdict was decided on (``fingerprint``); when it
     #: changes, a model left alone is looked at again.
     seen: str = ""
+    #: When (``AutoTrials.clock``) it was left alone; 0 = not left.
+    left_at: float = 0.0
 
 
 @dataclass
@@ -132,10 +139,15 @@ class AutoTrials:
     #: at again, its count starting afresh.
     fingerprint: Callable[[str, str], str] = lambda provider, model: ""
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep
+    #: Wall-clock seconds (saved across restarts); a test injects its own.
+    clock: Callable[[], float] = time.time
     idle_after: float = IDLE_AFTER_S
     tick: float = TICK_S
     watch: float = WATCH_S
     _models: dict[str, _Entry] = field(default_factory=dict)
+    #: Release 9 re-check: models whose trial measured nothing in THIS idle
+    #: period; each counts one failure per period and waits for the next.
+    _failed_this_idle: set = field(default_factory=set)
     _dirty: bool = False
     _loaded: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -206,6 +218,9 @@ class AutoTrials:
                     cuts=cuts if isinstance(cuts, int) and not isinstance(cuts, bool) and cuts >= 0 else 0,
                     why=str(row.get("why") or "")[:200],
                     seen=str(row.get("seen") or "")[:500],
+                    left_at=float(row.get("left_at") or 0.0)
+                    if isinstance(row.get("left_at"), (int, float)) and not isinstance(row.get("left_at"), bool)
+                    else 0.0,
                 ))
             self._loaded = True
 
@@ -217,7 +232,7 @@ class AutoTrials:
             payload = {
                 "v": 1,
                 "models": {
-                    k: {"state": e.state, "cuts": e.cuts, "why": e.why, "seen": e.seen}
+                    k: {"state": e.state, "cuts": e.cuts, "why": e.why, "seen": e.seen, "left_at": e.left_at}
                     for k, e in self._models.items()
                 },
             }
@@ -244,6 +259,7 @@ class AutoTrials:
                 entry.cuts += 1
             if seen is not None:
                 entry.seen = seen
+            entry.left_at = float(self.clock()) if state == LEFT else 0.0
             self._dirty = True
             # A model that waits goes to the back of the line.
             key = self._key(provider, model)
@@ -283,7 +299,21 @@ class AutoTrials:
         """BLOCKING-cheap: a model LEFT alone, or waiting with cuts counted,
         whose address or proxy routing changed since its verdict is looked
         at again, its count afresh."""
+        try:
+            now_s = float(self.clock())
+        except Exception:  # noqa: BLE001
+            now_s = 0.0
         with self._lock:
+            for key, e in self._models.items():
+                # An asleep server's model, left after its trials measured
+                # nothing, is tried again a day later.
+                if (
+                    e.state == LEFT and e.why.startswith(_MEASURED_NOTHING) and e.left_at
+                    and now_s - e.left_at >= RETRY_FAILED_AFTER_S
+                ):
+                    e.state, e.cuts, e.why, e.left_at = PENDING, 0, "looked at again", 0.0
+                    self._failed_this_idle.discard(key)
+                    self._dirty = True
             rows = [(k, e.seen) for k, e in self._models.items()
                     if e.state == LEFT or (e.state == PENDING and e.cuts)]
         for key, seen in rows:
@@ -297,6 +327,8 @@ class AutoTrials:
                     entry = self._models.get(key)
                     if entry is not None:
                         entry.state, entry.cuts, entry.why, entry.seen = PENDING, 0, "looked at again", now
+                        entry.left_at = 0.0
+                        self._failed_this_idle.discard(key)
                         self._dirty = True
 
     def _fp(self, provider: str, model: str) -> str:
@@ -311,10 +343,13 @@ class AutoTrials:
         if not waiting:
             return NOTHING
         look = await asyncio.to_thread(self._read)
-        if look.stopped:
-            return STOPPED
         if not look.idle(self.idle_after):
-            return NOT_IDLE
+            # A new idle period will begin: each model may fail once in it.
+            self._failed_this_idle.clear()
+            return STOPPED if look.stopped else NOT_IDLE
+        waiting = [pm for pm in waiting if self._key(*pm) not in self._failed_this_idle]
+        if not waiting:
+            return NOTHING
         provider, model = waiting[0]
         if await asyncio.to_thread(self.measured, provider, model):
             self._set(provider, model, DONE, "measured already")
@@ -381,7 +416,10 @@ class AutoTrials:
         # Release 9 review: DONE only when a measurement really landed (an
         # asleep server, a battery that failed: tried again later).
         if not await asyncio.to_thread(self.measured, provider, model):
-            await self._count_against(provider, model, "measured nothing")
+            # One failure per idle period: an asleep server is not retired in
+            # the ninety seconds three ticks take.
+            self._failed_this_idle.add(self._key(provider, model))
+            await self._count_against(provider, model, _MEASURED_NOTHING)
             return FAILED
         self._set(provider, model, DONE, "tried")
         return RAN
