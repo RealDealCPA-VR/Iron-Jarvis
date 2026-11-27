@@ -117,7 +117,14 @@ async def test_a_session_still_starting_holds_its_place_and_is_never_stopped(app
         ta = asyncio.ensure_future(_say(c, a["id"], "ta"))
         await until(lambda: svc.live.get(a["id"]) and svc.live[a["id"]].starting)
         tb = asyncio.ensure_future(_say(c, b["id"], "tb"))
-        await asyncio.sleep(1.0)
+        # B reaches the pool only after its own message start (the checkpoint
+        # store of a folder that is no repository: git, about a second, more
+        # on a busy runner). A fixed sleep raced that, and A's reply once the
+        # gate opened; CI lost the race twice in a row. So wait for the pool's
+        # own answer (A cannot finish meanwhile: its start is held).
+        await until(lambda: svc.live.get(b["id"]) and svc.live[b["id"]].turn is not None and any(
+            e.get("type") == "notice" and e.get("text") == S.W.POOL_WAITING
+            for e in svc.live[b["id"]].turn.events), timeout=20)
         assert not tb.done(), "B started beside A in a pool of one"
         assert svc.live.get(b["id"]) is None or svc.live[b["id"]].proc is None
         gate.set()
