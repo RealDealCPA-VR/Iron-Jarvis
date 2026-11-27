@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.592.1
+
+**A weekly schedule runs on the day it names.** A schedule set for a day of the week now runs on that day.
+
 ## v1.592.0
 
 **A skill draft from the work you keep asking for.** When you ask Iron Jarvis in chat for the same kind of task on three different days within five weeks (say, turning a bank export into a summary sheet), the night review notices it and writes a skill draft from those chats.
@@ -77,7 +81,3 @@
 ## v1.577.0
 
 **Big extensions work the way you set them.** An extension with dozens of tools, such as an accounting app, now works through chat the whole way: Jarvis reaches the tool a job needs, asks you only where you want to be asked, and can run several of the extension's calls at once.
-
-## v1.576.0
-
-**Hand Jarvis a recording.** Drop a meeting recording, a call or a voice memo into a chat (an .m4a, .mp3, .wav, .ogg or another sound file, or a video, whose sound is used) and ask what you want to know, such as "what did we decide?".

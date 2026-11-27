@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.592.0 (2026-11-19).*
+holds itself to. Current as of v1.592.1 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,17 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## A weekly schedule runs on the day it names (v1.592.1)
+
+A schedule set for a day of the week now runs on that day. Before this
+fix, "Weekly Mon 9am" on the Schedules page ran on Tuesday at 9am, and
+every schedule that named weekdays ran one day late (a schedule for
+Monday to Friday ran Tuesday to Saturday). Schedules that run every day,
+every few hours or once were not affected.
+
+Nothing to do: your schedules keep their settings and now run on the
+days they show.
 
 ## A skill draft from the work you keep asking for (v1.592.0)
 
