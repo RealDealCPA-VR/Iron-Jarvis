@@ -46,6 +46,19 @@ def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+async def _delete_made(d, session_id: str) -> None:
+    """An error path deletes the session this request just made, ON the event
+    loop (older code, left as it is): its rows here, as before. What the
+    kept-results store holds for it (the intelligence plan, release 8) goes
+    off the loop, bounded: that store's lock is held by worker threads, and
+    the loop must never wait for one."""
+    from ...tools import kept_results as _kept
+
+    d.orchestrator.delete_session(session_id, drop_kept=False)
+    await asyncio.wait_for(
+        asyncio.to_thread(_kept.drop_owners, d.platform.engine, (session_id,)), _kept.IO_TIMEOUT_S)
+
+
 def _clear_interrupted(d, session_id: str) -> bool:
     """Drop the interrupted tag from one session (v1.249.0, R-02).
 
@@ -780,7 +793,7 @@ def register(app: FastAPI, d) -> None:
                         session.workspace_path = reuse
                     except Exception as exc:  # noqa: BLE001 — never run it blind
                         try:
-                            d.orchestrator.delete_session(session.id)
+                            await _delete_made(d, session.id)
                         except Exception:  # noqa: BLE001
                             pass
                         raise HTTPException(
@@ -791,7 +804,7 @@ def register(app: FastAPI, d) -> None:
                 await asyncio.to_thread(store.reset_failed, board_id)
             except Exception as exc:  # noqa: BLE001 — never leave a run with nothing to do
                 try:
-                    d.orchestrator.delete_session(session.id)
+                    await _delete_made(d, session.id)
                 except Exception:  # noqa: BLE001
                     pass
                 raise HTTPException(

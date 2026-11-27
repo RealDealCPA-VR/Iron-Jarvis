@@ -2874,6 +2874,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
             # (`finish_deferred_mcp` hands the result to a closer).
             if _mcp_task is not None and not _mcp_task.done():
                 _mcp_task.cancel()
+            # Release 8 of the intelligence plan: the removals that replies
+            # and rounds cut off above handed on (``tools/kept_results``) are
+            # waited for, bounded. Whatever a hard stop still leaves of a
+            # plain chat's, the next start-up removes.
+            try:
+                from ..tools import kept_results as _kept_results
+
+                await asyncio.wait_for(_kept_results.removals_done(), timeout=5.0)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             # Share my profile with Build (v1.306.0): no re-render after
             # shutdown, and a write already running finishes (off the loop,
             # bounded) — a daemon thread killed at exit could strand a temp
