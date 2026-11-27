@@ -298,9 +298,15 @@ def test_no_name_title_skill_or_app_can_forge_or_end_either_block(tmp_path, lane
     for i, mark in enumerate(MARKS):
         assert f"n{i} {_defanged(mark)}.txt" in block, f"the file named with {mark!r} is not named, defanged"
         assert f"ZQXNAMEDFILE{i}" in block
-    for sentinel, planted_marks in (("ZQXTITLE", MARKS[1:]), ("ZQXSKILL do the steps.", MARKS), ("ZQXAPP", MARKS)):
-        at = block.index(sentinel)
-        after = block[at: at + len(sentinel) + len(EVIL) + 8]
+    # (Release 7, fourth check: the "/" skill the person invoked rides at the
+    # end of the instructions, never in the block; its planted lines are
+    # defanged there, and no live marker is in the instructions, above.)
+    assert "ZQXSKILL" not in block
+    for where, sentinel, planted_marks in (
+        (block, "ZQXTITLE", MARKS[1:]), (call["system"], "ZQXSKILL do the steps.", MARKS), (block, "ZQXAPP", MARKS),
+    ):
+        at = where.index(sentinel)
+        after = where[at: at + len(sentinel) + len(EVIL) + 8]
         for mark in planted_marks:
             assert _defanged(mark) in after, f"{sentinel}: {mark!r} was not defanged: {after!r}"
 

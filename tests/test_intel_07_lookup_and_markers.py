@@ -987,3 +987,27 @@ def test_the_reply_says_when_what_was_found_was_left_out(tmp_path):
     again = chat_turn._overflow_refit(d, plain, "SYSTEM", "mock", "mock", head=3, record=noted, tools=[])(
         RuntimeError("this model's maximum context length is 4000 tokens"), plain, "SYSTEM")
     assert again is not None and chat_turn.refit_receipt(noted) == {"dropped": 2}, "history alone: no such key"
+
+
+@pytest.mark.parametrize("lane", LANES)
+def test_a_message_cut_anyway_keeps_the_block_whole(tmp_path, lane):
+    """The block gives way only so the person's words go WHOLE (or when it
+    cannot fit beside even the shortest cut). A message too long for the
+    model even alone is cut whatever the block does: leaving out what was
+    found would buy only more of a cut message, so the block rides whole, the
+    words are cut to the room it leaves (as before release 7, when the same
+    lines rode in the instructions), and the reply says nothing was left
+    out of the block."""
+    chat = Chat(tmp_path / "home", lane)
+    platform = chat.app.state.platform
+    platform.config.model_context_windows = {platform.config.default_provider: 8000}
+    chat.ledger.write_text("ZQXLEDGER a line of the ledger\n" * 20, encoding="utf-8")
+    pasted = "START-OF-PASTE " + ("row of a pasted table " * 3000) + "END-OF-PASTE"
+    call = chat.say(pasted, attachments=["ledger.txt"])
+    newest = call["messages"][-1][1]
+    words = P.own_words(newest)
+    assert pasted.startswith(words) and "END-OF-PASTE" not in words and len(words) > 2000, len(words)
+    block = newest[len(words):]
+    assert block.startswith("\n\n" + P.ONCE_TOP) and "ZQXLEDGER" in block and P.FOUND_LEFT_OUT not in block
+    assert block.rstrip().endswith(P.ONCE_BOTTOM) and DATE_LINE in block
+    assert "found_left_out" not in chat.replies[-1].text

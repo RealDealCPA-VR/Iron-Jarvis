@@ -234,19 +234,27 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
         + "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
         + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"
         + "\n---\n" + _prefix.FOUND_BOTTOM
-        + "\n\n# Skill invoked by the user: prep-skill\n"
-        "FOLLOW this playbook for this request.\n" + "SKILL-1"
     )
     assert expected in placed, f"{lane}: prep sections out of order or joined differently:\n{placed!r}"
     assert placed.startswith(_prefix.ONCE_TOP + "\n" + _prefix.ONCE_HEAD + "\n")
     assert placed.endswith("\n" + _prefix.ONCE_BOTTOM)
-    assert all(placed.count(m) == 1 for m in ("ATT-1", "PAGE-1", "RES-1", "REFS-1", "SKILL-1"))
-    assert not any(mark in system for mark in ("ATT-1", "PAGE-1", "RES-1", "REFS-1", "SKILL-1"))
+    assert all(placed.count(m) == 1 for m in ("ATT-1", "PAGE-1", "RES-1", "REFS-1"))
+    assert not any(mark in system for mark in ("ATT-1", "PAGE-1", "RES-1", "REFS-1"))
+    # Release 7, fourth check: the "/" skill the person invoked is their own
+    # request, never shed with the block: it rides at the END of the
+    # instructions (where the whole tail rode before release 7), just before
+    # the app's one note about the block.
+    skill = "\n\n# Skill invoked by the user: prep-skill\nFOLLOW this playbook for this request.\nSKILL-1"
+    at = system.index(skill)
+    between = system[at + len(skill): system.index("\n\n" + _prefix.BLOCK_NOTE)]
+    assert between.strip() == "ARGUMENTS: what is in the ledger?", (
+        f"{lane}: the skill is not the last section of the instructions: {between!r}")
+    assert system.count("SKILL-1") == 1 and "SKILL-1" not in placed
     ws_block = chat_turn._workspace_grounding_block(str(ws), (ws, False))
     assert ws_block and ws_block in system
     # v1.420.0 (C3.7, moved on purpose): the bound folder's block is part of
     # the STABLE head. Release 7: it is in the system prompt (checked just
-    # above, ``system`` being cut to it), and the attachments … skill
+    # above, ``system`` being cut to it), and the attachments … refs
     # sections are not: they ride beside the message.
 
 

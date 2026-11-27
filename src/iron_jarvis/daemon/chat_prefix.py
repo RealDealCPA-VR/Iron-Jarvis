@@ -548,6 +548,13 @@ class StableTurn:
             raise RuntimeError("no user message to place the block beside")
         t = P.as_tail(tail)
         once = P.once_block(t + P.last(self._last_sections()), lead=today_line())
+        # What the person asked for in so many words (an invoked "/" skill's
+        # playbook) rides at the end of the instructions, where it rode before
+        # this release: it never gives way with the block. Neutralised of the
+        # block's marker lines, like everything that is not the one block.
+        held = t.of(P.HELD)
+        if held:
+            system += P.neutral(held)
         riders = [""] * len(items)
         riders[newest] = once
         # ONE fixed sentence: only the block at the end of the newest message

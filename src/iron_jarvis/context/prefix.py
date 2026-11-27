@@ -61,9 +61,15 @@ FOUND = "found"
 #: Iron Jarvis's OWN words for this message (the date, the memory rules, the
 #: apps the message names): they stand before the fence.
 OWN = "own"
-#: Iron Jarvis's own words that must be read LAST (the "/" skill's playbook,
-#: the message's own directive): they stand after the fence.
+#: Iron Jarvis's own words that must be read LAST (the message's own
+#: directives): they stand after the fence.
 LAST = "last"
+#: What the PERSON asked for in so many words for this message (the playbook
+#: of the "/" skill they invoked): it is their own request, not something the
+#: app added, so it is never in the block and never gives way with it. It
+#: rides at the END OF THE INSTRUCTIONS, where the whole tail rode before
+#: release 7 (``chat_prefix.StableTurn._place``); priced with the tail.
+HELD = "held"
 
 # THE BLOCK'S WORDS, in one place. The system prompt says "You are Iron
 # Jarvis", so the block speaks of "the app", never of Iron Jarvis in the
@@ -180,7 +186,8 @@ class Tail(str):
     ``text + tail`` is a plain string (the lanes price ``system + tail``).
 
     A section of any other kind is part of the string (so it is priced) and
-    :func:`once_block` leaves it out; nothing uses one today.
+    :func:`once_block` leaves it out: :data:`HELD` (an invoked skill's
+    playbook) is one, placed at the end of the instructions instead.
     """
 
     segments: "tuple[tuple[str, str], ...]"
@@ -228,6 +235,12 @@ def own(text: Any) -> Tail:
 def last(text: Any) -> Tail:
     """*text* as Iron Jarvis's own words that are read last (after the fence)."""
     return Tail(text, LAST)
+
+
+def held(text: Any) -> Tail:
+    """*text* as the person's own request for this message (:data:`HELD`):
+    at the end of the instructions, never in the block beside the message."""
+    return Tail(text, HELD)
 
 
 def found(text: Any) -> Tail:
@@ -401,6 +414,6 @@ def shared_prefix(a: str, b: str) -> int:
 
 __all__ = [
     "BLOCK_NOTE", "FOUND", "FOUND_BOTTOM", "FOUND_HEAD", "FOUND_TOP", "LAST", "ONCE_BOTTOM", "ONCE_HEAD",
-    "ONCE_TOP", "OWN", "Tail", "as_tail", "found", "neutral", "without_found",
+    "HELD", "ONCE_TOP", "OWN", "Tail", "as_tail", "found", "held", "neutral", "without_found",
     "keep_auto", "last", "once_block", "order_names", "order_specs", "own", "own_words", "shared_prefix", "spec_name",
 ]

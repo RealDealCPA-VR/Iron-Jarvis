@@ -4463,7 +4463,7 @@ async def chat_stream(
     # ``daemon/chat_prefix``): what this chat keeps between replies, read
     # once here. Inactive for a coding session (every call below then hands
     # back what it was given). MIRROR NOTE (lock-step): chat_turn.run_chat_turn.
-    from ...context.prefix import last as _tail_last
+    from ...context.prefix import held as _tail_held
     from ...context.prefix import own as _tail_own
     from ..chat_prefix import begin as _stable_begin
 
@@ -4965,7 +4965,9 @@ async def chat_stream(
             "FOLLOW this playbook for this request.\n"
             + _playbook
         )
-        _query_tail += _tail_last(_skill_text)  # release 7: read last (lock-step)
+        # Release 7, fourth check: the person's own request, never shed with
+        # the block: it rides at the end of the instructions (lock-step).
+        _query_tail += _tail_held(_skill_text)
         _ctx_pieces.setdefault("skills", []).append(_skill_text)
 
     # CAPABILITY ROSTER (v1.139.0) + SAVED WORKFLOWS (v1.170.0), computed in
