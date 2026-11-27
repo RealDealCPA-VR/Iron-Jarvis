@@ -435,7 +435,7 @@ _SEAMS = (
     "harness_check_gate(_trust_state)", "_harness.model_text(tc,",
     "name=(_harness.called_as(tc) if _harness is not None else tc.name)",
     '**({"harness": _harness.route_info()} if _harness is not None else {})',
-    "if _harness is None: system += _tools_block",
+    "if _harness is None: system += _stable.when_sent(_tools_text)",
     "workflow_draft = _draft_from_calls(calls, armed) if _harness is None else None",
     ") if _harness is None else None",
     "if not text_only_pick and _harness is None:",

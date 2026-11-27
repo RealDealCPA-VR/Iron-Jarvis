@@ -137,7 +137,12 @@ def test_the_row_saves_the_size_of_each_part_and_where_the_tools_came_from(tmp_p
     # ...and they are sizes of what the model was really sent: the instructions
     # part is never larger than the whole prompt the stand-in received.
     assert len(seen) == 1
-    assert parts["system"] <= B.estimate_tokens(seen[0]["system"])
+    # (Release 7: the app's own text for a message, the roster and the Tools
+    # section among it, rides beside the newest message; the instructions
+    # part counts it there too, so it is measured against both.)
+    from tests._fakes.sent import beside
+
+    assert parts["system"] <= B.estimate_tokens(seen[0]["system"]) + B.estimate_tokens(beside(seen[0]["messages"]))
     assert record["used"] == sum(parts.values())
     assert record["window"] > 0 and 0 <= record["percent"] <= 100
     # A part that held nothing is ABSENT (never a made-up 0).

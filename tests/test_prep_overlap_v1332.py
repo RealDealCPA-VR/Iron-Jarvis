@@ -208,23 +208,54 @@ def test_the_system_prompt_is_byte_identical_to_the_serial_order(tmp_path, monke
     """The steps FINISHED in reverse order, yet each section sits where the
     serial turn put it, with the same joins."""
     _probe, system, ws = _turn(tmp_path, monkeypatch, lane)
+    # Release 7 (moved on purpose): these sections ride beside the newest
+    # message, each in its FIXED place whatever order the steps finished in:
+    # the sections that carry their own fence (the page, the pointed-to
+    # chats), then what was found inside the one fence (the attachment, the
+    # apps' resources), then the skill, last.
+    # (``system`` here is the system prompt and then what rides beside the
+    # message: the shared scripted router reads both, ``tests/_fakes/sent``.)
+    from iron_jarvis.context import prefix as _prefix
+
+    beside_at = system.index(_prefix.ONCE_TOP)
+    placed, system = system[beside_at:], system[:beside_at]
+    # ONE exact, contiguous string, as before this release: every join of
+    # the block as it is laid out now, built from the block's own constants.
+    # (The roster, a standing note, stands between the two fenced sections
+    # and what was found: its lines are the only thing between the two
+    # exact strings below.)
+    roster = placed[placed.index("# Who can take this work"): placed.index("\n\n" + _prefix.FOUND_TOP)]
+    assert all(line.startswith("- ") for line in roster.splitlines()[1:]) and len(roster.splitlines()) > 3
     expected = (
-        "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
-        + "\n\nPAGE-1"
-        + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"
+        "\n\nPAGE-1"
         + "\n\nREFS-1"
-        + "\n\n# Skill invoked by the user: prep-skill\n"
-        "FOLLOW this playbook for this request.\n" + "SKILL-1"
+        + "\n\n" + roster
+        + "\n\n" + _prefix.FOUND_TOP + "\n" + _prefix.FOUND_HEAD + "\n---\n"
+        + "\n\n# Attachments (provided by the user this turn)" + "\n\nATT-1"
+        + "\n\n# Resources from the user's apps (attached this turn)" + "\n\nRES-1"
+        + "\n---\n" + _prefix.FOUND_BOTTOM
     )
-    assert expected in system, f"{lane}: prep sections out of order:\n{system[-900:]!r}"
+    assert expected in placed, f"{lane}: prep sections out of order or joined differently:\n{placed!r}"
+    assert placed.startswith(_prefix.ONCE_TOP + "\n" + _prefix.ONCE_HEAD + "\n")
+    assert placed.endswith("\n" + _prefix.ONCE_BOTTOM)
+    assert all(placed.count(m) == 1 for m in ("ATT-1", "PAGE-1", "RES-1", "REFS-1"))
+    assert not any(mark in system for mark in ("ATT-1", "PAGE-1", "RES-1", "REFS-1"))
+    # Release 7, fourth check: the "/" skill the person invoked is their own
+    # request, never shed with the block: it rides at the END of the
+    # instructions (where the whole tail rode before release 7), just before
+    # the app's one note about the block.
+    skill = "\n\n# Skill invoked by the user: prep-skill\nFOLLOW this playbook for this request.\nSKILL-1"
+    at = system.index(skill)
+    between = system[at + len(skill): system.index("\n\n" + _prefix.BLOCK_NOTE)]
+    assert between.strip() == "ARGUMENTS: what is in the ledger?", (
+        f"{lane}: the skill is not the last section of the instructions: {between!r}")
+    assert system.count("SKILL-1") == 1 and "SKILL-1" not in placed
     ws_block = chat_turn._workspace_grounding_block(str(ws), (ws, False))
     assert ws_block and ws_block in system
     # v1.420.0 (C3.7, moved on purpose): the bound folder's block is part of
-    # the STABLE head; the attachments … skill sections are query-dependent
-    # and now come LAST (before: the folder followed the skill).
-    assert system.index(ws_block) < system.index(expected), (
-        "the bound folder's block must stay in the stable head, before the query tail"
-    )
+    # the STABLE head. Release 7: it is in the system prompt (checked just
+    # above, ``system`` being cut to it), and the attachments … refs
+    # sections are not: they ride beside the message.
 
 
 def test_both_lanes_send_the_same_prompt(tmp_path, monkeypatch):

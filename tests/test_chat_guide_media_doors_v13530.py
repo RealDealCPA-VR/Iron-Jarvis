@@ -58,6 +58,7 @@ from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.autoselect import select_auto_tools
 from iron_jarvis.tools.base import Tool, ToolContext, ToolResult
+from tests._fakes.sent import with_beside
 
 #: THE CONTRACT FIXTURE: the ``doors`` the REAL daemon put on the done frame
 #: for the two acceptance turns, read by
@@ -134,7 +135,7 @@ class _StreamModel:
 
     async def __call__(self, *args: Any, **kw: Any):
         self.tools.append([t.get("name") for t in kw.get("tools") or []])
-        self.systems.append(str(kw.get("system") or ""))
+        self.systems.append(with_beside(kw.get("system") or "", kw.get("messages")))
         self.messages.append(list(kw.get("messages") or []))
         i = self.n
         self.n += 1
@@ -159,7 +160,7 @@ class _PostModel:
 
     async def complete(self, **kw: Any) -> RouteResult:
         self.tools.append([t.get("name") for t in kw.get("tools") or []])
-        self.systems.append(str(kw.get("system") or ""))
+        self.systems.append(with_beside(kw.get("system") or "", kw.get("messages")))
         i = self.n
         self.n += 1
         calls = self.rounds[i] if i < len(self.rounds) else []

@@ -42,6 +42,7 @@ from iron_jarvis.harness import sessions as S
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.tools.base import ToolContext
 
+from ._fakes.sent import own_words
 from .test_approvals_office_v1247 import _asgi_post, _drive_stream
 from .test_browser_actions_v1237 import ActRuntime, FakeApprovals, _form_page, _peer
 from .test_risk_door_resumes_v1449 import (  # noqa: F401 — fixtures by name
@@ -60,7 +61,9 @@ def _streams_by_question():
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools,
                           session_id=None, task_class=None, **kw):
-        key = next((str(m.content) for m in messages if getattr(m, "role", "") == "user"), "")
+        # The question as the person typed it (release 7: what Iron Jarvis
+        # found for the message rides beside it, after their own words).
+        key = next((own_words(m.content) for m in messages if getattr(m, "role", "") == "user"), "")
         i = rounds.get(key, 0)
         rounds[key] = i + 1
         if i == 0:

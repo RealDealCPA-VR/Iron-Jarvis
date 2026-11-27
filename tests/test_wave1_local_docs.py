@@ -24,6 +24,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.documents.attachment_rag import chunk_text, rag_block, retrieve
 from iron_jarvis.documents.tools import document_tools
 from iron_jarvis.tools.base import ToolContext
+from tests._fakes.sent import with_beside
 
 
 def _ctx(ws: Path) -> ToolContext:
@@ -201,7 +202,7 @@ def test_chat_large_attachment_uses_retrieval_not_headclip(tmp_path, monkeypatch
         rc = a.complete
 
         async def c(*, system, messages, tools):
-            captured["system"] = system
+            captured["system"] = with_beside(system, messages)
             return await rc(system=system, messages=messages, tools=tools)
 
         a.complete = c

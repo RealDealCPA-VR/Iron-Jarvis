@@ -49,6 +49,7 @@ from iron_jarvis.daemon import chat_turn
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 
 from tests._fakes.panel_harness import Gate, RealApp  # noqa: F401 — Gate kept for parity
+from tests._fakes.sent import with_beside
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ADDON = _ROOT / "extensions" / "chrome" / "src" / "sidepanel"
@@ -256,7 +257,8 @@ def test_the_agent_brief_rides_only_with_acting_tools(tmp_path, monkeypatch):
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the panel turn never finished")
-        system = str(seen[0].get("system") or "")
+        # (Release 7: a tool's own brief rides beside the newest message.)
+        system = with_beside(seen[0].get("system"), seen[0].get("messages"))
         assert "Work the task step by step" in system
         assert chat_turn.BROWSER_LOOK_ONLY_LINE not in system
     with RealApp(tmp_path / "ro", monkeypatch, access="read_only") as app:
@@ -264,7 +266,8 @@ def test_the_agent_brief_rides_only_with_acting_tools(tmp_path, monkeypatch):
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the panel turn never finished")
-        system = str(seen[0].get("system") or "")
+        # (Release 7: a tool's own brief rides beside the newest message.)
+        system = with_beside(seen[0].get("system"), seen[0].get("messages"))
         assert chat_turn.BROWSER_LOOK_ONLY_LINE in system
         assert "Work the task step by step" not in system, "a brief that says 'you can click' beside no click tool"
 

@@ -16,6 +16,7 @@ from iron_jarvis.daemon.routes.chat import _MAX_TOOL_ROUNDS
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.base import ToolResult
+from tests._fakes.sent import with_beside
 
 
 def _client(tmp_path):
@@ -220,7 +221,7 @@ def test_attachment_oversize_uses_honest_retrieval(tmp_path, monkeypatch):
 
     async def fake_complete(*, provider=None, model=None, system, messages,
                             tools, task_class):
-        captured["system"] = system
+        captured["system"] = with_beside(system, messages)
         return RouteResult(LLMResponse(text="read it"), "mock", "mock")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)

@@ -121,6 +121,13 @@ def _normalise(value: Any, subs: list[tuple[str, str]]) -> Any:
 
 
 async def _capture(tmp_path: Path, monkeypatch, **harness_kw) -> dict[str, Any]:
+    # Release 7: a plain chat reply carries today's date beside its newest
+    # message; the golden is captured on a fixed day (an injected clock).
+    from datetime import datetime
+
+    from iron_jarvis.core import today as _today
+
+    monkeypatch.setattr(_today, "now", lambda: datetime(2026, 11, 27, 9, 0))
     platform = build_platform(str(tmp_path / "home"))
     ws = tmp_path / "ws"
     ws.mkdir(exist_ok=True)

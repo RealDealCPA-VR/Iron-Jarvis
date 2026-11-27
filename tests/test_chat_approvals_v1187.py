@@ -51,6 +51,7 @@ from iron_jarvis.tools.autoselect import (
     AUTO_SAFE_TOOLS,
     select_ask_tools,
 )
+from tests._fakes.sent import with_beside
 
 #: A message whose signals arm `shell` at the ask tier (run + command).
 _ASK_MSG = "run the command `echo approved-run` in the terminal for me"
@@ -62,7 +63,7 @@ def _shell_call_stream(command: str = "python -c \"print('approved-run')\""):
 
     async def fake_stream(*, provider=None, model=None, system, messages,
                           tools, session_id=None, task_class=None):
-        fake_stream.systems.append(system)
+        fake_stream.systems.append(with_beside(system, messages))
         fake_stream.tools.append([
             (t.get("name") if isinstance(t, dict) else getattr(t, "name", ""))
             for t in (tools or [])
@@ -368,7 +369,7 @@ def test_the_headless_lane_neither_arms_nor_asks(tmp_path, monkeypatch):
 
     async def fake_complete(*, provider=None, model=None, system, messages,
                             tools, task_class):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         seen["tools"] = [
             (t.get("name") if isinstance(t, dict) else getattr(t, "name", ""))
             for t in (tools or [])

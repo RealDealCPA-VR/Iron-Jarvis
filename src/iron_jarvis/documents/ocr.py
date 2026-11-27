@@ -278,6 +278,12 @@ _CACHE_LOCK = threading.Lock()
 #: in one lane and disclose itself in the other. ``attachment_rag`` parses for
 #: this exact phrase to charge a hit nothing.
 CACHED_NOTE_SUFFIX = " [cached — already transcribed earlier]"
+#: What a file reader that is armed ONLY because it stayed for the chat says
+#: for a scan nobody has read yet (the intelligence plan, release 7).
+STAYED_NO_OCR = (
+    "scanned pages were NOT read in this reply: only the text the file already has is returned "
+    "(to have the scan read, the user can name this file, or ask to read it, in a message)"
+)
 
 
 def cache_dir(home: "str | Path") -> Path:
@@ -1023,6 +1029,7 @@ async def ocr_document(
     max_pages: "int | None" = None,
     home: "str | Path | None" = None,
     vision: bool = True,
+    cached_only: bool = False,
 ) -> "tuple[str, str]":
     """Transcribe a scanned PDF or image, THROUGH THE CACHE (contract 5).
 
@@ -1057,6 +1064,13 @@ async def ocr_document(
         if cached is not None:
             note = str(cached.get("note") or f"scanned document — {OCR_MARK}")
             return cached["text"], f"{note}{CACHED_NOTE_SUFFIX}"
+    if cached_only:
+        # The intelligence plan, release 7: the caller may start NO new
+        # reading (no child process, no model call). A reading already made
+        # of this exact file was served just above (and by ``extract_text``
+        # before this was reached); otherwise the caller is told, in one
+        # sentence, that the scanned pages were not read.
+        return "", STAYED_NO_OCR
     if is_image(p):
         if not vision:
             return "", ""
@@ -1086,6 +1100,7 @@ async def ocr_if_unreadable(
     router_resolver: Any,
     *,
     config: Any = None,
+    cached_only: bool = False,
 ) -> "tuple[str, str]":
     """THE shared reach point: ``(text, note)`` for any document path.
 
@@ -1114,7 +1129,7 @@ async def ocr_if_unreadable(
         return extracted_text, ""
     try:
         router = router_resolver() if callable(router_resolver) else router_resolver
-        text, note = await ocr_document(p, router, config=config)
+        text, note = await ocr_document(p, router, config=config, cached_only=cached_only)
     except Exception as exc:  # noqa: BLE001 — OCR failure ≠ read failure
         return extracted_text, (
             f"scanned document — OCR fallback failed ({type(exc).__name__}: {exc})"

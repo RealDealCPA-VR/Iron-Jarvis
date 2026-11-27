@@ -24,6 +24,7 @@ from iron_jarvis.browser.panel import describe_browser_call
 from iron_jarvis.core.turns import TURNS
 from iron_jarvis.daemon import chat_turn
 from tests._fakes.panel_harness import RealApp
+from tests._fakes.sent import beside, with_beside
 from tests.test_browser_agent_v1262 import _NEUTRAL
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,12 +134,18 @@ def test_a_panel_turn_is_not_told_about_a_new_tab_tool_it_cannot_call(tmp_path, 
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text=_NEUTRAL)
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
-        system = str(seen[0].get("system") or "")
+        # Release 7: the brief rides beside the newest message. A promise
+        # that the model is NOT told about a tool it cannot call is checked on
+        # the WHOLE of what it was sent: the system text and that block.
+        system = with_beside(seen[0].get("system"), seen[0].get("messages"))
         offered = {str(t.get("name") or "") for t in (seen[0].get("tools") or [])}
         assert "browser_create_tab" not in offered
         roster = system[system.index("You can act in this browser yourself:"): system.index("are yours to call")]
         assert "browser_create_tab" not in roster, roster
         assert "browser_navigate" in roster and "browser_click" in roster
+        assert "You can act in this browser yourself:" not in str(seen[0].get("system") or "")
+        tools_line = system[system.index("\n# Tools\n"):].split("\n")[2]
+        assert "browser_create_tab" not in tools_line, tools_line
 
 
 def test_a_panel_turn_that_asks_for_a_new_tab_is_told_it_has_one(tmp_path, monkeypatch):
@@ -147,16 +154,18 @@ def test_a_panel_turn_that_asks_for_a_new_tab_is_told_it_has_one(tmp_path, monke
         seen = app.records_the_offer()
         app.panel.send(P.PANEL_ACTION_SEND, text="open a new tab and book the first available slot")
         app.panel.wait_for(P.PANEL_EVENT_DONE, "the turn never finished")
-        system = str(seen[0].get("system") or "")
+        system = with_beside(seen[0].get("system"), seen[0].get("messages"))
         roster = system[system.index("You can act in this browser yourself:"): system.index("are yours to call")]
         assert "browser_create_tab" in roster, roster
+        assert "browser_create_tab" in beside(seen[0].get("messages")), "it rides beside the message it was armed for"
 
 
 def test_both_seams_render_the_roster():
     turn = _src(ROOT / "src" / "iron_jarvis" / "daemon" / "chat_turn.py")
     lane = _src(ROOT / "src" / "iron_jarvis" / "daemon" / "routes" / "chat.py")
-    assert 'system += "\\n\\n" + browser_agent_block(armed)' in turn
-    assert 'system += "\\n\\n" + browser_agent_block({*armed, *ask_armed})' in lane
+    # (Release 7: through ``later``, so it rides beside the newest message.)
+    assert 'system += _stable.later("\\n\\n" + browser_agent_block(armed))' in turn
+    assert 'system += _stable.later("\\n\\n" + browser_agent_block({*armed, *ask_armed}))' in lane
     assert '"\\n\\n" + BROWSER_AGENT_BLOCK' not in turn and '"\\n\\n" + BROWSER_AGENT_BLOCK' not in lane
 
 

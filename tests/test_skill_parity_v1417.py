@@ -45,6 +45,7 @@ from iron_jarvis.skills import native
 from iron_jarvis.skills.framework import SkillRegistry
 from iron_jarvis.skills.loader import load_skill
 from iron_jarvis.tools.base import ToolContext
+from tests._fakes.sent import with_beside
 
 ORG = "11111111-2222-3333-4444-555555555555"
 ACCT = "66666666-7777-8888-9999-aaaaaaaaaaaa"
@@ -301,7 +302,7 @@ async def test_a_coding_sessions_model_is_shown_the_skills_and_where_a_loaded_on
     model = wire(platform, monkeypatch, [[call("Skill", "c1", skill="argy", args="go")]])
     out = await stream(platform, body(ws), harness="claude")
     assert out["done"] is not None, out["errors"]
-    system = model.calls[0]["system"]
+    system = with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     assert "The following skills are available for use with the Skill tool:" in system
     assert "- argy: argy does a thing" in system and "- folder-skill: folder-skill does a thing" in system
     assert "useronly" not in system
@@ -334,7 +335,7 @@ async def test_a_slash_skill_carries_its_base_directory_and_arguments_whole_in_b
         else:
             async for _ in await stream_chat_turn(platform, BUILTIN_PERSONAS, b):
                 pass
-        systems.append(model.calls[0]["system"])
+        systems.append(with_beside(model.calls[0]["system"], model.calls[0]["messages"]))
     for system in systems:
         assert f"# Skill invoked by the user: big\nFOLLOW this playbook for this request.\n" \
                f"Base directory for this skill: {big.absolute()}\n\nHEAD " in system
@@ -344,11 +345,11 @@ async def test_a_slash_skill_carries_its_base_directory_and_arguments_whole_in_b
     model = wire(platform, monkeypatch, ["ok"])
     await run_chat_turn(platform, BUILTIN_PERSONAS, ChatBody(
         messages=[ChatMessageBody(role="user", content="gamma delta")], skill="big"))
-    assert "TAIL-MARK-1417 gamma delta" in model.calls[0]["system"]
+    assert "TAIL-MARK-1417 gamma delta" in with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     model = wire(platform, monkeypatch, ["ok"])
     await run_chat_turn(platform, BUILTIN_PERSONAS, ChatBody(
         messages=[ChatMessageBody(role="user", content="Follow the big skill.")], skill="big"))
-    alone = model.calls[0]["system"]
+    alone = with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     assert "TAIL-MARK-1417" in alone and "TAIL-MARK-1417 Follow" not in alone
 
 
@@ -411,12 +412,12 @@ async def test_a_coding_session_runs_its_folders_own_skill_by_name_with_the_type
     assert status == 200 and frames_of(raw)[-1][0] == "done", raw
     where = str(sk.absolute())
     assert (f"Base directory for this skill: {where}\n\nNOTES FOR [staging eu] in "
-            f"{where.replace(chr(92), '/')}") in script.calls[0]["system"]
+            f"{where.replace(chr(92), '/')}") in with_beside(script.calls[0]["system"], script.calls[0]["messages"])
     # Picked alone: no arguments (never the "Follow the … skill." line).
     script = wire(app, Script(["Done."]))
     status, raw = await open_turn(app, sid, {"text": "", "turn_id": "bt-p2", "skill": "deploy-notes"})
     assert status == 200, raw
-    assert "NOTES FOR [] in " in script.calls[0]["system"]
+    assert "NOTES FOR [] in " in with_beside(script.calls[0]["system"], script.calls[0]["messages"])
     # An unknown name is still refused before any model call.
     status, raw = await open_turn(app, sid, {"text": "x", "turn_id": "bt-p3", "skill": "nope-1417"})
     assert status == 404 and "no such skill" in raw

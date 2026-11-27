@@ -15,6 +15,14 @@ from ..tools.base import Tool, ToolContext, ToolResult
 from .service import BadSearchPattern, FileSearchService, SearchNotes
 
 
+#: What ``file_search`` says when it was asked for a search by meaning while
+#: it was armed only because it stayed for the chat (release 7).
+STAYED_BY_WORDS = (
+    "[Searched by the words of the query, not by meaning, in this reply (to have a search by "
+    "meaning, the user can ask for one in a message).]"
+)
+
+
 class FileSearchTool(Tool):
     """Search configured roots by name (glob/substring), content (regex), or semantics."""
 
@@ -48,6 +56,18 @@ class FileSearchTool(Tool):
         mode = args.get("mode", "content")
         limit = int(args.get("limit", 50))
         root = args.get("root")
+        query = args["query"]
+        # The intelligence plan, release 7: a search BY MEANING asks a model
+        # (one call for the query, and one a file chunk while the index is
+        # built). Armed on a chat reply ONLY because it stayed
+        # (``ctx.stayed_only``), the tool does no such new work: it searches
+        # by the words of the query, and says so in one sentence.
+        by_words = False
+        if mode == "semantic" and self.name in (getattr(ctx, "stayed_only", None) or ()):
+            import re
+
+            words = [re.escape(w) for w in re.findall(r"\w{3,}", str(query or ""))][:8]
+            mode, query, by_words = "content", "|".join(words) or re.escape(str(query or "")), True
         # A caller-supplied root must satisfy the same FS policy as the HTTP
         # endpoints: never a protected secrets/key dir, and inside the allowlist
         # when one is configured. Otherwise an agent could search arbitrary roots.
@@ -70,7 +90,7 @@ class FileSearchTool(Tool):
 
             results = await asyncio.to_thread(
                 self.service.search,
-                args["query"],
+                query,
                 mode=mode,
                 limit=limit,
                 roots=roots,
@@ -111,6 +131,8 @@ class FileSearchTool(Tool):
         skipped = notes.note()
         if skipped:
             out = f"{out}\n\n{skipped}" if out else skipped
+        if by_words:
+            out = (f"{out}\n\n" if out else "") + STAYED_BY_WORDS
         # Next leaps 16-a: the FIRST time a by-meaning search matched words in
         # a reply that can draw the card (``ctx.chat_page``: the stream lane,
         # for the dashboard's chat page only), the offer is shown under this

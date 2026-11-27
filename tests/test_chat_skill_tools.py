@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.sent import with_beside
 
 
 def _app(tmp_path):
@@ -27,7 +28,9 @@ def test_slash_skill_injected(tmp_path, monkeypatch):
         rc = a.complete
 
         async def c(*, system, messages, tools):
-            captured["system"] = system
+            # Release 7: the "/" skill's playbook rides beside the newest
+            # message (what the model is sent for this message).
+            captured["system"] = with_beside(system, messages)
             captured["tools"] = tools
             return await rc(system=system, messages=messages, tools=tools)
 
@@ -55,7 +58,7 @@ def test_armed_tools_reach_model_and_unknown_skipped(tmp_path, monkeypatch):
 
         async def c(*, system, messages, tools):
             captured["tools"] = tools
-            captured["system"] = system
+            captured["system"] = with_beside(system, messages)
             return await rc(system=system, messages=messages, tools=tools)
 
         a.complete = c

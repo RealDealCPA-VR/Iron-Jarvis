@@ -37,6 +37,7 @@ from iron_jarvis.core.models import ToolInvocation
 from iron_jarvis.mcp.tools import unload_pack_tools
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import beside, with_beside
 from tests.test_phone_apps_honest_v1387 import (
     FIXTURE,
     NOTE,
@@ -75,7 +76,10 @@ def _script(p, monkeypatch, *, escalate: bool):
         names = _tool_names(tools)
         if "escalate_to_agent" in names:  # the phone's quick reply (POST lane)
             seen["phone_tools"] = names
-            seen["phone_system"] = system
+            # Release 7: the named-apps section rides beside the newest
+            # message; the phone's model is sent both.
+            seen["phone_system"] = with_beside(system, messages)
+            seen["phone_beside"] = beside(messages)
             if escalate:
                 return RouteResult(LLMResponse(text="", tool_calls=[ToolCall(
                     id="e1", name="escalate_to_agent", arguments={"reason": "needs GitHub", "agent": "builder"},
@@ -126,6 +130,7 @@ async def test_the_phones_model_is_told_an_agent_can_use_the_app(tmp_path, monke
         await app.state.inbound_poller.poll_once()
         section = _section(seen["phone_system"])
         assert PHONE_LINE in section, section
+        assert PHONE_LINE in seen["phone_beside"], "the section reaches the phone's model beside its message"
         assert "escalate_to_agent" in section and "before each use of GitHub" in section, section
         # Its quick reply still holds none of GitHub's tools (nothing is
         # granted from the phone without a person).

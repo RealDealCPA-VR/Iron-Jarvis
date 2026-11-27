@@ -129,7 +129,7 @@ def _patch_complete(client, monkeypatch, route_result, seen=None):
     async def fake_complete(*, provider=None, model=None, system, messages, tools,
                             task_class):
         if seen is not None:
-            seen["system"] = system
+            seen["system"] = with_beside(system, messages)
             seen["tools"] = tools
         return route_result
 
@@ -590,6 +590,7 @@ from iron_jarvis.agents.orchestrator import Orchestrator  # noqa: E402
 from iron_jarvis.comm import InboundMessage, MockChannel, Notifier  # noqa: E402
 from iron_jarvis.comm.inbound import InboundPoller  # noqa: E402
 from iron_jarvis.comm.threads import CommThreadStore  # noqa: E402
+from tests._fakes.sent import with_beside
 
 
 class _ChatMockChannel(MockChannel):

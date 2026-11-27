@@ -111,8 +111,14 @@ def defang_fence_markers(text: str | None) -> str:
     The marker's opening ``[`` becomes ``(``, so it still READS as what the
     author wrote (nothing is hidden from the model) while it stops being a
     delimiter the model could mistake for ours. Idempotent.
+
+    The intelligence plan, release 7: the marker lines of the block the app
+    adds beside a chat's newest message (``context/prefix``, both kinds) are
+    neutralised the same way, so no fenced text can carry one.
     """
-    return _FENCE_MARKER.sub(lambda m: "(" + m.group(0)[1:], text or "")
+    from ..context.prefix import neutral
+
+    return neutral(_FENCE_MARKER.sub(lambda m: "(" + m.group(0)[1:], text or ""))
 
 
 def wrap_untrusted(text: str | None) -> str:

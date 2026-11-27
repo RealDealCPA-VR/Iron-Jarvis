@@ -245,6 +245,15 @@ class LLMMessage:
     #: tool_calls", exactly as before; only the adapter that wrote them reads
     #: them. Copied from ``LLMResponse.raw_blocks`` by the chat lanes.
     raw_blocks: list[dict[str, Any]] = field(default_factory=list)
+    #: The intelligence plan, release 7 (``context/prefix``): on the NEWEST
+    #: user message of a plain chat reply, how many leading characters of
+    #: ``content`` the chat's NEXT reply sends again unchanged (the person's
+    #: own words). What follows is the once-only block, sent with this reply
+    #: only. A HINT for an adapter whose
+    #: provider reuses a prompt by marked blocks (Anthropic): it marks the end
+    #: of the part that comes back. 0 = no hint; every adapter that ignores it
+    #: still sends ``content`` whole.
+    stable_chars: int = 0
 
 
 @dataclass

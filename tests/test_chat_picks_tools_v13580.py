@@ -64,6 +64,7 @@ from tests.test_chat_recovery_v1344 import (
     _run_post,
     _run_stream,
 )
+from tests._fakes.sent import with_beside
 
 SECTION = "# Apps named in this message"
 
@@ -95,12 +96,12 @@ def _scripted(platform, monkeypatch, final: str = "Done."):
     seen: dict = {"systems": [], "tools": []}
 
     async def fake_complete(*, system, messages, tools, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         seen["tools"].append(_tool_names(tools))
         return RouteResult(LLMResponse(text=final, tool_calls=[]), "mock", "mock")
 
     async def fake_stream(*, system, messages, tools, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         seen["tools"].append(_tool_names(tools))
         yield {"type": "text", "text": final}
         yield {"type": "final", "response": LLMResponse(text=final, tool_calls=[]),

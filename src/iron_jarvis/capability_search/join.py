@@ -796,6 +796,11 @@ def join_found(
             mine: list[str] = []
             for name in _wanted(rows):
                 held = {*armed, *(asks_list or ())}
+                # Release 7: a tool the lookup found for THIS message is asked
+                # for now, also when the chat already held it: it is no
+                # longer "armed only because it stayed" (``ToolContext.
+                # stayed_only``), so it does its full work again.
+                _asked_now(ctx, name)
                 if name in joined:
                     continue
                 # A writer's reader (READER_FOR) and a family's maker
@@ -898,7 +903,13 @@ def join_found(
                 s for s in tool_specs
                 if isinstance(s, dict) and str(s.get("name") or "") not in known
             ]
-            tool_specs[:] = registry.specs([*armed, *(asks_list or ())]) + extras
+            # Release 7: the order the reply was already sending them in; a
+            # tool that joins goes at the END (``context/prefix``).
+            from ..context.prefix import order_specs as _order, spec_name as _name
+
+            tool_specs[:] = _order(
+                registry.specs([*armed, *(asks_list or ())]) + extras, [_name(s) for s in tool_specs],
+            )
         _say(msgs, _note(joined, asks, skipped, capped, already,
                          asks_itself=_asks_itself(registry, [*already, *joined])))
         # Names only (never a query or an argument): which lookups brought
@@ -982,6 +993,17 @@ def _note(joined: list[str], asks: list[str], skipped: dict[str, str], capped: b
     if not parts:
         return ""
     return "(" + " ".join(parts) + ")"
+
+
+def _asked_now(ctx: Any, name: str) -> None:
+    """Take *name* off the turn's "armed only because it stayed" names
+    (the intelligence plan, release 7). Never raises."""
+    try:
+        stayed = getattr(ctx, "stayed_only", None)
+        if stayed and name in stayed:
+            ctx.stayed_only = frozenset(stayed) - {name}
+    except Exception:  # noqa: BLE001 — it keeps the narrower behaviour
+        pass
 
 
 def _say(msgs: list, note: str) -> None:

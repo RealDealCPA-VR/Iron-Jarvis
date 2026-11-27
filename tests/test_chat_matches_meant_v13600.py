@@ -67,6 +67,7 @@ from tests.test_microsoft_365_v13560 import (  # noqa: F401 — pytest fixtures
     client,
     spawned,
 )
+from tests._fakes.sent import with_beside
 
 ROOT = Path(__file__).resolve().parents[1]
 APPS_HREF = "/settings?section=connections-apps"
@@ -114,7 +115,7 @@ class _Model:
         self.tools: list[list[str]] = []
 
     def _seen(self, kw: dict) -> None:
-        self.systems.append(str(kw.get("system") or ""))
+        self.systems.append(with_beside(kw.get("system") or "", kw.get("messages")))
         self.tools.append([
             getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else None)
             for t in kw.get("tools") or []

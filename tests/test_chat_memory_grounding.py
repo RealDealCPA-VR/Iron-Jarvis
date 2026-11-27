@@ -47,6 +47,7 @@ from iron_jarvis.memory.fabric import MemoryFabric
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS, select_auto_tools
+from tests._fakes.sent import with_beside
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis"
 
@@ -59,7 +60,7 @@ def _capture_complete(platform, monkeypatch, seen: dict, reply: str = "ok"):
 
     async def fake_complete(*, provider=None, model=None, system, messages,
                             tools, task_class):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         seen["messages"] = list(messages)
         return RouteResult(LLMResponse(text=reply), "mock", "mock")
 
@@ -72,7 +73,7 @@ def _capture_stream(platform, seen: dict, reply: str = "ok"):
 
     async def fake_stream(*, provider=None, model=None, system, messages,
                           tools, session_id=None, task_class=None):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         yield {"type": "text", "text": reply}
         yield {"type": "final", "response": LLMResponse(text=reply),
                "provider": "mock", "model": "mock"}

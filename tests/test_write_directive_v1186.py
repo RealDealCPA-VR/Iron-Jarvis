@@ -43,6 +43,7 @@ from iron_jarvis.daemon.chat_turn import (
 )
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import with_beside
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
 
@@ -62,7 +63,7 @@ def client(tmp_path) -> TestClient:
 def _capture_complete(platform, monkeypatch, seen: dict, reply: str = "ok"):
     async def fake_complete(*, provider=None, model=None, system, messages,
                             tools, task_class):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         seen["tools"] = list(tools or [])
         return RouteResult(LLMResponse(text=reply), "mock", "mock")
 
@@ -72,7 +73,7 @@ def _capture_complete(platform, monkeypatch, seen: dict, reply: str = "ok"):
 def _capture_stream(platform, seen: dict, reply: str = "ok"):
     async def fake_stream(*, provider=None, model=None, system, messages,
                           tools, session_id=None, task_class=None):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         yield {"type": "text", "text": reply}
         yield {"type": "final", "response": LLMResponse(text=reply),
                "provider": "mock", "model": "mock"}

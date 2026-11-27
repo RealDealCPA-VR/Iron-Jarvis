@@ -8,8 +8,9 @@ the app is running.
     python -I scripts/measure_tool_definitions.py --root <home>    # <home>/ironjarvis.db
     python -I scripts/measure_tool_definitions.py --db <ironjarvis.db> --days 30
     python -I scripts/measure_tool_definitions.py <tools.json> <ironjarvis.db>
+    python -I scripts/measure_tool_definitions.py --db <ironjarvis.db> --days 30 --split 2026-11-27T09:00
 
-TWO REPORTS.
+THREE REPORTS.
 
 1. What each reply used (the intelligence plan, release 6). Since that
    release every chat reply and every agent run saves, on its own row, the
@@ -34,6 +35,25 @@ TWO REPORTS.
 
    A record of a shape this script does not know (a newer version's, or a
    damaged one) is left out and counted, never read as zeros.
+
+   REPLY NUMBERS count from the chat's TRUE first reply. Every usage row of a
+   chat is counted, whenever it was written (also before ``--days``). The app
+   deletes usage rows older than its history setting (90 days unless
+   changed), so an old chat's first rows may be gone: for a saved chat that
+   was created before the oldest row this database still holds, the count
+   starts from the replies the saved chat itself holds (its messages, counted
+   by role; never read as text) that have no row any more. Such a chat's
+   replies are never "reply 1", and the report says how many chats were
+   numbered that way (their numbers are a lower bound).
+
+3. Do replies start sooner (the intelligence plan, release 7), only when
+   ``--split`` gives a moment (ISO, UTC: when the new version was installed).
+   For plain chat, the replies before that moment and the replies from it on,
+   side by side: the share of what was sent that the model server reused on
+   the SECOND AND LATER replies of a chat (the first reply of a chat has
+   nothing to reuse), and the time to the first word, by reply number. Read
+   the two against each other on the same model server: a share that goes up
+   and a first word that comes sooner is the release working.
 
 2. What tool definitions cost per reply (docs/EXTENSIONS-PLAN-2026-11-24.md,
    E0), only when ``tools.json`` (the body of ``GET /tools`` from the running
@@ -81,6 +101,11 @@ OLDER_LABELS = (
     "skipped by their label; rows of those two kinds written before this version have no label and "
     "still count as replies."
 )
+OLDER_CHATS = (
+    "{n} chat{s} older than the oldest usage row this database still holds (the app deletes "
+    "older rows): {their} reply numbers start from the replies the saved chat itself still holds, "
+    "so they are a lower bound, and never \"reply 1\"."
+)
 LEFT_BEHIND = (
     "This database's app stopped before folding its newest changes into the main file (there is a "
     "-wal file beside it and nothing has it open). Those changes are not counted here; nothing is "
@@ -88,6 +113,7 @@ LEFT_BEHIND = (
 )
 NOT_A_DATABASE = "What each reply used: {path} could not be read as an Iron Jarvis database."
 BAD_NOW = "--now must be a time like 2026-11-26T12:00:00, and {value!r} is not one."
+BAD_SPLIT = "--split must be a time like 2026-11-26T12:00:00, and {value!r} is not one."
 
 
 def tokens(specs) -> int:
@@ -215,15 +241,46 @@ def _table(title: str, unit: str, rows: list, max_number: int, out) -> None:
               f"\"messages\" is what the chat held, not what was sent.", file=out)
 
 
-def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, max_number: int = 12,
-         out=None) -> int:
-    """Print report 1 from *db*. Returns how many records it read."""
-    out = out or sys.stdout
-    cols = {r[1] for r in db.execute("pragma table_info(agentrun)")}
-    print(f"What each reply used (Iron Jarvis's own records, last {days} days)", file=out)
-    if "parts_json" not in cols:
-        print(OLD_DATABASE, file=out)
-        return 0
+def _replies_before_the_rows(db: sqlite3.Connection, all_rows: list) -> dict:
+    """``{chat id: n}``: for a saved chat created BEFORE the oldest usage row
+    this database still holds, how many of its replies have no row any more
+    (at least 1: its first reply's row is gone). The saved chat's own
+    messages are counted by role inside SQLite; their text is never read
+    here. A chat created after the oldest row has every row: it is not in
+    the answer. Never raises: a database with no chat table, or one this
+    SQLite cannot read that way, numbers by the rows alone, as before."""
+    oldest = min((str(r[2]).replace("T", " ") for r in all_rows), default="")
+    if not oldest:
+        return {}
+    rows_of: dict = collections.Counter(
+        r[1] for r in all_rows if r[0] == "chat" and r[1] and not r[10]
+    )
+    try:
+        chats = db.execute(
+            "select t.id, t.created_at, case when json_valid(t.messages_json) then (select count(*) from "
+            "json_each(t.messages_json) e where json_extract(e.value, '$.role') = 'assistant') else 0 end "
+            "from chatthreadrecord t"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict = {}
+    for chat_id, created, replies in chats:
+        if chat_id in rows_of and created and str(created).replace("T", " ") < oldest:
+            out[chat_id] = max(1, int(replies or 0) - rows_of[chat_id])
+    return out
+
+
+def _older_note(rows: list) -> str:
+    """The one line for chats numbered from their saved messages ("" = none)."""
+    n = len({r["group"] for r in rows if r.get("older")})
+    return OLDER_CHATS.format(n=n, s=" is" if n == 1 else "s are", their="its" if n == 1 else "their") if n else ""
+
+
+def _collect(db: sqlite3.Connection, days: int, now: "datetime | None"):
+    """Every reply and run with a record inside the window, numbered in its
+    chat: ``(chat, code, runs, unsaved, unknown)`` (*unknown*: records of a
+    shape this script does not know, left out and counted). Shared by reports
+    1 and 3: ONE reader, so a labelled row is never a reply in either."""
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = (now - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     until = now.strftime("%Y-%m-%d %H:%M:%S.999999")
@@ -239,6 +296,11 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
         "order by created_at, id"
     ).fetchall()
     numbers: dict = collections.Counter()
+    # A chat older than the oldest row still held starts past the replies
+    # whose rows the app has deleted (see the module's note on reply numbers).
+    before_rows = _replies_before_the_rows(db, all_rows)
+    for chat_id, gone in before_rows.items():
+        numbers[("chat", chat_id)] = gone
     chat, code, runs, unsaved, unknown = [], [], [], 0, 0
     for sid, thread, created, inp, steps, cache_read, parts_json, model_ms, calls, first_ms, label in all_rows:
         is_chat = sid == "chat"
@@ -261,13 +323,33 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
             "group": group, "number": numbers[group], "input": int(inp or 0),
             "calls": calls if calls is not None else (int(steps or 0) or None),
             "cache_read": cache_read, "record": record, "model_ms": model_ms, "first_word_ms": first_ms,
+            "created": str(created).replace("T", " "),
+            "older": bool(is_chat and thread in before_rows),
         }
         (runs if not is_chat else code if record.get("kind") == "code" else chat).append(row)
-    total = len(chat) + len(code) + len(runs)
-    skipped = (
+    return chat, code, runs, unsaved, unknown
+
+
+def _skipped(unknown: int) -> str:
+    """The one line for records of a shape this script does not know."""
+    return (
         f"{unknown} record{'' if unknown == 1 else 's'} of a shape this script does not know (a newer "
         f"version's, or damaged) {'is' if unknown == 1 else 'are'} left out."
     ) if unknown else ""
+
+
+def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, max_number: int = 12,
+         out=None) -> int:
+    """Print report 1 from *db*. Returns how many records it read."""
+    out = out or sys.stdout
+    cols = {r[1] for r in db.execute("pragma table_info(agentrun)")}
+    print(f"What each reply used (Iron Jarvis's own records, last {days} days)", file=out)
+    if "parts_json" not in cols:
+        print(OLD_DATABASE, file=out)
+        return 0
+    chat, code, runs, unsaved, unknown = _collect(db, days, now)
+    total = len(chat) + len(code) + len(runs)
+    skipped = _skipped(unknown)
     if not total:
         print(NOTHING_YET.format(days=days), file=out)
         if skipped:
@@ -297,7 +379,62 @@ def used(db: sqlite3.Connection, days: int = 7, now: "datetime | None" = None, m
               f"{'is' if unsaved == 1 else 'are'} left out (no chat to number them in).", file=out)
     if skipped:
         print(("" if unsaved else "\n") + skipped, file=out)
+    older = _older_note(chat + code)
+    if older:
+        print(("" if (unsaved or skipped) else "\n") + older, file=out)
     return total
+
+
+# --------------------------------------------------------------------------- #
+# 3. Do replies start sooner (release 7)
+# --------------------------------------------------------------------------- #
+def sooner(db: sqlite3.Connection, split: datetime, days: int = 7, now: "datetime | None" = None,
+           max_number: int = 12, out=None) -> int:
+    """Print report 3 from *db*: plain chat's replies before *split* and from
+    it on. Returns how many replies it read."""
+    out = out or sys.stdout
+    at = split.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\nDo replies start sooner (plain chat, last {days} days, split at {at} UTC)", file=out)
+    cols = {r[1] for r in db.execute("pragma table_info(agentrun)")}
+    if "parts_json" not in cols:
+        print(OLD_DATABASE, file=out)
+        return 0
+    chat, _code, _runs, _unsaved, unknown = _collect(db, days, now)
+    if not chat:
+        print(NOTHING_YET.format(days=days), file=out)
+        if unknown:
+            print(_skipped(unknown), file=out)
+        return 0
+    print("\"reused\" is the share of what was sent that the model server read from its saved copy, over "
+          "the replies whose model server reported one. The first reply of a chat has nothing to reuse: "
+          "read the line for the second and later replies.", file=out)
+    if unknown:
+        print(_skipped(unknown), file=out)
+    older = _older_note(chat)
+    if older:
+        print(older, file=out)
+    for label, part in (("before", [r for r in chat if r["created"] < at]),
+                        ("from it on", [r for r in chat if r["created"] >= at])):
+        later = [r for r in part if r["number"] >= 2]
+        print(f"\n  {label}: {len(part)} repl{'y' if len(part) == 1 else 'ies'} in "
+              f"{len({r['group'] for r in part})} chats", file=out)
+        if not part:
+            continue
+        print(f"    second and later replies ({len(later)}): reused {_reused(later)}, "
+              f"first word after {_secs(r['first_word_ms'] for r in later)} s", file=out)
+        head = ["reply", "n", "sent", "reused", "first word s"]
+        lines = [head]
+        by_number: dict = collections.defaultdict(list)
+        for r in part:
+            by_number[min(r["number"], max_number + 1)].append(r)
+        for number in sorted(by_number):
+            rows = by_number[number]
+            lines.append([str(number) if number <= max_number else f"{max_number + 1}+", str(len(rows)),
+                          _avg(r["input"] for r in rows), _reused(rows), _secs(r["first_word_ms"] for r in rows)])
+        widths = [max(len(row[i]) for row in lines) for i in range(len(head))]
+        for row in lines:
+            print("    " + "  ".join(cell.rjust(w) for cell, w in zip(row, widths)), file=out)
+    return len(chat)
 
 
 # --------------------------------------------------------------------------- #
@@ -402,10 +539,21 @@ def main(argv: "list[str] | None" = None) -> int:
     ap.add_argument("--days", type=int, default=7, help="how many days back to read (default 7)")
     ap.add_argument("--max-replies", type=int, default=12, help="reply numbers past this print as one row")
     ap.add_argument("--now", help="read as if it were this time (ISO, UTC), for a copy taken earlier")
+    ap.add_argument("--split", help="a moment (ISO; read as UTC when it names no zone, as --now is): also "
+                                    "print plain chat's reuse and time to the first word before it and "
+                                    "from it on")
     args = ap.parse_args(argv)
     tools_json, db_path = args.tools_json, args.db or args.db_path
     if tools_json and not db_path and not tools_json.lower().endswith(".json"):
         tools_json, db_path = None, tools_json  # one positional that is the database
+    # A bad --split ends here in one sentence, before anything is looked for or opened.
+    try:
+        split = datetime.fromisoformat(args.split) if args.split else None
+    except ValueError:
+        print(BAD_SPLIT.format(value=args.split), file=sys.stderr)
+        return 2
+    if split is not None and split.tzinfo is not None:
+        split = split.astimezone(timezone.utc).replace(tzinfo=None)
     db_path = db_path or default_db(args.root)
     if not os.path.isfile(db_path):
         print(f"What each reply used: there is no database at {db_path}. Nothing yet.")
@@ -435,6 +583,8 @@ def main(argv: "list[str] | None" = None) -> int:
             definitions(tools_json, db)
             print()
         used(db, days=max(1, args.days), now=now, max_number=max(1, args.max_replies))
+        if split is not None:
+            sooner(db, split, days=max(1, args.days), now=now, max_number=max(1, args.max_replies))
     except sqlite3.DatabaseError:
         print(NOT_A_DATABASE.format(path=db_path), file=sys.stderr)
         return 2
