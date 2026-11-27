@@ -989,18 +989,22 @@ def test_the_reply_says_when_what_was_found_was_left_out(tmp_path):
     assert again is not None and chat_turn.refit_receipt(noted) == {"dropped": 2}, "history alone: no such key"
 
 
+@pytest.mark.parametrize("window", (5000, 6000))
 @pytest.mark.parametrize("lane", LANES)
-def test_a_message_cut_anyway_keeps_the_block_whole(tmp_path, lane):
+def test_a_message_cut_anyway_keeps_the_block_whole(tmp_path, lane, window):
     """The block gives way only so the person's words go WHOLE (or when it
     cannot fit beside even the shortest cut). A message too long for the
     model even alone is cut whatever the block does: leaving out what was
     found would buy only more of a cut message, so the block rides whole, the
     words are cut to the room it leaves (as before release 7, when the same
     lines rode in the instructions), and the reply says nothing was left
-    out of the block."""
+    out of the block. Both ways a message is cut anyway: at 5,000 tokens the
+    room cannot hold it; at 6,000 it could hold the planner's per-message cut
+    (``budget.MAX_MESSAGE_CHARS``) if the block gave way, but that cut is not
+    the person's words whole either."""
     chat = Chat(tmp_path / "home", lane)
     platform = chat.app.state.platform
-    platform.config.model_context_windows = {platform.config.default_provider: 8000}
+    platform.config.model_context_windows = {platform.config.default_provider: window}
     chat.ledger.write_text("ZQXLEDGER a line of the ledger\n" * 20, encoding="utf-8")
     pasted = "START-OF-PASTE " + ("row of a pasted table " * 3000) + "END-OF-PASTE"
     call = chat.say(pasted, attachments=["ledger.txt"])

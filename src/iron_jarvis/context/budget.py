@@ -427,6 +427,12 @@ def plan_history(
     # spent on it, so a plan without riders or definitions is the one it
     # always was (a task door's room is held to the token).
     r7_room = max(0, int(fixed_tokens or 0)) + (_est(newest_rider) if newest_rider else 0)
+    # ...and only when that sends the words WHOLE. A newest message longer
+    # than :data:`MAX_MESSAGE_CHARS` is cut whatever gives way, so nothing
+    # gives way for it: the block beside it rides whole and the cut takes
+    # the room the block leaves (as before release 7).
+    if messages and len(_content_of(messages[-1])) > MAX_MESSAGE_CHARS:
+        r7_room = 0
 
     plan = HistoryPlan(window=win, history_budget=max(0, budget))
     # Raw demand, measured BEFORE any cap or trim: what this conversation would
