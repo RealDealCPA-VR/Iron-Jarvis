@@ -80,6 +80,7 @@ from datetime import datetime, timedelta
 from typing import Any, Iterable
 
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import literal_column
 from sqlalchemy import update as sa_update
 from sqlmodel import Field, SQLModel, select
 
@@ -512,10 +513,15 @@ def _read(engine: Any, *where: Any, limit: int = MAX_READ, newest: bool = False)
     try:
         if not ensure_table(engine):
             return []
-        order = CheckRecord.created_at.desc() if newest else CheckRecord.created_at  # type: ignore[attr-defined]
+        # Two writes in one clock tick (a Windows clock is coarse) tie on
+        # created_at; the id is random, so the tie is broken by the order
+        # the rows were WRITTEN (SQLite's rowid), the same way round.
+        written = literal_column("rowid")
+        order = (CheckRecord.created_at.desc(), written.desc()) if newest else (  # type: ignore[attr-defined]
+            CheckRecord.created_at, written)
         with session_scope(engine) as db:
             got = db.exec(
-                select(CheckRecord).where(*where).order_by(order, CheckRecord.id).limit(max(1, int(limit)))
+                select(CheckRecord).where(*where).order_by(*order).limit(max(1, int(limit)))
             ).all()
             return [as_dict(r) for r in got]
     except Exception:  # noqa: BLE001

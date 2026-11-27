@@ -90,6 +90,22 @@ def test_a_second_look_at_the_same_file_replaces_the_first(platform):
         ("2023", R.PASSED), ("2024", R.PASSED)]
 
 
+@pytest.mark.parametrize("newest", [False, True])
+def test_rows_written_in_one_clock_tick_keep_the_order_they_were_written(platform, monkeypatch, newest):
+    """A Windows clock is coarse: two writes can carry one time. Oldest
+    first (and newest first) still follows the order they were written,
+    never the rows' random ids."""
+    from datetime import datetime, timezone
+    tick = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(R, "utcnow", lambda: tick)
+    eng = platform.engine
+    for n in range(12):
+        R.write(eng, [Check(R.FILE_OPENS, R.PASSED, "opens", file=f"f{n:02d}.md")], turn_id="tick")
+    got = [r["file"] for r in R._read(eng, R.CheckRecord.turn_id == "tick", newest=newest)]
+    want = [f"f{n:02d}.md" for n in range(12)]
+    assert got == (want[::-1] if newest else want)
+
+
 def test_two_chats_that_send_one_turn_id_never_replace_each_others_rows(platform):
     """Decision 11. A turn's id is the caller's own choice. Chat B's reply,
     sent under the id chat A used, with a file of the same name, deleted chat
