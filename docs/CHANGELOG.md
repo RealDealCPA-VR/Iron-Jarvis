@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.588.1
+
+**Local only: memory search stays on this PC.** Two gaps in Local only are closed.
+
 ## v1.588.0
 
 **Which model does best on your code, in the model menu.** The model menu of a coding session now says, under each model, what became of its work in the folder you are in.
@@ -77,7 +81,3 @@
 ## v1.571.0
 
 **A coding session is told to take care.** When Iron Jarvis itself writes code (**Chat › Code**), the instructions it gives the model said how to do a task, and little about how to behave in your project.
-
-## v1.570.0
-
-**Auto reaches helpers and handed-off work.** Under **Auto**, the quick check that lets routine commands through worked only in a reply.
