@@ -544,3 +544,35 @@ def test_a_hand_edited_value_that_is_not_a_choice_reads_as_no(platform):
     assert cfg.model_validate({**cfg.model_dump(), "double_check": "whatever"}).double_check == ""
     assert cfg.model_validate({**cfg.model_dump(), "double_check": None}).double_check is None
     assert cfg.model_validate({**cfg.model_dump(), "double_check": "a | claude-cli | m"}).double_check == "a|claude-cli|m"
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_chats_yes_stores_the_choice_its_card_named_even_when_the_accounts_change_before_allow(
+        tmp_path, monkeypatch):
+    """Review 1 (consent): the card said "Work"; before Allow another account
+    came first. The stored choice is the one the card named, or nothing."""
+    from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
+    from tests.test_settings_chat_tools_v1321 import _body, _calls_stream
+
+    monkeypatch.setattr(S, "_vendor_model", lambda vendor: MODELS.get(vendor, ""))
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    monkeypatch.setattr(platform, "iron_proxy", _Accounts(TWO))
+    platform.router.stream = _calls_stream([("config_change", {"key": "double_check", "value": "yes"})])
+    asked: list[dict] = []
+
+    async def allow_after_a_change(data):
+        asked.append(data)
+        monkeypatch.setattr(platform, "iron_proxy", _Accounts(
+            [_acct("acct-client", "Client", "anthropic", 0), *TWO]))
+        status, _ = await _asgi_post(app, f"/chat/approvals/{data['id']}", {"decision": "once"})
+        assert status == 200
+
+    frames = await _drive_stream(app, _body("turn on the second model check"), allow_after_a_change)
+    assert "“Work”" in json.dumps(asked, ensure_ascii=False)
+    assert platform.config.double_check in (None, "acct-work|claude-cli|claude-sonnet-4-5"), platform.config.double_check
+    assert platform.config.double_check is None, "a choice the card did not name was stored"
+    assert S.CHANGED_WORDS in json.dumps(frames, ensure_ascii=False)

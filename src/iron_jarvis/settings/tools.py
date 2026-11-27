@@ -234,6 +234,13 @@ def _shown_value(platform: Any, key: str, value: Any) -> Any:
         return value
 
 
+#: 5b review: a yes for the second model's double-check that no card named.
+UNSHOWN_YES_WORDS = (
+    "Second model double-check is turned on only after a card names the model and the account; nothing "
+    "was changed. Ask again in the app's chat, or use Settings › Models."
+)
+
+
 def _double_check_words(platform: Any, value: Any) -> Any:
     """5b: a value of ``double_check`` as a card shows it. Never raises."""
     try:
@@ -675,6 +682,12 @@ class _ConfigChangeBase(Tool):
                     # Nothing a yes can store: no card (an Allow that execute
                     # then refuses would be a lie); execute says why in words.
                     return SpendCheck(ask=False, cost_note="nothing to turn on")
+                # Review 1 (consent): ONE choice, settled BEFORE the card, in
+                # the very arguments the card is built from and the call runs
+                # with. execute stores it through ``value_for``, which refuses
+                # it when a yes would store another choice by then: never the
+                # account a later look picks.
+                args["value"] = chosen.id
                 return SpendCheck(ask=True, words=second.offer_words(self.platform, chosen),
                                   cost_note="about one small request per task")
 
@@ -747,9 +760,15 @@ class _ConfigChangeBase(Tool):
             from ..checks.second import value_for
 
             try:
-                value = await asyncio.to_thread(value_for, self.platform, value)
+                settled = await asyncio.to_thread(value_for, self.platform, value)
             except ValueError as exc:
                 return ToolResult(ok=False, output="", error=str(exc))
+            if value == "yes":
+                # A yes that never had its card (whose arguments carry the
+                # ONE choice the card named) is not stored: nobody was shown
+                # which model and account.
+                return ToolResult(ok=False, output="", error=UNSHOWN_YES_WORDS)
+            value = settled
         try:
             writes = await asyncio.to_thread(self._writes, key, value, ctx.device_id)
         except Exception:  # noqa: BLE001 — unreadable: the plain one-row write
