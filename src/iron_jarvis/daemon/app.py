@@ -774,6 +774,28 @@ async def _event_prune_loop(platform, *, interval_s: float = _EVENT_PRUNE_S) -> 
             log.warning("removing asked-for requests past 90 days failed", exc_info=True)
 
 
+#: The most the start-up tidy of kept results is waited for (its thread
+#: finishes by itself; nothing waits on it past this).
+_KEPT_TIDY_WAIT_S = 120.0
+
+
+async def _kept_results_boot_tidy(platform) -> int:
+    """ONE pass at start-up over the kept results (``tools/kept_results``),
+    off the event loop and off the start-up path. Returns how many were
+    removed; never raises."""
+    from ..tools.kept_results import sweep as _sweep_kept
+
+    try:
+        return int(await asyncio.wait_for(
+            asyncio.to_thread(_sweep_kept, platform.config.home, boot=True), _KEPT_TIDY_WAIT_S,
+        ))
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a tidy-up never stops the daemon
+        log.warning("the kept-results start-up tidy did not finish", exc_info=True)
+        return 0
+
+
 async def _tool_failure_pass(platform, tick=None) -> list[dict]:
     """ONE daily read of tool failures (v1.507.0, north-star plan 7.2): the
     improvement engine's ``sweep`` (a tool that failed repeatedly in the last
@@ -1736,12 +1758,6 @@ def create_app(project_root: str | None = None) -> FastAPI:
             sweep_cleared_records(platform.config.home)
         except Exception:  # pragma: no cover - never block boot
             pass
-        try:  # release 8 of the intelligence plan: kept results past 30 days
-            from ..tools.kept_results import sweep as _sweep_kept
-
-            await asyncio.to_thread(_sweep_kept, platform.config.home, boot=True)
-        except Exception:  # pragma: no cover - never block boot
-            pass
         _boot_watch.step("arming background loops")
         # Periodic auto-backup safety net — a daily driver shouldn't depend on the
         # user remembering to run `ironjarvis backup`. Disable with
@@ -2084,6 +2100,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
             bg_tasks["repl_sweep"] = asyncio.create_task(_repl_sweep_loop(platform.repl))
         # EVENT RETENTION EVERY DAY (v1.333.0, D12), not only at boot.
         bg_tasks["event_prune"] = asyncio.create_task(_event_prune_loop(platform))
+        # Release 8 of the intelligence plan: the kept results' start-up
+        # tidy (what is past its 30 days, and what a reply that never ended
+        # left behind) runs BESIDE start-up, never in it: it reads every kept
+        # result's record, which took seconds on a large store.
+        bg_tasks["kept_results_tidy"] = asyncio.create_task(_kept_results_boot_tidy(platform))
 
         # EVENT-LOOP STALL TELEMETRY (v1.245.0). The daemon is ONE loop: a
         # blocking call anywhere freezes every terminal, chat stream and poll,

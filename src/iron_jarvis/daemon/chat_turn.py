@@ -9174,8 +9174,54 @@ async def settle_kept_results(d: Any, msgs: list, ctx: Any, **lists: Any) -> int
     from ..tools import kept_results as _kept
 
     return await _kept.settle(
-        d.platform, ctx, msgs, lambda: _kept.arm_chat(d, max_tools=_MAX_ARMED_TOOLS, **lists),
+        d.platform, ctx, msgs,
+        lambda dry=False: _kept.arm_chat(d, max_tools=_MAX_ARMED_TOOLS, dry=dry, **lists),
     )
+
+
+async def kept_reader_at_start(d: Any, msgs: list, ctx: Any, *, harness: Any = None, **lists: Any) -> int:
+    """A CODING SESSION's reply that starts with a kept-result line in its
+    messages (a reply picked up after a restart reads its cut-off rounds
+    back, lines included) has ``kept_result_read`` from its first round
+    (``tools/kept_results.arm_at_start``: each line's handle is checked
+    against the store for this session first). A plain chat's messages never
+    carry one (its kept results end with the reply that kept them). Returns
+    how many lines were real. MIRROR NOTE (lock-step): both lanes call it
+    before the first round. Never raises."""
+    if harness is None or ctx is None:
+        return 0
+    from ..tools import kept_results as _kept
+
+    return await _kept.arm_at_start(
+        d.platform, _kept._owner(ctx), msgs,
+        lambda dry=False: _kept.arm_chat(
+            d, max_tools=_MAX_ARMED_TOOLS, dry=dry, harness=harness, **lists),
+    )
+
+
+def kept_reply_frames(frames: Any) -> Any:
+    """The stream lane's turn as ONE reply for ``tools/kept_results``: what a
+    plain chat keeps inside it is removed when the stream ends, however it
+    ends. MIRROR NOTE (lock-step): the POST lane is :func:`_kept_reply_turn`."""
+    from ..tools import kept_results as _kept
+
+    return _kept.reply_frames(frames)
+
+
+def _kept_reply_turn(turn):
+    """The POST lane's turn as ONE reply for ``tools/kept_results`` (a
+    decorator, for the reason :func:`_local_only_turn` is one). MIRROR NOTE
+    (lock-step): the stream lane is wrapped by :func:`kept_reply_frames`."""
+    import functools
+
+    @functools.wraps(turn)
+    async def scoped(*args, **kwargs):
+        from ..tools import kept_results as _kept
+
+        with _kept.reply_scope():
+            return await turn(*args, **kwargs)
+
+    return scoped
 
 
 def turn_session_id(session_id: "str | None") -> str:
@@ -13736,6 +13782,7 @@ def client_owner_words(body: Any) -> str:
 @_account_pinned_turn
 @_local_only_turn
 @_client_turn
+@_kept_reply_turn
 @_settles_its_prep
 async def run_chat_turn(
     platform, personas: dict, body, *, trust: str = "full", trust_reason: str = "",
@@ -14942,6 +14989,12 @@ async def run_chat_turn(
             await settle_usage_writes(_usage_pending, turn_id=_usage_turn)  # CS8
             raise
 
+    # Release 8 of the intelligence plan (lock-step: routes/chat.py): a
+    # coding reply that starts with a kept-result line has its reader.
+    await kept_reader_at_start(
+        d, msgs, ctx, armed=armed, auto_armed=auto_armed, tool_specs=tool_specs,
+        overrides=overrides, armed_grant=armed_grant, ceiling=_arm_ceiling, harness=_harness,
+    )
     try:
         for _round in turn_rounds(lambda: _rounds):
             if _cut_pending:

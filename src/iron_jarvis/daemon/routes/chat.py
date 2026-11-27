@@ -370,11 +370,6 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
             log.warning("history-search drop failed for thread %s", thread_id,
                         exc_info=True)
         db.commit()
-    # Release 8 of the intelligence plan: the long results kept for it (as a
-    # chat, or as a coding session) go with it.
-    from ...tools.kept_results import drop_owners as _drop_kept
-
-    _drop_kept(engine, (f"chat:{thread_id}", f"build:{thread_id}"))
     # CS7: ...and in memory — a finished turn of it is unknown from now on (its
     # stream answers 404); a running one is marked (nothing of it is written
     # any more) and its record goes when it ends. Marked FIRST, so a turn the
@@ -385,10 +380,20 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
     # the chat's key, and its daemon-owned turns (a new chat's first turn is
     # linked to it only later). An agent run it handed off to is its own run
     # with its own Stop: not stopped here.
-    for h in _thread_handles(thread_key(thread_id)):
+    _handles = _thread_handles(thread_key(thread_id))
+    for h in _handles:
         h.stop(by=STOP_BY_YOU)
     for turn_id in running:
         TURNS.stop(turn_id, by=STOP_BY_YOU)
+    # Release 8 of the intelligence plan: the long results kept for it go
+    # with it. AFTER the stops (a reply still in a tool round must not save
+    # one more behind the drop: a dropped owner is refused for a while), and
+    # for every key it kept under: the chat, its coding session, and each
+    # running turn of its own (a new chat's first reply keeps under its turn).
+    from ...tools.kept_results import drop_owners as _drop_kept
+
+    _turns = {str(t) for t in running} | {str(getattr(h, "turn_id", "") or "") for h in _handles}
+    _drop_kept(engine, (f"chat:{thread_id}", f"build:{thread_id}", *(f"chat:{t}" for t in _turns if t)))
     if build:
         _end_build_programs(thread_id)
         # 26-a: its review comments and its pull request's watch go too.
@@ -4207,6 +4212,9 @@ async def stream_chat_turn(
             # cap sees the call it always saw).
             **({"reply_cap": reply_cap} if reply_cap is not None else {}),
         ), _prep), _lo_scope), _turn_wall), _owner_words), handle=handle)
+    # Release 8 of the intelligence plan: the turn is ONE reply; what a plain
+    # chat keeps inside it ends with it. MIRROR NOTE (lock-step): chat_turn.
+    inner = _chat_turn.kept_reply_frames(inner)
     if _acct_pin is not None:
         inner = _chat_turn.account_pinned_frames(inner, _acct_pin)
     if thread_turn is not None:
@@ -6208,6 +6216,14 @@ async def chat_stream(
             # v1.391.0: a resumed coding reply — the cut-off rounds are the
             # turn's own growing part, never fixed history.
             _head = _resume_head
+        # Release 8 of the intelligence plan (lock-step: chat_turn): a coding
+        # reply that starts with a kept-result line (one picked up after a
+        # restart reads its cut-off rounds back) has its reader.
+        await _chat_turn.kept_reader_at_start(
+            d, msgs, ctx, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
+            tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
+            tool_ceiling=tool_ceiling, ceiling=_arm_ceiling, harness=_harness,
+        )
         try:
             for _round in _chat_turn.turn_rounds(lambda: _rounds):
                 if await _stop():

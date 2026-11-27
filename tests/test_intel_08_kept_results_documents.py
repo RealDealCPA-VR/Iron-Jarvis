@@ -37,6 +37,7 @@ from tests.test_intel_08_kept_results_lanes import (
     READER,
     K,
     chat,
+    in_reply,
     kept_files,
     run_agent,
     sent,
@@ -97,8 +98,10 @@ async def test_the_last_section_of_a_long_attached_document_is_reached_in_one_st
     platform = build_platform(str(tmp_path / "home"))
     path, text = long_document(tmp_path, suffix)
     assert len(text) > 40_000 and text.index(DEEP) > 16_000
+    seen: dict = {}
     model, _ = await chat(platform, monkeypatch, lane, path.parent, [
-        [call(tool, "r1", path=str(path))], then_read("r1", "r2", end=True), "Done.",
+        [call(tool, "r1", path=str(path))],
+        in_reply(seen, platform, "chat:chat_doc", "r1", then_read("r1", "r2", end=True)), "Done.",
     ], thread="chat_doc", tools=[tool], attachments=[str(path)])
 
     # The file really was attached (its block in the prompt is not this
@@ -115,10 +118,10 @@ async def test_the_last_section_of_a_long_attached_document_is_reached_in_one_st
     # with it: nothing past the old 16,000 characters is lost any more.
     assert DEEP in part and LAST in part and "this is the end" in part
     assert READER in tools_when(model, "r1") and READER not in model.calls[0]["tools"]
-    # What is kept is the document's whole text, for this chat.
-    handle = HANDLE_RX.findall(shown)[-1]
-    _meta, whole = K().get(K().root_of(platform.engine), "chat:chat_doc", handle)
-    assert whole == text
+    # What is kept is the document's whole text, for this chat, for as long
+    # as the reply that can read it.
+    meta, whole = seen["kept"]
+    assert whole == text and meta["own_source"] is False and kept_files(platform) == []
 
 
 @pytest.mark.parametrize(("suffix", "tool"), KINDS, ids=IDS)
@@ -293,11 +296,10 @@ async def test_a_caller_with_no_owner_gets_the_old_cut(tmp_path):
     path, text = long_document(tmp_path, ".docx")
     nobody = ctx_of(platform, path.parent, session="")
     res = await platform.registry.invoke("read_document", {"path": str(path)}, nobody, platform.permissions)
-    K()._PENDING.clear()
     content = wrap_untrusted(res.output)
     assert K().hold(nobody, content, 12_000, cut=CT.tool_message_text, result=res) == \
         CT.tool_message_text(wrap_untrusted(old_answer(text)), 12_000)
-    assert K()._PENDING == {}
+    assert K().waiting(nobody) == []
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
@@ -309,22 +311,23 @@ async def test_a_whole_that_the_injection_scan_flags_is_never_shown_and_never_ke
     path, text = long_document(tmp_path, ".docx", extra=INJECTION)
     clean, clean_text = long_document(tmp_path, ".docx", name="clean")
     assert text.index(INJECTION) > 16_000
+    seen: dict = {}
     model, _ = await chat(platform, monkeypatch, lane, path.parent, [
-        [call("read_document", "r1", path=path.name), call("read_document", "r2", path=clean.name)], "Done.",
+        [call("read_document", "r1", path=path.name), call("read_document", "r2", path=clean.name)],
+        in_reply(seen, platform, "chat:chat_doc", "r2", "Done."),
     ], thread="chat_doc", tools=["read_document"])
     assert sent(model, "r1") == CT.tool_message_text(wrap_untrusted(old_answer(text)), None)
     assert "evil@example.com" not in sent(model, "r1")
     # ...and the clean document read in the same step is still kept whole.
     assert f"for this chat: {len(clean_text):,} characters" in sent(model, "r2") and LAST in sent(model, "r2")
-    stored = "".join(p.read_text(encoding="utf-8") for p in kept_files(platform))
-    assert "evil@example.com" not in stored and len([p for p in kept_files(platform) if p.suffix == ".txt"]) == 1
+    assert seen["files"] == 2 and "evil@example.com" not in seen["kept"][1], "one result kept: the clean one"
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
 async def test_a_document_too_long_to_keep_is_cut_as_before_and_says_so(tmp_path, monkeypatch, lane):
     platform = build_platform(str(tmp_path / "home"))
     path, text = long_document(tmp_path, ".docx")
-    monkeypatch.setattr(K(), "MAX_RESULT_CHARS", 30_000)
+    monkeypatch.setattr(K(), "MAX_WHOLE_CHARS", 30_000)
     model, _ = await chat(platform, monkeypatch, lane, path.parent,
                           [[call("read_document", "r1", path=path.name)], "Done."],
                           thread="chat_doc", tools=["read_document"])

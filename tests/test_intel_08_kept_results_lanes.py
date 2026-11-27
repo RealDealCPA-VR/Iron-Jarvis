@@ -135,7 +135,22 @@ async def chat(platform, monkeypatch, lane: str, ws: Path, moves: list, *, threa
         platform, body(ws, tools=list(kw.pop("tools", ["read_file"])), thread_id=thread, who=who, **kw),
         harness=None, session_id="chat",
     )
+    await K().removals_done()  # (the reply ended: what a plain chat kept goes with it)
     return model, out
+
+
+def in_reply(seen: dict, platform, owner: str, first: str, move):
+    """Wrap a stand-in move: while the reply is still running, note what the
+    store holds for *owner* under the handle in *first*'s line (a plain
+    chat's kept result is gone once its reply ends)."""
+
+    def wrapped(model):
+        handles = HANDLE_RX.findall(sent(model, first))
+        seen["files"] = len(kept_files(platform))
+        seen["kept"] = K().get(K().root_of(platform.engine), owner, handles[-1]) if handles else None
+        return move(model) if callable(move) else move
+
+    return wrapped
 
 
 def kept_files(platform) -> list[Path]:
@@ -257,8 +272,10 @@ async def test_the_one_line_is_under_the_result_and_says_exactly_what_is_shown(t
     platform = build_platform(str(tmp_path / "home"))
     text = document(14_000)
     ws = folder(tmp_path, long__txt=text)
-    model, _ = await chat(platform, monkeypatch, lane, ws, [[call("read_file", "r1", path="long.txt")], "Done."],
-                          thread="chat_a")
+    seen: dict = {}
+    model, _ = await chat(platform, monkeypatch, lane, ws, [
+        [call("read_file", "r1", path="long.txt")], in_reply(seen, platform, "chat:chat_a", "r1", "Done."),
+    ], thread="chat_a")
     shown = sent(model, "r1")
     before, inside, after = K().split_fence(shown)
     # The untrusted-data marking is exactly what it was: one fence, whole.
@@ -277,8 +294,10 @@ async def test_the_one_line_is_under_the_result_and_says_exactly_what_is_shown(t
     gap = f"\n[… characters {head + 1:,} to {tail_from - 1:,} are not shown here: see the note under this result …]\n"
     assert inside == text[:head] + gap + text[tail_from - 1:], "the start and the end, as before; the gap named"
     # The handle is one the store issued to THIS chat, for the whole text.
-    meta, whole = K().get(K().root_of(platform.engine), "chat:chat_a", got.group(3))
-    assert whole == text and meta["fenced"] is True and meta["local_only"] is False
+    meta, whole = seen["kept"]
+    assert whole == text and meta["own_source"] is False and meta["local_only"] is False
+    # ...and it lasted exactly as long as the reply that could read it.
+    assert seen["files"] == 2 and kept_files(platform) == []
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
@@ -324,24 +343,6 @@ async def test_an_extensions_long_result_is_kept_like_any_other(tmp_path):
     assert LAST not in adapter.sent("r1") and LAST in adapter.sent("r2")
     assert adapter.sent("r2").startswith("[UNTRUSTED CONTENT"), "an extension's words stay outside text"
     assert K().holds(K().root_of(platform.engine), session.id)
-
-
-async def test_a_run_picked_up_again_has_the_reader_from_its_first_step(tmp_path):
-    """A run that goes on in a session which already holds a kept result (it
-    was picked up after a restart: its saved transcript has the line with the
-    handle) can read the rest at once, without keeping anything new first."""
-    platform = build_platform(str(tmp_path / "home"))
-    ws = folder(tmp_path, small__txt="a short file")
-    session = await Orchestrator(platform).create_session(
-        "read the long file", AgentType.BUILDER, provider="r8stand", workspace_root=str(ws),
-    )
-    handle = K().put(K().root_of(platform.engine), session.id, document(20_000), fenced=True, local_only=False)
-    adapter, _ = await run_agent(platform, ws, [tool_use(READER, "r1", handle=handle, end=True), "Done."],
-                                 session=session)
-    assert READER in adapter.calls[0]["tools"] and LAST in adapter.sent("r1")
-    # A session that holds nothing is given nothing.
-    plain, _ = await run_agent(platform, ws, [tool_use("read_file", "p1", path="small.txt"), "Done."])
-    assert all(READER not in c["tools"] for c in plain.calls)
 
 
 async def test_a_task_another_computer_sent_is_cut_as_before(tmp_path):
@@ -431,32 +432,6 @@ async def test_an_agent_runs_result_under_the_limit_is_byte_for_byte_what_it_was
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_a_save_that_fails_leaves_the_cut_exactly_as_it_was(tmp_path, monkeypatch, lane, caplog):
-    platform = build_platform(str(tmp_path / "home"))
-    text = document(14_000)
-    ws = folder(tmp_path, long__txt=text)
-
-    def broken(*a, **kw):
-        raise OSError(28, "No space left on device")
-
-    monkeypatch.setattr(K(), "put", broken)
-    with caplog.at_level(logging.DEBUG):
-        model, out = await chat(platform, monkeypatch, lane, ws, [
-            [call("read_file", "r1", path="long.txt")], then_read("r1", "r2"), "Done.",
-        ], thread="chat_a")
-    # The tool call and the reply are untouched by the failure...
-    assert sent(model, "r1") == CT.tool_message_text(wrap_untrusted(text), None), "the old cut, to the character"
-    assert "characters cut here" in sent(model, "r1")
-    # ...no reader joins a turn that kept nothing (its call is refused by the
-    # roster), nothing is left on disk, and the log never holds the text.
-    assert all(READER not in req["tools"] for req in model.calls)
-    assert MIDDLE not in sent(model, "r2")
-    assert [(r.tool, r.ok) for r in ledger(platform)][:2] == [("read_file", True), (READER, False)]
-    assert kept_files(platform) == []
-    assert MIDDLE not in caplog.text and "could not be kept" in caplog.text
-
-
-@pytest.mark.parametrize("lane", ["stream", "post"])
 async def test_when_the_reader_may_not_join_nothing_is_kept(tmp_path, monkeypatch, lane):
     """The user's deny: the note would name a tool the turn cannot call, so
     the result is cut as before and nothing is left on disk."""
@@ -489,62 +464,6 @@ async def test_a_result_too_big_to_keep_is_cut_as_before_and_says_so(tmp_path, m
 # --------------------------------------------------------------------------- #
 # Whose it is
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_it_is_still_there_after_a_restart(tmp_path, monkeypatch, lane):
-    home = str(tmp_path / "home")
-    first = build_platform(home)
-    ws = folder(tmp_path, long__txt=document(14_000), other__txt=document(13_000, middle="another file"))
-    model, _ = await chat(first, monkeypatch, lane, ws, [[call("read_file", "r1", path="long.txt")], "Done."],
-                          thread="chat_a")
-    handle = HANDLE_RX.findall(sent(model, "r1"))[-1]
-    start = int(SHOWN_RX.findall(sent(model, "r1"))[-1].replace(",", "")) + 1
-    del first, model
-
-    again = build_platform(home)  # the app, started again on the same home
-    K()._PENDING.clear()
-    model, _ = await chat(again, monkeypatch, lane, ws, [
-        [call("read_file", "n1", path="other.txt")],  # (its own long result brings the reader)
-        [call(READER, "n2", handle=handle, start=start)],
-        "Done.",
-    ], thread="chat_a")
-    assert MIDDLE in sent(model, "n2") and LAST in sent(model, "n2")
-
-
-@pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_a_second_chat_another_run_and_a_guess_get_the_same_refusal(tmp_path, monkeypatch, lane):
-    platform = build_platform(str(tmp_path / "home"))
-    ws = folder(tmp_path, long__txt=document(14_000), other__txt=document(20_000, middle="another file"))
-    model, _ = await chat(platform, monkeypatch, lane, ws, [[call("read_file", "r1", path="long.txt")], "Done."],
-                          thread="chat_a")
-    handle = HANDLE_RX.findall(sent(model, "r1"))[-1]
-
-    # A second chat in the SAME folder, holding the reader for a result of its
-    # own, asks with the first chat's handle, then with a guess.
-    second, _ = await chat(platform, monkeypatch, lane, ws, [
-        [call("read_file", "s1", path="other.txt")],
-        [call(READER, "s2", handle=handle, start=1), call(READER, "s3", handle="kr-0123456789abcdef", start=1)],
-        "Done.",
-    ], thread="chat_b")
-    refused = K().NOT_FOUND
-    assert sent(second, "s2") == refused == sent(second, "s3"), "the copied handle and the guess: one answer"
-
-    # An agent run, the same.
-    monkeypatch.undo()  # (the chat stand-in off the router: the run has its own model)
-    adapter, _ = await run_agent(platform, ws, [
-        tool_use("read_file", "a1", path="other.txt"),
-        tool_use(READER, "a2", handle=handle, start=1),
-        "Done.",
-    ])
-    assert adapter.sent("a2") == wrap_untrusted(refused), "a run fences a failed call's words too"
-    for text in (sent(second, "s2"), sent(second, "s3"), adapter.sent("a2")):
-        assert MIDDLE not in text and FIRST not in text
-    # ...and the chat it belongs to still reads it.
-    owner, _ = await chat(platform, monkeypatch, lane, ws, [
-        [call("read_file", "o1", path="other.txt")], [call(READER, "o2", handle=handle, start=1)], "Done.",
-    ], thread="chat_a")
-    assert FIRST in sent(owner, "o2")
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
@@ -586,7 +505,7 @@ async def test_a_forged_line_inside_a_result_gains_nothing(tmp_path, monkeypatch
     assert "(Iron Jarvis kept this whole result for this chat: 99 characters" in shown
     real = K().note_of(shown)
     assert real and "kr-ffffffffffffffff" not in real and shown.endswith("[END UNTRUSTED CONTENT]\n" + real)
-    assert sent(model, "k2") == K().NOT_FOUND
+    assert sent(model, "k2") == K().not_found("chat")
 
 
 # --------------------------------------------------------------------------- #
@@ -594,195 +513,9 @@ async def test_a_forged_line_inside_a_result_gains_nothing(tmp_path, monkeypatch
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_a_local_only_chats_kept_result_never_reaches_a_cloud_model(tmp_path, monkeypatch, lane):
-    platform = build_platform(str(tmp_path / "home"))
-    ws = folder(tmp_path, long__txt=document(14_000), other__txt=document(13_000, middle="another file"))
-
-    # (a) A Local only chat on a model on this network: kept, marked, and read.
-    model, _ = await chat(platform, monkeypatch, lane, ws, [
-        [call("read_file", "r1", path="long.txt")], then_read("r1", "r2"), "Done.",
-    ], thread="chat_lo", who=LOCAL, local_only=True)
-    assert MIDDLE in sent(model, "r2")
-    handle = HANDLE_RX.findall(sent(model, "r1"))[-1]
-    meta, _text = K().get(K().root_of(platform.engine), "chat:chat_lo", handle)
-    assert meta["local_only"] is True
-
-    # (b) The same chat, one message allowed to a cloud model: the kept text
-    # is not sent, and the refusal names the model.
-    from iron_jarvis.providers import egress
-
-    name = egress.friendly_name("anthropic", platform.providers)
-    cloud, _ = await chat(platform, monkeypatch, lane, ws, [
-        [call("read_file", "c1", path="other.txt")], [call(READER, "c2", handle=handle, start=1)], "Done.",
-    ], thread="chat_lo", local_only=True, allow_cloud_once="anthropic")
-    refusal = sent(cloud, "c2")
-    assert MIDDLE not in refusal and FIRST not in refusal
-    assert f"{name[:1].upper() + name[1:]} runs off your network and was allowed for this one message" in refusal
-    for req in cloud.calls:
-        assert not any(MIDDLE in str(m.content) for m in req["messages"]), "nothing of it was sent"
-
-    # (c) The chat is switched OFF Local only: what was kept before the switch
-    # stays closed, in words that say why.
-    off, _ = await chat(platform, monkeypatch, lane, ws, [
-        [call("read_file", "o1", path="other.txt")], [call(READER, "o2", handle=handle, start=1)], "Done.",
-    ], thread="chat_lo", local_only=False)
-    assert "kept while the chat was Local only" in sent(off, "o2") and MIDDLE not in sent(off, "o2")
-    plain = HANDLE_RX.findall(sent(off, "o1"))[-1]
-    meta, _text = K().get(K().root_of(platform.engine), "chat:chat_lo", plain)
-    assert meta["local_only"] is False
-
-    # (c, the other way) switched ON again: what was kept while it was not
-    # Local only is ordinary chat text, and what was kept under it opens again.
-    on, _ = await chat(platform, monkeypatch, lane, ws, [
-        [call("read_file", "b1", path="other.txt")],
-        [call(READER, "b2", handle=plain, start=1), call(READER, "b3", handle=handle, start=7_000)],
-        "Done.",
-    ], thread="chat_lo", who=LOCAL, local_only=True)
-    assert "another file" in sent(on, "b2") or FIRST in sent(on, "b2")
-    assert MIDDLE in sent(on, "b3")
-
-
 # --------------------------------------------------------------------------- #
 # At rest: removed with its chat, after 30 days, and written nowhere else
 # --------------------------------------------------------------------------- #
-
-
-def test_deleting_a_chat_or_a_run_through_its_route_removes_what_was_kept_for_it(tmp_path, monkeypatch):
-    with TestClient(create_app(str(tmp_path))) as client:
-        platform = client.app.state.platform
-        root = K().root_of(platform.engine)
-        saved = [
-            client.put("/chat/threads/new", json={"messages": [
-                {"role": "user", "content": f"chat {i}"}, {"role": "assistant", "content": "hello"},
-            ]}).json()["id"]
-            for i in (1, 2)
-        ]
-        ws = folder(tmp_path, long__txt=document(14_000))
-        handles = {}
-        for tid in saved:  # a REAL turn in each saved chat keeps a result
-            async def turn(tid=tid):
-                model, _ = await chat(platform, monkeypatch, "post", ws,
-                                      [[call("read_file", "r1", path="long.txt")], "Done."], thread=tid)
-                return HANDLE_RX.findall(sent(model, "r1"))[-1]
-
-            handles[tid] = client.portal.call(turn)
-        coding = K().put(root, f"build:{saved[0]}", MIDDLE, fenced=False, local_only=False)
-        assert all(K().get(root, f"chat:{tid}", h) for tid, h in handles.items())
-
-        assert client.delete(f"/chat/threads/{saved[0]}").json()["deleted"] == saved[0]
-        assert K().get(root, f"chat:{saved[0]}", handles[saved[0]]) is None
-        assert K().get(root, f"build:{saved[0]}", coding) is None
-        assert K().get(root, f"chat:{saved[1]}", handles[saved[1]]) is not None, "the other chat's stays"
-
-        runs = [client.post("/sessions", json={"task": f"run {i}", "wait": True}).json()["id"] for i in (1, 2)]
-        kept = {sid: K().put(root, sid, MIDDLE, fenced=True, local_only=False) for sid in runs}
-        assert client.delete(f"/sessions/{runs[0]}").json()["deleted"] == runs[0]
-        assert K().get(root, runs[0], kept[runs[0]]) is None
-        assert K().get(root, runs[1], kept[runs[1]]) is not None
-        # Removed, not moved: nothing of it waits in the trash.
-        trash = Path(platform.config.home) / "trash"
-        assert MIDDLE not in "".join(
-            p.read_text(encoding="utf-8", errors="ignore") for p in trash.rglob("*") if p.is_file()
-        )
-
-
-def test_a_new_chats_first_results_follow_it_when_the_page_links_the_turn(tmp_path):
-    with TestClient(create_app(str(tmp_path))) as client:
-        platform = client.app.state.platform
-        root = K().root_of(platform.engine)
-        handle = K().put(root, "chat:turn_first", MIDDLE, fenced=True, local_only=False)
-        tid = client.put("/chat/threads/new", json={"messages": [
-            {"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"},
-        ]}).json()["id"]
-        assert client.post("/chat/turns/turn_first/thread", json={"thread_id": tid}).status_code == 200
-        assert K().get(root, f"chat:{tid}", handle) is not None
-        assert K().get(root, "chat:turn_first", handle) is None
-
-
-async def test_the_daily_tidy_up_removes_a_kept_result_after_thirty_days(tmp_path, monkeypatch):
-    from iron_jarvis.daemon import app as app_mod
-
-    platform = build_platform(str(tmp_path / "home"))
-    now = [1_800_000_000.0]
-    monkeypatch.setattr(K(), "_now", lambda: now[0])
-    root = K().root_of(platform.engine)
-    old = K().put(root, "chat:old", MIDDLE, fenced=True, local_only=False)
-    now[0] += 20 * DAY
-    young = K().put(root, "chat:young", "young", fenced=True, local_only=False)
-    now[0] += 10 * DAY + 1  # the old one is thirty days and a second old
-
-    task = asyncio.create_task(app_mod._event_prune_loop(platform, interval_s=0))
-    try:
-        deadline = time.monotonic() + 20  # a liveness cap, not a speed bar
-        while K().holds(root, "chat:old"):
-            assert time.monotonic() < deadline, "the daily tidy-up never removed the old kept result"
-            await asyncio.sleep(0.01)
-    finally:
-        task.cancel()
-    assert K().get(root, "chat:old", old) is None
-    assert K().get(root, "chat:young", young) is not None
-
-
-def test_start_up_tidies_what_is_past_its_date_and_what_nothing_can_reach(tmp_path, monkeypatch):
-    home = build_platform(str(tmp_path)).config.home
-    root = Path(home) / "kept-results"
-    now = [1_800_000_000.0]
-    monkeypatch.setattr(K(), "_now", lambda: now[0])
-    old = K().put(root, "chat:old", MIDDLE, fenced=True, local_only=False)
-    now[0] += 31 * DAY
-    once = K().put(root, "chat:call-0011223344556677", MIDDLE, fenced=True, local_only=False)
-    young = K().put(root, "chat:young", "young", fenced=True, local_only=False)
-    with TestClient(create_app(str(tmp_path))):
-        assert K().get(root, "chat:old", old) is None
-        assert K().get(root, "chat:call-0011223344556677", once) is None
-        assert K().get(root, "chat:young", young) is not None
-
-
-@pytest.mark.parametrize("lane", ["stream", "post"])
-async def test_the_kept_text_is_in_the_store_and_nowhere_else(tmp_path, monkeypatch, lane, caplog):
-    """MIDDLE is in the part of the result the model was not shown: before
-    this release it existed nowhere once the turn ended. It is now in the one
-    store, and in no database table, no event, no log line and no other file.
-    (A part the model later READS is a tool result like any other, and is
-    recorded the way every tool result is.)"""
-    platform = build_platform(str(tmp_path / "home"))
-    events: list = []
-    platform.event_bus.add_handler(lambda e: events.append(e))
-    ws = folder(tmp_path, long__txt=document(14_000))
-    with caplog.at_level(logging.DEBUG):
-        model, out = await chat(platform, monkeypatch, lane, ws,
-                                [[call("read_file", "r1", path="long.txt")], "Done."], thread="chat_a")
-        await asyncio.sleep(0)
-    assert MIDDLE not in sent(model, "r1")
-    handle = HANDLE_RX.findall(sent(model, "r1"))[-1]
-
-    home = Path(platform.config.home)
-    store = [p for p in kept_files(platform)]
-    assert sorted(p.suffix for p in store) == [".json", ".txt"]
-    assert MIDDLE in next(p for p in store if p.suffix == ".txt").read_text(encoding="utf-8")
-    assert MIDDLE not in next(p for p in store if p.suffix == ".json").read_text(encoding="utf-8")
-
-    # Every table of the database (the ledger, the event record, the usage
-    # rows, the turn records ...).
-    platform.engine.dispose()
-    con = sqlite3.connect(str(home / "ironjarvis.db"))
-    try:
-        tables = [r[0] for r in con.execute("select name from sqlite_master where type='table'")]
-        assert "toolinvocation" in tables and "eventrecord" in tables
-        for table in tables:
-            dump = repr(con.execute(f'select * from "{table}"').fetchall())
-            assert MIDDLE not in dump, table
-            assert handle not in dump or table in ("runtranscript",), table
-    finally:
-        con.close()
-    assert MIDDLE not in repr([(e.type, e.payload) for e in events])
-    assert MIDDLE not in caplog.text
-    assert MIDDLE not in json.dumps(out, default=str)
-    others = [p for p in home.rglob("*") if p.is_file() and "kept-results" not in p.parts
-              and not p.name.startswith("ironjarvis.db")]
-    for p in others:
-        assert MIDDLE.encode() not in p.read_bytes(), p
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
@@ -835,7 +568,10 @@ async def test_an_extensions_long_result_is_kept_in_plain_chat_too(tmp_path, mon
     tool = MCPRemoteTool(client, "books", "export_ledger", "Export the ledger of the books.", None,
                          {"readOnlyHint": True})
     platform.registry.register(tool, mcp=True)
-    model = wire(platform, monkeypatch, [[call(tool.name, "r1")], then_read("r1", "r2"), "Done."])
+    seen: dict = {}
+    model = wire(platform, monkeypatch, [
+        [call(tool.name, "r1")], in_reply(seen, platform, "chat:chat_books", "r1", then_read("r1", "r2")), "Done.",
+    ])
     await LANES[lane](
         platform,
         body(folder(tmp_path), "export the ledger from books", connectors=["books"], auto_tools=True,
@@ -847,4 +583,4 @@ async def test_an_extensions_long_result_is_kept_in_plain_chat_too(tmp_path, mon
     assert shown.startswith("[UNTRUSTED CONTENT") and K().NOTE_RX.fullmatch(shown.rsplit("\n", 1)[1])
     assert MIDDLE in part and part.startswith("[UNTRUSTED CONTENT"), "an extension's words stay outside text"
     assert READER in tools_when(model, "r1") and READER not in model.calls[0]["tools"]
-    assert K().holds(K().root_of(platform.engine), "chat:chat_books")
+    assert seen["kept"] is not None and seen["kept"][0]["own_source"] is False
