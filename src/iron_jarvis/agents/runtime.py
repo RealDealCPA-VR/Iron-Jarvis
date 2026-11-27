@@ -5422,9 +5422,10 @@ class AgentRuntime:
         # so the final-answer exit knows how many are LEFT.
         _offer_from = run.steps
         # v1.421.0: this invocation's tool definitions as the wire carries
-        # them (serialised once — they do not change between its steps), so
-        # the budget planner can price them against a KNOWN window.
+        # them, so the budget planner can price them against a KNOWN window.
+        # Serialised again only when the list of names changes (see below).
         _tools_blob: str | None = None
+        _tools_names: tuple[str, ...] = ()
         # Release 8 of the intelligence plan: a run that STARTS with a
         # kept-result line in its messages (picked up after a restart, it
         # reads its saved steps back) has the reader from its first step,
@@ -5519,10 +5520,17 @@ class AgentRuntime:
                 # with no tools, or an unknown window, plans byte-identically.
                 _fixed_kw: dict[str, int] = {}
                 if _win and tool_specs:
-                    if _tools_blob is None:
+                    # Serialised again whenever the list changed: the script
+                    # tool joins MID-RUN (`_offer_script_tool`, in place) and
+                    # rewrites the file tools' descriptions, ~1,300 tokens a
+                    # once-only blob never priced, so the steps after it went
+                    # out over a known window (found in the idea 09 review).
+                    _names = tuple(str(s.get("name") or "") for s in tool_specs if isinstance(s, dict))
+                    if _tools_blob is None or _tools_names != _names:
                         _tools_blob = json.dumps(
                             tool_specs, ensure_ascii=False, sort_keys=True, default=str,
                         )
+                        _tools_names = _names
                     _fixed_kw = {"fixed_tokens": _estimate_tokens(_tools_blob, _cpt)}
 
                 _plan = plan_agent_transcript(

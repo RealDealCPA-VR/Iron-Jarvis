@@ -76,7 +76,7 @@
          "type": "string"
         },
         "steps": {
-         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. Two kinds hold steps of their own. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps` (op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" reads as a number). for_each: runs `steps` once for each item of `over`, either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are the item. {{Step.data.total}} reads one field of a step's data. Example: {name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: \"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], else_steps: [...]}]}.",
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps`; op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches. A number check reads {{Step.data.field}} or a step told to answer with the number alone. for_each: runs `steps` per item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; inside, {{item}}, {{item.name}}, {{index}}.",
          "items": {
           "properties": {
            "agent": {
@@ -88,11 +88,9 @@
             "type": "object"
            },
            "condition": {
-            "description": "kind=if only: {left, op, right}",
             "type": "object"
            },
            "else_steps": {
-            "description": "kind=if only: the steps otherwise",
             "items": {
              "type": "object"
             },
@@ -107,7 +105,7 @@
             "type": "string"
            },
            "max_items": {
-            "description": "kind=for_each only: at most this many items (default 200)",
+            "description": "for_each: default 200",
             "type": "integer"
            },
            "message": {
@@ -122,11 +120,9 @@
             "type": "string"
            },
            "over": {
-            "description": "kind=for_each only: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
             "type": "object"
            },
            "steps": {
-            "description": "kind=if: the steps when the condition holds; kind=for_each: the steps for each item",
             "items": {
              "type": "object"
             },
@@ -257,7 +253,7 @@
          "type": "string"
         },
         "steps": {
-         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. Two kinds hold steps of their own. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps` (op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" reads as a number). for_each: runs `steps` once for each item of `over`, either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are the item. {{Step.data.total}} reads one field of a step's data. Example: {name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: \"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], else_steps: [...]}]}.",
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps`; op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches. A number check reads {{Step.data.field}} or a step told to answer with the number alone. for_each: runs `steps` per item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; inside, {{item}}, {{item.name}}, {{index}}.",
          "items": {
           "properties": {
            "agent": {
@@ -269,11 +265,9 @@
             "type": "object"
            },
            "condition": {
-            "description": "kind=if only: {left, op, right}",
             "type": "object"
            },
            "else_steps": {
-            "description": "kind=if only: the steps otherwise",
             "items": {
              "type": "object"
             },
@@ -288,7 +282,7 @@
             "type": "string"
            },
            "max_items": {
-            "description": "kind=for_each only: at most this many items (default 200)",
+            "description": "for_each: default 200",
             "type": "integer"
            },
            "message": {
@@ -303,11 +297,9 @@
             "type": "string"
            },
            "over": {
-            "description": "kind=for_each only: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
             "type": "object"
            },
            "steps": {
-            "description": "kind=if: the steps when the condition holds; kind=for_each: the steps for each item",
             "items": {
              "type": "object"
             },
@@ -460,7 +452,7 @@
          "type": "string"
         },
         "steps": {
-         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. Two kinds hold steps of their own. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps` (op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" reads as a number). for_each: runs `steps` once for each item of `over`, either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are the item. {{Step.data.total}} reads one field of a step's data. Example: {name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: \"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], else_steps: [...]}]}.",
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps`; op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches. A number check reads {{Step.data.field}} or a step told to answer with the number alone. for_each: runs `steps` per item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; inside, {{item}}, {{item.name}}, {{index}}.",
          "items": {
           "properties": {
            "agent": {
@@ -472,11 +464,9 @@
             "type": "object"
            },
            "condition": {
-            "description": "kind=if only: {left, op, right}",
             "type": "object"
            },
            "else_steps": {
-            "description": "kind=if only: the steps otherwise",
             "items": {
              "type": "object"
             },
@@ -491,7 +481,7 @@
             "type": "string"
            },
            "max_items": {
-            "description": "kind=for_each only: at most this many items (default 200)",
+            "description": "for_each: default 200",
             "type": "integer"
            },
            "message": {
@@ -506,11 +496,9 @@
             "type": "string"
            },
            "over": {
-            "description": "kind=for_each only: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
             "type": "object"
            },
            "steps": {
-            "description": "kind=if: the steps when the condition holds; kind=for_each: the steps for each item",
             "items": {
              "type": "object"
             },
@@ -692,7 +680,7 @@
          "type": "string"
         },
         "steps": {
-         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. Two kinds hold steps of their own. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps` (op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" reads as a number). for_each: runs `steps` once for each item of `over`, either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are the item. {{Step.data.total}} reads one field of a step's data. Example: {name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: \"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], else_steps: [...]}]}.",
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps`; op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches. A number check reads {{Step.data.field}} or a step told to answer with the number alone. for_each: runs `steps` per item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; inside, {{item}}, {{item.name}}, {{index}}.",
          "items": {
           "properties": {
            "agent": {
@@ -704,11 +692,9 @@
             "type": "object"
            },
            "condition": {
-            "description": "kind=if only: {left, op, right}",
             "type": "object"
            },
            "else_steps": {
-            "description": "kind=if only: the steps otherwise",
             "items": {
              "type": "object"
             },
@@ -723,7 +709,7 @@
             "type": "string"
            },
            "max_items": {
-            "description": "kind=for_each only: at most this many items (default 200)",
+            "description": "for_each: default 200",
             "type": "integer"
            },
            "message": {
@@ -738,11 +724,9 @@
             "type": "string"
            },
            "over": {
-            "description": "kind=for_each only: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
             "type": "object"
            },
            "steps": {
-            "description": "kind=if: the steps when the condition holds; kind=for_each: the steps for each item",
             "items": {
              "type": "object"
             },
@@ -873,7 +857,7 @@
          "type": "string"
         },
         "steps": {
-         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. Two kinds hold steps of their own. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps` (op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" reads as a number). for_each: runs `steps` once for each item of `over`, either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are the item. {{Step.data.total}} reads one field of a step's data. Example: {name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: \"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], else_steps: [...]}]}.",
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps`; op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches. A number check reads {{Step.data.field}} or a step told to answer with the number alone. for_each: runs `steps` per item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; inside, {{item}}, {{item.name}}, {{index}}.",
          "items": {
           "properties": {
            "agent": {
@@ -885,11 +869,9 @@
             "type": "object"
            },
            "condition": {
-            "description": "kind=if only: {left, op, right}",
             "type": "object"
            },
            "else_steps": {
-            "description": "kind=if only: the steps otherwise",
             "items": {
              "type": "object"
             },
@@ -904,7 +886,7 @@
             "type": "string"
            },
            "max_items": {
-            "description": "kind=for_each only: at most this many items (default 200)",
+            "description": "for_each: default 200",
             "type": "integer"
            },
            "message": {
@@ -919,11 +901,9 @@
             "type": "string"
            },
            "over": {
-            "description": "kind=for_each only: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
             "type": "object"
            },
            "steps": {
-            "description": "kind=if: the steps when the condition holds; kind=for_each: the steps for each item",
             "items": {
              "type": "object"
             },
@@ -1081,7 +1061,7 @@
          "type": "string"
         },
         "steps": {
-         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. Two kinds hold steps of their own. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps` (op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" reads as a number). for_each: runs `steps` once for each item of `over`, either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are the item. {{Step.data.total}} reads one field of a step's data. Example: {name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: \"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], else_steps: [...]}]}.",
+         "description": "2-6 ordered steps. `kind` decides what a step IS: agent (the default) runs `agent` on `task`; tool calls `tool` with `args`; ask pauses the run to ask the user `message`; notify sends the user `message`. if: runs `steps` when `condition` {left, op, right} holds, else `else_steps`; op: is, is_not, contains, over, under, at_least, at_most, empty, not_empty, matches. A number check reads {{Step.data.field}} or a step told to answer with the number alone. for_each: runs `steps` per item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; inside, {{item}}, {{item.name}}, {{index}}.",
          "items": {
           "properties": {
            "agent": {
@@ -1093,11 +1073,9 @@
             "type": "object"
            },
            "condition": {
-            "description": "kind=if only: {left, op, right}",
             "type": "object"
            },
            "else_steps": {
-            "description": "kind=if only: the steps otherwise",
             "items": {
              "type": "object"
             },
@@ -1112,7 +1090,7 @@
             "type": "string"
            },
            "max_items": {
-            "description": "kind=for_each only: at most this many items (default 200)",
+            "description": "for_each: default 200",
             "type": "integer"
            },
            "message": {
@@ -1127,11 +1105,9 @@
             "type": "string"
            },
            "over": {
-            "description": "kind=for_each only: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
             "type": "object"
            },
            "steps": {
-            "description": "kind=if: the steps when the condition holds; kind=for_each: the steps for each item",
             "items": {
              "type": "object"
             },

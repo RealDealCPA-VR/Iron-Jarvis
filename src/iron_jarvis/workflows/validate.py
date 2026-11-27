@@ -32,6 +32,9 @@ MAX_NESTING = 3
 DEFAULT_MAX_ITEMS = 200
 #: The most a For each may be set to (the same as a run's step limit).
 MAX_ITEMS_CAP = 2000
+#: The most a For each over a folder may be set to: one folder listing shows
+#: at most this many entries (``engine.FOLDER_LIST_CAP``).
+FOLDER_ITEMS_CAP = 1000
 #: Light on the PC (north star 7): at most this many items at once.
 MAX_PARALLEL = 4
 #: Names a For each gives the steps inside it.
@@ -42,18 +45,16 @@ ITEM_NAMES: tuple[str, ...] = ("item", "index")
 #: that lets a model write a workflow (chat's ``workflow_draft``, the
 #: ``workflow_create`` tool, ``POST /workflows/generate``), so they cannot
 #: drift apart.
+#: It is sent with every request that offers those doors, so it is kept short
+#: (``tests/test_agent_too_small_v14210.py`` and ``test_reply_budget_v1387.py``
+#: fit a request into a known window with every tool definition priced).
 BLOCKS_FOR_MODELS = (
-    "Two kinds hold steps of their own. if: runs `steps` when `condition` "
-    "{left, op, right} holds, else `else_steps` (op: is, is_not, contains, "
-    "over, under, at_least, at_most, empty, not_empty, matches; \"5,000.00\" "
-    "reads as a number). for_each: runs `steps` once for each item of `over`, "
-    "either {files: {folder, glob}} or {from: \"{{List.data}}\"} (a JSON list "
-    "an earlier step gave); inside it {{item}}, {{item.name}} and {{index}} are "
-    "the item. {{Step.data.total}} reads one field of a step's data. Example: "
-    "{name: \"Each PDF\", kind: \"for_each\", over: {files: {folder: \"C:/Intake\", "
-    "glob: \"*.pdf\"}}, steps: [{name: \"Big?\", kind: \"if\", condition: {left: "
-    "\"{{Read.data.total}}\", op: \"over\", right: \"5000\"}, steps: [...], "
-    "else_steps: [...]}]}."
+    "if: runs `steps` when `condition` {left, op, right} holds, else "
+    "`else_steps`; op: is, is_not, contains, over, under, at_least, at_most, "
+    "empty, not_empty, matches. A number check reads {{Step.data.field}} or a "
+    "step told to answer with the number alone. for_each: runs `steps` per "
+    "item of `over`, {files: {folder, glob}} or {from: \"{{Step.data}}\"}; "
+    "inside, {{item}}, {{item.name}}, {{index}}."
 )
 
 
@@ -404,6 +405,12 @@ def _block(
                 out.append(
                     f"{here} ({label}): max_items is how many items it works through, "
                     f"a whole number from 1 to {MAX_ITEMS_CAP:,}"
+                )
+            elif isinstance(files, dict) and n > FOLDER_ITEMS_CAP:
+                out.append(
+                    f"{here} ({label}): a For each over a folder works through at most "
+                    f"{FOLDER_ITEMS_CAP:,} files, the most one listing of a folder shows; "
+                    f"set max_items to {FOLDER_ITEMS_CAP:,} or less, or split the folder"
                 )
         par_raw = raw.get("parallel")
         if par_raw is not None:

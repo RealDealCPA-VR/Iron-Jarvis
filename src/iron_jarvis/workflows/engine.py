@@ -250,6 +250,12 @@ DEFAULT_MAX_ITEMS = 200
 MAX_STEP_RUNS = 2000
 #: Light on the PC (north star 7): at most this many items at once.
 MAX_PARALLEL = 4
+#: How many entries one ``list_folder`` listing shows (its own cap): a For
+#: each over a folder works through at most this many files
+#: (``validate.FOLDER_ITEMS_CAP``), and a folder that holds more matching
+#: entries than one listing shows stops the block with words, never a part
+#: of the folder worked through as if it were all of it.
+FOLDER_LIST_CAP = 1000
 #: What a For each keeps of each item's result (its row, and each step of a
 #: finished item): the run record grows with every item, and this bounds it.
 _MAX_ITEM_SUMMARY = 300
@@ -905,13 +911,34 @@ def rollup_words(done: int, failed: int, not_run: int, total: int) -> str:
     return words
 
 
-def items_bound_words(name: str, limit: int, found: int, done: int) -> str:
+def items_bound_words(name: str, limit: int, found: int, done: int, *, folder: bool = False) -> str:
     """D-09.1: a For each given more items than it may work through stops at
-    the next one and says so."""
+    the next one and says so. Over a folder the limit goes up to
+    :data:`FOLDER_LIST_CAP`, the most one listing shows."""
+    way = (
+        f"raise its limit (up to {FOLDER_LIST_CAP:,} for a folder) or split the folder."
+        if folder
+        else "raise its limit (up to 2,000) or split the list."
+    )
     return (
         f"Stopped at item {limit + 1:,} of {found:,}: “{name}” works through at most "
-        f"{limit:,} items in one run, and {done:,} of those are done. To go further, "
-        "raise its limit (up to 2,000) or split the list."
+        f"{limit:,} items in one run, and {done:,} of those are done. To go further, " + way
+    )
+
+
+def folder_unlisted_words(folder: str, total: int, shown: int, capped: bool) -> str:
+    """A folder a For each could not list in full: it stops before the first
+    item, so no part of the folder is worked through as if it were all."""
+    if capped:
+        return (
+            f"could not list every file in {folder}: it holds more than {total:,} "
+            "entries, or it was too slow to read in one go, so nothing was worked "
+            "through. Split it into smaller folders, or narrow the names it looks for."
+        )
+    return (
+        f"could not list every file in {folder}: {total:,} entries match and one "
+        f"listing shows {shown:,}, so nothing was worked through. Split it into "
+        "smaller folders, or narrow the names it looks for."
     )
 
 
@@ -2123,8 +2150,10 @@ class WorkflowEngine:
 
         outputs = ctx.outputs
         prior = outputs.get(key) if isinstance(outputs.get(key), dict) else {}
-        took = prior.get("took") if prior.get("status") == "running" else None
-        words = str(prior.get("summary") or "")
+        # Still working, or finished failed (a resume reaches it again when
+        # its failure was skipped past): the lane it took stands either way.
+        took = prior.get("took") if prior.get("status") in ("running", "failed") else None
+        words = str(prior.get("took_words") or prior.get("summary") or "")
         if took not in ("then", "else"):
             view = _scope_view(outputs, frame)
             absent = missing_values(step, view)
@@ -2163,7 +2192,7 @@ class WorkflowEngine:
         elif res["status"] == "failed" and res.get("failed"):
             name, failed = res["failed"]
             out.update(
-                status="failed",
+                status="failed", took_words=words,
                 summary=f"{words} “{name}” failed: {failed.get('summary') or 'it failed'}"[:_MAX_STEP_SUMMARY],
             )
             if failed.get("bound"):
@@ -2173,7 +2202,7 @@ class WorkflowEngine:
         elif res.get("handled"):
             name, failed = res["handled"][0]
             out.update(
-                status="failed", handled="skipped",
+                status="failed", handled="skipped", took_words=words,
                 summary=f"{words} “{name}” failed and was skipped: {failed.get('summary') or ''}"[:_MAX_STEP_SUMMARY],
             )
         return out
@@ -2199,7 +2228,7 @@ class WorkflowEngine:
             pattern = render_template(str(files.get("glob") or ""), view).strip() or "*"
             listing = Step(
                 name=step.name, kind="tool", tool="list_folder",
-                args={"path": folder, "pattern": pattern, "limit": 1000},
+                args={"path": folder, "pattern": pattern, "limit": FOLDER_LIST_CAP},
             )
             kept: dict = {}
             out = await self._run_tool_step(
@@ -2221,8 +2250,18 @@ class WorkflowEngine:
                 ),
                 key=lambda it: it["name"].casefold(),
             )
-            beyond = max(0, int(data.get("total") or 0) - len(entries))
-            return items[:limit], len(items) + beyond, True, None
+            listed = int(data.get("total") or 0)
+            beyond = max(0, listed - len(entries))
+            found = len(items) + beyond
+            # The listing is the whole folder only when it was neither cut
+            # short (a scan that hit its cap or its deadline) nor showed fewer
+            # entries than match. A part is worked through only when the
+            # limit stops the block inside the part anyway (and says so).
+            if data.get("scan_capped") or (beyond and len(items) < min(found, limit)):
+                return [], 0, True, folder_unlisted_words(
+                    str(base), listed, len(entries), bool(data.get("scan_capped")),
+                )
+            return items[:limit], found, True, None
         source = over.get("from")
         if not isinstance(source, str) or not source.strip():
             return [], 0, False, "there is no list to work through"
@@ -2260,9 +2299,16 @@ class WorkflowEngine:
         ``<block>/<n>/`` and a finished item is never run again. A failed
         item follows the block's "if this fails": stop (halt), or go on with
         the next item (skip: the run ends "Part failed"). D-09.1: at most
-        ``max_items`` (200) items; the next one stops the run and says so."""
+        ``max_items`` (200) items; the next one stops the run and says so.
+
+        A For each that FINISHED failed keeps its list: a resume that reaches
+        it again (a failure it skipped past, or one inside an If's lane that
+        was skipped past) gets its own result back, and never lists the
+        folder again, so no item's result lands on another item."""
         outputs = ctx.outputs
         prior = outputs.get(key) if isinstance(outputs.get(key), dict) else {}
+        if prior.get("status") == "failed" and isinstance(prior.get("list"), list):
+            return prior
         if not (prior.get("status") == "running" and isinstance(prior.get("list"), list)):
             items, found, outside, problem = await self._items_for(
                 ctx, step, _scope_view(outputs, frame)
@@ -2273,8 +2319,10 @@ class WorkflowEngine:
                     "summary": f"“{step.name}” could not start: {problem}"[:_MAX_STEP_SUMMARY],
                     "kind": "for_each", "done": 0, "failed": 0, "skipped": 0, "total": 0, "data": [],
                 }
+            # While it works its line counts only what is settled: "6 of 14
+            # done", never the items still to come as "not run".
             prior = {
-                "status": "running", "kind": "for_each", "summary": rollup_words(0, 0, len(items), len(items)),
+                "status": "running", "kind": "for_each", "summary": rollup_words(0, 0, 0, len(items)),
                 "list": items, "found": found, "outside": outside,
                 "done": 0, "failed": 0, "skipped": len(items), "total": len(items), "data": [],
             }
@@ -2300,7 +2348,7 @@ class WorkflowEngine:
             done, failed, not_run = counts()
             prior.update(
                 done=done, failed=failed, skipped=not_run,
-                summary=rollup_words(done, failed, not_run, total),
+                summary=rollup_words(done, failed, 0, total),
                 data=[rows[n] for n in sorted(rows)],
             )
             outputs[key] = prior
@@ -2326,6 +2374,9 @@ class WorkflowEngine:
                     rows[n] = {
                         "n": n, "label": label, "status": "failed",
                         "summary": f"“{name}” failed: {failed.get('summary') or ''}"[:_MAX_ITEM_SUMMARY],
+                        # What stopped it, so a resume that finds this row
+                        # (and a block that halts) says it the same way.
+                        "step": name, "why": str(failed.get("summary") or "")[:_MAX_ITEM_SUMMARY],
                     }
                     first_failure.append((n, name, failed))
                 else:
@@ -2355,6 +2406,16 @@ class WorkflowEngine:
         pending = [(n, it) for n, it in enumerate(items, 1) if rows.get(n, {}).get("status") not in ("done", "failed")]
         stop: tuple[int, dict] | None = None
         cancelled = False
+        if step.on_failure != "skip":
+            # A block that stops at a failed item stays stopped there: a
+            # resume that finds that item failed runs none after it (an item
+            # before it that was under way, several at once, is finished).
+            halted_at = next((n for n in sorted(rows) if rows[n].get("status") == "failed"), None)
+            if halted_at is not None:
+                row = rows[halted_at]
+                pending = [(n, it) for n, it in pending if n < halted_at]
+                stop = (halted_at, {"summary": str(row.get("why") or row.get("summary") or "")})
+                first_failure.append((halted_at, str(row.get("step") or step.name), {}))
         if parallel == 1:
             for n, item in pending:
                 if await self._cancelling(ctx.run_id):
@@ -2417,6 +2478,9 @@ class WorkflowEngine:
         if cancelled:
             out["status"] = "cancelled"
             return out
+        # Every way out from here but "completed" is "failed": the list stays
+        # with it (see the docstring), and goes once the block is done.
+        out["list"], out["found"] = items, found
         if stop is not None:
             n, bad = stop
             name = next((f[1] for f in first_failure if f[0] == n), step.name)
@@ -2433,9 +2497,12 @@ class WorkflowEngine:
                 out["session_id"] = bad["session_id"]
             return out
         if found > limit:
+            over = step.over if isinstance(step.over, dict) else {}
             out.update(
                 status="failed", bound=True,
-                summary=items_bound_words(step.name, limit, found, done),
+                summary=items_bound_words(
+                    step.name, limit, found, done, folder=isinstance(over.get("files"), dict),
+                ),
             )
             return out
         if failed:
@@ -2443,6 +2510,9 @@ class WorkflowEngine:
             out.update(status="failed", handled="skipped")
             if first is not None and first[2].get("kind") == "agent" and first[2].get("session_id"):
                 out["session_id"] = first[2]["session_id"]
+            return out
+        out.pop("list")
+        out.pop("found")
         return out
 
     async def _run_agent_step(

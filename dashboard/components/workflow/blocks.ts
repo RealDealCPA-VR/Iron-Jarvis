@@ -47,6 +47,8 @@ export const OTHERWISE_WORD = "Otherwise";
 /** D-09.1: how many items a For each works through unless told otherwise. */
 export const DEFAULT_MAX_ITEMS = 200;
 export const MAX_ITEMS_CAP = 2000;
+/** Over a folder: the most one listing of a folder shows (validate.FOLDER_ITEMS_CAP). */
+export const FOLDER_ITEMS_CAP = 1000;
 export const MAX_PARALLEL = 4;
 
 /** D-09.1: said wherever a For each holds an Agent step (the chat's card and
@@ -150,6 +152,18 @@ export function hasAgentInside(steps: unknown): boolean {
     const kind = st.kind || "agent";
     if (kind === "agent") return true;
     return hasAgentInside(st.steps) || hasAgentInside(st.else_steps);
+  });
+}
+
+/** Whether any For each in a list of steps, at any depth (inside an If's
+ *  lane too), holds an Agent step: the card's cost line (D-09.1). */
+export function eachHoldsAgent(steps: unknown): boolean {
+  if (!Array.isArray(steps)) return false;
+  return steps.some((s) => {
+    if (!s || typeof s !== "object") return false;
+    const st = s as { kind?: string; steps?: unknown; else_steps?: unknown };
+    if (st.kind === "for_each" && hasAgentInside(st.steps)) return true;
+    return eachHoldsAgent(st.steps) || eachHoldsAgent(st.else_steps);
   });
 }
 

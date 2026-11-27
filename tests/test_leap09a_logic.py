@@ -151,6 +151,28 @@ def test_the_two_sides_are_filled_in_from_the_record():
     assert held and words == "“5,200.00” is over “5000”"
 
 
+@pytest.mark.parametrize(
+    "left,op,right,said",
+    [
+        ("4,999.99", "over", "5000", "“4,999.99” is not over “5000”"),
+        ("9", "under", "5", "“9” is not under “5”"),
+        ("1", "at_least", "2", "“1” is not at least “2”"),
+        ("3", "at_most", "2", "“3” is not at most “2”"),
+        ("a", "is", "b", "“a” is not “b”"),
+        ("a", "is_not", "a", "“a” is “a”"),
+        ("ACME", "contains", "zeta", "“ACME” does not contain “zeta”"),
+        ("x", "empty", "", "“x” is not empty"),
+        ("", "not_empty", "", "“” is empty"),
+        ("memo.txt", "matches", "invoice-*", "“memo.txt” does not match “invoice-*”"),
+    ],
+)
+def test_a_check_that_did_not_hold_is_said_as_what_was_true(left, op, right, said):
+    """Found in the 09-a review's look at Run history: the Otherwise lane read
+    "Otherwise: “1” is over “4”.", a sentence that is false."""
+    held, words = logic.explain(_c(left, op, right), lambda t: t)
+    assert held is False and words == said
+
+
 def test_a_pattern_is_never_a_regular_expression():
     # A regular expression that backtracks for ever is just text here.
     assert evaluate(_c("a" * 5000 + "!", "matches", "(a+)+$"), {}) is False

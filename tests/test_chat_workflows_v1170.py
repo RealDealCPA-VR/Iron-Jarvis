@@ -632,9 +632,14 @@ def test_full_kind_step_passes_through_clamped():
     assert draft["steps"][1]["kind"] == "ask"
     assert draft["steps"][1]["message"] == "Proceed?"
     assert draft["steps"][2]["kind"] == "notify"
-    # Unknown kind/on_failure clamp to the engine defaults, never pass through.
-    assert draft["steps"][3]["kind"] == "agent"
+    # An unknown on_failure clamps to the engine default. An unknown KIND is
+    # kept as written (idea 09, 09-a: refused by name at save, never turned
+    # into an agent step), and the save check names it.
+    assert draft["steps"][3]["kind"] == "bogus"
     assert draft["steps"][3]["on_failure"] == "halt"
+    from iron_jarvis.workflows.checks import step_problem
+
+    assert "'bogus' is not one of" in (step_problem(draft["steps"], None) or "")
 
 
 def test_kind_vocabulary_is_the_engines_own():

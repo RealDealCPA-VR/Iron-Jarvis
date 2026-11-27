@@ -54,9 +54,21 @@ import {
   THEN_WORD,
   describeCondition,
   describeOver,
-  hasAgentInside,
+  eachHoldsAgent,
   isBlockKind,
 } from "@/components/workflow/blocks";
+
+/** A step whose kind this version does not know (a model's own word for
+ *  it): said as it is, never shown as an Agent step. Saving it is refused by
+ *  name. */
+const UNKNOWN_STEP = {
+  label: "Unknown step",
+  chip: "border-tone-danger/30 bg-tone-danger/10 text-tone-danger",
+};
+
+function knownKind(kind: string): boolean {
+  return isBlockKind(kind) || kind in KIND_META;
+}
 
 type StepState = "pending" | "running" | "completed" | "failed" | "skipped";
 
@@ -96,7 +108,9 @@ function DraftBlockSteps({ step }: { step: WorkflowStep }) {
                   ? cb.label
                   : ck === "agent"
                     ? agentLabel(c.agent ?? "") || "Agent"
-                    : (KIND_META[ck as StepKind] ?? KIND_META.agent).label;
+                    : knownKind(ck)
+                      ? KIND_META[ck as StepKind].label
+                      : UNKNOWN_STEP.label;
                 const what = cb
                   ? blockDetail(c)
                   : ck === "ask" || ck === "notify"
@@ -666,7 +680,7 @@ export function WorkflowDraftCard({
         {draftSteps.map((s, i) => {
           const live = run.steps[s.name];
           const kind = (s.kind ?? "agent") as string;
-          const kindMeta = KIND_META[kind as StepKind] ?? KIND_META.agent;
+          const kindMeta = knownKind(kind) && !isBlockKind(kind) ? KIND_META[kind as StepKind] : UNKNOWN_STEP;
           const meta = agentMeta(s.agent ?? "");
           // Say what each kind actually DOES (v1.170.0): ask/notify lead with
           // their message (the question / the notification), a tool step names
@@ -734,7 +748,7 @@ export function WorkflowDraftCard({
 
       {/* D-09.1: a For each with an Agent step inside costs one model run
           per item, and the card says so before anything runs. */}
-      {draftSteps.some((s) => s.kind === "for_each" && hasAgentInside(s.steps)) && (
+      {eachHoldsAgent(draftSteps) && (
         <p data-testid="draft-each-cost" className="px-3.5 pb-2 text-[12px] leading-snug text-tone-warn">
           {EACH_COST_LINE} A For each works through at most {DEFAULT_MAX_ITEMS} items unless it says
           otherwise.

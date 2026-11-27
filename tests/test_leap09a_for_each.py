@@ -51,6 +51,7 @@ class Recorder(Tool):
         self.fail: set[str] = set()
         self.totals = totals or {}
         self.hold_at: int | None = None
+        self.hold_name: str | None = None
         self.holding = asyncio.Event()
         self.release = asyncio.Event()
         self.live = 0
@@ -61,11 +62,13 @@ class Recorder(Tool):
         self.live += 1
         self.most_live = max(self.most_live, self.live)
         try:
-            if self.hold_at is not None and len(self.calls) == self.hold_at:
+            label = str(args.get("name") or args.get("path") or "")
+            if (self.hold_at is not None and len(self.calls) == self.hold_at) or (
+                self.hold_name and self.hold_name in label
+            ):
                 self.holding.set()
                 await self.release.wait()
             await asyncio.sleep(0)
-            label = str(args.get("name") or args.get("path") or "")
             if any(bad in label for bad in self.fail):
                 return ToolResult(ok=False, error=f"could not read {Path(label).name}")
             total = self.totals.get(Path(label).name, "100.00")
@@ -182,6 +185,9 @@ async def test_a_run_stopped_after_item_6_resumes_at_item_7_on_the_same_list(tmp
     block = _outs(stopped)["Each name"]
     assert block["status"] == "running" and len(block["list"]) == 14
     assert [r["n"] for r in block["data"]] == [1, 2, 3, 4, 5, 6]
+    # While it works, its line counts what is settled, never the items still
+    # to come as "not run" (review note).
+    assert block["summary"] == "6 of 14 done"
     # (The step that gave the list finished, so it is not run again; a folder
     # that changes before a resume is the example test's.)
     names.append("doc-15")
@@ -484,6 +490,213 @@ async def test_a_folder_the_user_denied_listing_is_not_read(tmp_path):
         listed = list(db.exec(select(ToolInvocation).where(
             ToolInvocation.session_id == rec.id, ToolInvocation.tool == "list_folder")))
     assert listed and not any(r.ok for r in listed)
+
+
+def _each_file(folder: Path, **block) -> dict:
+    return {
+        "name": "Each PDF",
+        "kind": "for_each",
+        "over": {"files": {"folder": str(folder), "glob": "*.pdf"}},
+        "steps": [{"name": "Read", "kind": "tool", "tool": "t_leap09a_read", "args": {"path": "{{item}}"}}],
+        **block,
+    }
+
+
+async def test_a_folder_scan_cut_short_stops_before_any_file(tmp_path, monkeypatch):
+    """Review: a slow or huge folder whose scan hit its cap or its deadline
+    was worked through in part and said "N of N done"."""
+    from iron_jarvis.documents.tools import ListFolderTool
+
+    folder = tmp_path / "Intake"
+    _pdfs(folder, {f"invoice-{i:02d}.pdf": "1" for i in range(1, 6)})
+    monkeypatch.setattr(ListFolderTool, "_SCAN_CAP", 3)
+    platform, reader, _ = _platform(tmp_path)
+    engine, _ = _engine(platform)
+    rec = await engine.run(load_workflow({"name": "w", "steps": [_each_file(folder)]}))
+    block = _outs(rec)["Each PDF"]
+    assert rec.status == "failed", block
+    assert block["summary"].startswith(
+        f"“Each PDF” could not start: could not list every file in {folder}: it holds more than 3 entries"
+    ), block["summary"]
+    assert "nothing was worked through" in block["summary"]
+    assert reader.calls == []
+
+
+async def test_a_folder_bigger_than_one_listing_is_never_worked_through_in_part(tmp_path, monkeypatch):
+    """Review: 1,200 PDFs with max_items 2,000 ended "1000 of 1000 done" and
+    200 files were never read. One listing shows 1,000 entries (here 4)."""
+    import iron_jarvis.workflows.engine as engine_mod
+
+    folder = tmp_path / "Intake"
+    _pdfs(folder, {f"invoice-{i:02d}.pdf": "1" for i in range(1, 7)})
+    monkeypatch.setattr(engine_mod, "FOLDER_LIST_CAP", 4)
+    platform, reader, _ = _platform(tmp_path)
+    engine, _ = _engine(platform)
+    rec = await engine.run(load_workflow({"name": "w", "steps": [_each_file(folder)]}))
+    block = _outs(rec)["Each PDF"]
+    assert rec.status == "failed", block
+    assert "could not list every file" in block["summary"] and "6 entries match and one listing shows 4" in block["summary"]
+    assert reader.calls == []
+    # A limit that stops the block INSIDE what was listed still works through
+    # that part, and then stops with words that fit a folder.
+    reader.calls.clear()
+    rec = await engine.run(load_workflow({"name": "w", "steps": [_each_file(folder, max_items=3)]}))
+    block = _outs(rec)["Each PDF"]
+    assert len(reader.calls) == 3
+    assert block.get("bound") is True and "Stopped at item 4 of 6" in block["summary"]
+    assert "for a folder) or split the folder" in block["summary"]
+
+
+async def test_a_resume_after_a_skipped_failure_keeps_each_result_on_its_own_file(tmp_path):
+    """Review: a For each that skipped a failed item finished "failed"
+    without its list; a resume after a LATER step listed the folder again, and
+    a new file shifted every result onto another file ("6 of 6 done")."""
+    folder = tmp_path / "Intake"
+    names = [f"invoice-{i:02d}.pdf" for i in range(1, 6)]
+    _pdfs(folder, {n: "100.00" for n in names})
+    platform, reader, filer = _platform(tmp_path)
+    reader.fail = {"invoice-03"}
+    engine, _ = _engine(platform)
+    wf = load_workflow({"name": "intake", "steps": [
+        _each_file(folder, on_failure="skip"),
+        {"name": "After", "kind": "tool", "tool": "t_leap09a_file", "args": {"path": "after"}},
+    ]})
+    rec = await asyncio.to_thread(engine.create_record, wf)
+    filer.hold_at = 1
+    driver = asyncio.ensure_future(engine.run_record(rec, wf))
+    await asyncio.wait_for(filer.holding.wait(), 30)
+    driver.cancel()  # the PC restarts during the step after the block
+    try:
+        await driver
+    except asyncio.CancelledError:
+        pass
+    assert reconcile_interrupted_runs(platform.engine) == 1
+    stopped = _record(platform, rec.id)
+    block = _outs(stopped)["Each PDF"]
+    assert block["status"] == "failed" and block["handled"] == "skipped"
+    assert [r["label"] for r in block["data"]] == names
+    # A new PDF lands before the resume.
+    (folder / "invoice-00.pdf").write_bytes(b"%PDF-1.4\n")
+    reader.calls.clear()
+    filer.calls.clear()
+    filer.hold_at = None
+    done = await engine.resume_interrupted(stopped)
+    # No file is read again, and none is read for the first time.
+    assert reader.calls == []
+    final = _outs(done)["Each PDF"]
+    rows = {r["n"]: r for r in final["data"]}
+    assert [rows[n]["label"] for n in sorted(rows)] == names
+    assert rows[1]["summary"].startswith("read invoice-01.pdf")
+    assert rows[3]["status"] == "failed" and "could not read invoice-03.pdf" in rows[3]["summary"]
+    assert rows[4]["summary"].startswith("read invoice-04.pdf")
+    assert final["summary"] == "4 of 5 done, 1 failed"
+    assert [c["path"] for c in filer.calls] == ["after"]
+    assert done.status == "completed_with_failures", _outs(done)
+
+
+async def test_a_stopped_for_each_in_a_skipped_if_is_not_run_or_decided_again(tmp_path, monkeypatch):
+    """The other way a resume reached a finished For each: inside an If whose
+    failure was skipped past. The If keeps the lane it took (it is never
+    decided again) and the For each its result."""
+    from iron_jarvis.workflows import logic
+
+    folder = tmp_path / "Intake"
+    names = [f"invoice-{i:02d}.pdf" for i in range(1, 6)]
+    _pdfs(folder, {n: "100.00" for n in names})
+    platform, reader, filer = _platform(tmp_path)
+    reader.fail = {"invoice-03"}
+    engine, _ = _engine(platform)
+    wf = load_workflow({"name": "intake", "steps": [
+        {"name": "List", "kind": "tool", "tool": "t_leap09a_list"},
+        {
+            "name": "Check", "kind": "if", "on_failure": "skip",
+            "condition": {"left": "{{List}}", "op": "not_empty"},
+            "steps": [_each_file(folder)],
+        },
+        {"name": "After", "kind": "tool", "tool": "t_leap09a_file", "args": {"path": "after"}},
+    ]})
+    rec = await asyncio.to_thread(engine.create_record, wf)
+    filer.hold_at = 1
+    driver = asyncio.ensure_future(engine.run_record(rec, wf))
+    await asyncio.wait_for(filer.holding.wait(), 30)
+    driver.cancel()
+    try:
+        await driver
+    except asyncio.CancelledError:
+        pass
+    assert reconcile_interrupted_runs(platform.engine) == 1
+    stopped = _record(platform, rec.id)
+    before = _outs(stopped)
+    assert before["Check"]["status"] == "failed" and before["Check"]["took"] == "then"
+    each_before = before["Check/then/Each PDF"]
+    assert each_before["status"] == "failed" and not each_before.get("handled")
+    assert [Path(c["path"]).name for c in reader.calls] == names[:3]
+    (folder / "invoice-00.pdf").write_bytes(b"%PDF-1.4\n")
+    decided: list = []
+    real_explain = logic.explain
+    monkeypatch.setattr(logic, "explain", lambda *a, **k: decided.append(a) or real_explain(*a, **k))
+    reader.calls.clear()
+    filer.calls.clear()
+    filer.hold_at = None
+    done = await engine.resume_interrupted(stopped)
+    outs = _outs(done)
+    assert decided == [], "the If decided again"
+    assert reader.calls == []
+    assert outs["Check"]["took"] == "then"
+    assert outs["Check"]["summary"] == before["Check"]["summary"]
+    assert outs["Check/then/Each PDF"]["summary"] == each_before["summary"]
+    assert [c["path"] for c in filer.calls] == ["after"]
+    assert done.status == "completed_with_failures", outs
+
+
+async def test_a_block_that_stops_at_a_failed_item_stays_stopped_after_a_resume(tmp_path):
+    """Two items at once, stop at a failure: item 3 failed while item 2 was
+    still being read, and the PC restarted. The resume finishes item 2 (it
+    was under way) and runs nothing after item 3."""
+    folder = tmp_path / "Intake"
+    names = [f"invoice-{i:02d}.pdf" for i in range(1, 6)]
+    _pdfs(folder, {n: "100.00" for n in names})
+    platform, reader, _ = _platform(tmp_path)
+    reader.fail = {"invoice-03"}
+    reader.hold_name = "invoice-02"
+    engine, _ = _engine(platform)
+    wf = load_workflow({"name": "intake", "steps": [_each_file(folder, parallel=2)]})
+    rec = await asyncio.to_thread(engine.create_record, wf)
+    row3 = asyncio.Event()
+    real_persist = engine._persist
+
+    async def persist(run_id, **kw):
+        row = await real_persist(run_id, **kw)
+        block = (kw.get("outputs") or {}).get("Each PDF") or {}
+        if any(r.get("n") == 3 and r.get("status") == "failed" for r in block.get("data") or []):
+            row3.set()
+        return row
+
+    # Read (not timed): the row for item 3 is written before the restart.
+    engine._persist = persist  # type: ignore[method-assign]
+    driver = asyncio.ensure_future(engine.run_record(rec, wf))
+    await asyncio.wait_for(reader.holding.wait(), 30)
+    await asyncio.wait_for(row3.wait(), 30)
+    driver.cancel()
+    try:
+        await driver
+    except asyncio.CancelledError:
+        pass
+    engine._persist = real_persist  # type: ignore[method-assign]
+    assert reconcile_interrupted_runs(platform.engine) == 1
+    stopped = _record(platform, rec.id)
+    block = _outs(stopped)["Each PDF"]
+    assert block["status"] == "running"
+    assert {r["n"]: r["status"] for r in block["data"]} == {1: "done", 3: "failed"}
+    reader.calls.clear()
+    reader.hold_name = None
+    done = await engine.resume_interrupted(stopped)
+    assert [Path(c["path"]).name for c in reader.calls] == ["invoice-02.pdf"], _outs(done)
+    final = _outs(done)["Each PDF"]
+    assert final["status"] == "failed" and not final.get("handled")
+    assert final["summary"].startswith("2 of 5 done, 1 failed, 2 not run. Item 3 (invoice-03.pdf) failed at “Read”")
+    assert "could not read invoice-03.pdf" in final["summary"]
+    assert done.status == "failed"
 
 
 async def test_cancel_stops_between_items(tmp_path):

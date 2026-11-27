@@ -13,6 +13,7 @@ import {
   BLOCK_META,
   DEFAULT_MAX_ITEMS,
   EACH_COST_LINE,
+  FOLDER_ITEMS_CAP,
   MAX_ITEMS_CAP,
   MAX_PARALLEL,
   OP_OPTIONS,
@@ -334,7 +335,7 @@ function EachFields({
           <input
             type="number"
             min={1}
-            max={MAX_ITEMS_CAP}
+            max={fromFiles ? FOLDER_ITEMS_CAP : MAX_ITEMS_CAP}
             value={Number(data.max_items ?? DEFAULT_MAX_ITEMS)}
             onChange={(e) => {
               const n = Math.round(Number(e.target.value));

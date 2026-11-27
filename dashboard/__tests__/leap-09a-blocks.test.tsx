@@ -311,8 +311,25 @@ describe("the boxes and their panel", () => {
     expect(onChange).toHaveBeenLastCalledWith({ parallel: 3 });
     expect(screen.getByTestId("each-cost-line").textContent).toBe(EACH_COST_LINE);
     expect((screen.getByLabelText("At most this many items") as HTMLInputElement).value).toBe("200");
+    // A folder is listed 1,000 entries at a time, so its limit stops there;
+    // a list an earlier step found goes up to 2,000 (review).
+    expect((screen.getByLabelText("At most this many items") as HTMLInputElement).max).toBe("1000");
     fireEvent.click(screen.getByRole("button", { name: /Add a step inside/ }));
     expect(onAddInside).toHaveBeenLastCalledWith("body");
+  });
+
+  it("a list an earlier step found may go up to 2,000 items", () => {
+    render(
+      <BlockInspector
+        data={{ name: "Each name", kind: "for_each", over: { from: "{{List.data}}" } }}
+        onChange={() => {}}
+        onDelete={() => {}}
+        onClose={() => {}}
+        onAddInside={() => {}}
+        hasAgent={false}
+      />,
+    );
+    expect((screen.getByLabelText("At most this many items") as HTMLInputElement).max).toBe("2000");
   });
 });
 
@@ -353,14 +370,15 @@ describe("a run's blocks, live and in Run history", () => {
       status,
       steps_json: JSON.stringify(INTAKE),
       outputs_json: JSON.stringify({
-        "Each PDF": { status: "running", kind: "for_each", summary: "6 of 14 done, 1 failed, 7 not run", data: rows.slice(0, 7) },
+        // While it works the engine counts only what is settled (review note).
+        "Each PDF": { status: "running", kind: "for_each", summary: "6 of 14 done, 1 failed", data: rows.slice(0, 7) },
         ...over,
       }),
     }) as unknown as WorkflowRun;
 
   it("the live strip says how far a For each got, and opens to a row per item", () => {
     render(<RunProgress run={run("running")} onCancel={() => {}} cancelling={false} />);
-    expect(screen.getByTestId("each-progress").textContent).toBe("· 6 of 14 done, 1 failed, 7 not run");
+    expect(screen.getByTestId("each-progress").textContent).toBe("· 6 of 14 done, 1 failed");
     fireEvent.click(screen.getByRole("button", { name: /Each PDF/ }));
     const list = screen.getByTestId("each-rows");
     expect(within(list).getAllByRole("listitem")).toHaveLength(7);
@@ -389,7 +407,7 @@ describe("a run's blocks, live and in Run history", () => {
   it("Run history's rows: 14 of 14 done with each item, and the lane an If took", () => {
     const outs = {
       "Each PDF": { status: "completed", summary: "14 of 14 done", data: rows.map((r) => ({ ...r, status: "done" })) },
-      Check: { status: "completed", took: "else", summary: "Otherwise: “4,000” is over “5000”." },
+      Check: { status: "completed", took: "else", summary: "Otherwise: “4,000” is not over “5000”." },
       "Check/else/File it": { status: "completed", summary: "filed" },
       "Check/then/Ask me": { status: "skipped" },
     };
@@ -468,6 +486,33 @@ describe("from chat: the draft card", () => {
     ];
     render(<WorkflowDraftCard draft={{ name: "pings", description: "", steps: tools } as unknown as WorkflowDraft} events={[]} />);
     expect(screen.queryByTestId("draft-each-cost")).toBeNull();
+  });
+
+  it("says what it costs when the For each sits inside an If's lane (review)", () => {
+    const nested: CanvasStep[] = [
+      leaf("Check", { kind: "tool", tool: "list_folder", args: { path: "C:/Intake" } }),
+      block("Any?", {
+        kind: "if",
+        condition: { left: "{{Check}}", op: "not_empty" },
+        steps: [
+          block("Each PDF", {
+            kind: "for_each",
+            over: { files: { folder: "C:/Intake", glob: "*.pdf" } },
+            steps: [leaf("Summarize", { agent: "researcher", task: "Summarize {{item}}" })],
+          }),
+        ],
+      }),
+    ];
+    render(<WorkflowDraftCard draft={{ name: "nested", description: "", steps: nested } as unknown as WorkflowDraft} events={[]} />);
+    expect(screen.getByTestId("draft-each-cost").textContent).toContain(EACH_COST_LINE);
+  });
+
+  it("a step of a kind it does not know is said as one, never shown as an Agent step", () => {
+    const odd: CanvasStep[] = [leaf("Each PDF", { kind: "loop" as CanvasStep["kind"], task: "Each PDF" })];
+    render(<WorkflowDraftCard draft={{ name: "odd", description: "", steps: odd } as unknown as WorkflowDraft} events={[]} />);
+    expect(screen.getByText("Unknown step")).toBeTruthy();
+    expect(screen.queryByText("Builder")).toBeNull();
+    expect(screen.queryByText("Agent")).toBeNull();
   });
 });
 

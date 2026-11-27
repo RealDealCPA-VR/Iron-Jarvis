@@ -134,8 +134,8 @@ async def test_the_otherwise_path_runs_when_the_condition_does_not_hold(tmp_path
     assert outs["Check/then/Big one"]["status"] == "skipped"
     assert outs["Check/then/Tell big"]["status"] == "skipped"
     assert outs["Check"]["took"] == "else"
-    assert outs["Check"]["summary"] == "Otherwise: “4,999.99” is over “5000”."
-    assert told == ["Done: Otherwise: “4,999.99” is over “5000”."]
+    assert outs["Check"]["summary"] == "Otherwise: “4,999.99” is not over “5000”."
+    assert told == ["Done: Otherwise: “4,999.99” is not over “5000”."]
 
 
 async def test_a_word_where_a_number_is_needed_fails_the_if_with_words(tmp_path):

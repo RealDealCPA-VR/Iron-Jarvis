@@ -170,8 +170,12 @@ item, on the same list of files it started with.
 Good to know:
 
 - A For each works through at most **200 items** in one run unless you set
-  another limit (up to 2,000). At item 201 it stops and says why, rather
-  than running on.
+  another limit (up to 2,000, or up to 1,000 for a folder). At item 201 it
+  stops and says why, rather than running on.
+- If a folder holds more matching files than Iron Jarvis can list in one
+  go (more than 1,000, or a folder too slow to read), the For each stops
+  before the first file and says so. It never works through part of a
+  folder as if it were all of it.
 - An **Agent step inside a For each runs once for every item: one model run
   per item.** The chat's card says so before you run it.
 - By default a failed item stops the run. Set **If an item fails** to

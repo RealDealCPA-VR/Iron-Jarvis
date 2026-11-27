@@ -292,11 +292,20 @@ def test_known_window_tools_trim_what_an_unpriced_plan_would_have_sent(tmp_path,
     monkeypatch.setattr(_b.ListFilesTool, "execute", big_listing)
     s = _run(p)
     assert s.status is SessionStatus.COMPLETED, s.summary
-    wire = estimate_tokens(json.dumps(tools_seen[-1], ensure_ascii=False, sort_keys=True, default=str))
-    for msgs in calls:
+    # Each request against the tools IT carried: the script tool joins this
+    # run mid-way (v1.473.0, after repeated reads) and rewrites the file
+    # tools' descriptions, so the later steps carry ~1,300 more tokens of
+    # them. RED before the idea 09 review's fix: the planner priced the first
+    # step's tools for every step, and the steps after the script tool joined
+    # went out over the window (5,703 + 20,440 + 4,096 > 30,000).
+    grew = False
+    for msgs, tools in zip(calls, tools_seen):
+        wire = estimate_tokens(json.dumps(tools, ensure_ascii=False, sort_keys=True, default=str))
+        grew = grew or len(tools) > len(tools_seen[0])
         sent = sum(estimate_tokens(m.content or "") + 4 for m in msgs)
         # The system prompt is ~600 tokens; the reply room is 4,096.
         assert sent + wire + 4_096 <= window, (sent, wire)
+    assert grew, "the run this test means has a tool join it mid-way"
     # …and the planner really had to work for it.
     last = calls[-1]
     assert sum(1 for m in last if m.role == "tool" and "trimmed" not in (m.content or "")) < 8

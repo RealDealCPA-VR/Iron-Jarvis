@@ -7269,34 +7269,13 @@ _WORKFLOW_DRAFT_SPEC = {
                                 "(default agent)"
                             ),
                         },
-                        "condition": {
-                            "type": "object",
-                            "description": "kind=if only: {left, op, right}",
-                        },
-                        "over": {
-                            "type": "object",
-                            "description": (
-                                "kind=for_each only: {files: {folder, glob}} or "
-                                "{from: \"{{Step.data}}\"}"
-                            ),
-                        },
-                        "steps": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                            "description": (
-                                "kind=if: the steps when the condition holds; "
-                                "kind=for_each: the steps for each item"
-                            ),
-                        },
-                        "else_steps": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                            "description": "kind=if only: the steps otherwise",
-                        },
-                        "max_items": {
-                            "type": "integer",
-                            "description": "kind=for_each only: at most this many items (default 200)",
-                        },
+                        # Idea 09: the block fields are said once, in the
+                        # steps description above (sent with every turn).
+                        "condition": {"type": "object"},
+                        "over": {"type": "object"},
+                        "steps": {"type": "array", "items": {"type": "object"}},
+                        "else_steps": {"type": "array", "items": {"type": "object"}},
+                        "max_items": {"type": "integer", "description": "for_each: default 200"},
                         "agent": {
                             "type": "string",
                             "description": (
@@ -7455,10 +7434,29 @@ def _sanitize_draft_block(s: dict, kind: str, depth: int) -> dict:
     return out
 
 
+#: Spellings a model writes for a step kind that are plainly that kind (idea
+#: 09): "for-each", "for each" and "forEach" are a For each; "if-else" an If.
+_DRAFT_KIND_SPELLINGS = {"foreach": "for_each", "if_else": "if", "ifelse": "if"}
+
+
+def _draft_kind(raw: Any) -> str:
+    """A draft step's kind: the engine's word for it when the model wrote one
+    of its plain spellings; any other unknown word kept as written (at most
+    40 characters), so the save check names it; empty is an agent step."""
+    from ..workflows.engine import STEP_KINDS
+
+    kind = _re.sub(r"[\s\-]+", "_", str(raw or "").strip().lower()).strip("_")
+    if not kind:
+        return "agent"
+    if kind in STEP_KINDS:
+        return kind
+    return _DRAFT_KIND_SPELLINGS.get(kind, str(raw).strip()[:40])
+
+
 def _sanitize_draft_steps(raw_steps: Any, depth: int) -> list[dict]:
     """One list of a draft's steps, sanitized (see :func:`_sanitize_draft`)."""
     from ..core.jsonish import loads_lenient
-    from ..workflows.engine import BLOCK_KINDS, ON_FAILURE, STEP_KINDS
+    from ..workflows.engine import BLOCK_KINDS, ON_FAILURE
 
     if depth > 3:
         return []
@@ -7484,7 +7482,7 @@ def _sanitize_draft_steps(raw_steps: Any, depth: int) -> list[dict]:
         ).strip()[:4000]
         name = str(s.get("name") or s.get("title") or "").strip()
         message = str(s.get("message") or s.get("question") or "").strip()[:2000]
-        kind = str(s.get("kind") or "agent").strip().lower()
+        kind = _draft_kind(s.get("kind"))
         if kind in BLOCK_KINDS and not name:
             name = "If" if kind == "if" else "For each"
         # An ask/notify step legitimately carries ONLY a message — it must
@@ -7529,7 +7527,11 @@ def _sanitize_draft_steps(raw_steps: Any, depth: int) -> list[dict]:
             "agent": agent if agent in _WORKFLOW_DRAFT_AGENTS else "builder",
             "task": task or name,
             "tool": tool,
-            "kind": kind if kind in STEP_KINDS else "agent",
+            # Idea 09 (09-a): a kind this version does not know stays as the
+            # model wrote it, so the save check refuses it BY NAME; it is
+            # never turned into an agent step (a block's folder and steps
+            # would vanish and the check would pass).
+            "kind": kind,
             "on_failure": on_failure if on_failure in ON_FAILURE else "halt",
             "group": group,
             "args": step_args,

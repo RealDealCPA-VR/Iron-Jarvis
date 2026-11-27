@@ -58,6 +58,22 @@ OP_WORDS: dict[str, str] = {
     "matches": "matches",
 }
 
+#: The same comparison when it did NOT hold: the If's line on its Otherwise
+#: lane says what was true ("“4,999.99” is not over “5000”"), never the
+#: comparison that failed as if it held.
+NOT_WORDS: dict[str, str] = {
+    "is": "is not",
+    "is_not": "is",
+    "contains": "does not contain",
+    "over": "is not over",
+    "under": "is not under",
+    "at_least": "is not at least",
+    "at_most": "is not at most",
+    "empty": "is not empty",
+    "not_empty": "is empty",
+    "matches": "does not match",
+}
+
 #: The most of a value a comparison reads (a summary is 1,500 characters at
 #: most and a step's data 8,000; this keeps a pattern match short whatever
 #: the value is).
@@ -131,7 +147,7 @@ def _leaf(cond: dict, render: Callable[[str], str]) -> tuple[bool, str]:
     words = OP_WORDS[op]
     if op in ONE_SIDED_OPS:
         held = _blank(left) if op == "empty" else not _blank(left)
-        return held, f"“{_shown(left)}” {words}"
+        return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]}"
     if op in NUMBER_OPS:
         a, b = read_number(left), read_number(right)
         for side, value in ((left, a), (right, b)):
@@ -147,20 +163,20 @@ def _leaf(cond: dict, render: Callable[[str], str]) -> tuple[bool, str]:
             "at_least": a >= b,
             "at_most": a <= b,
         }[op]
-        return held, f"“{_shown(left)}” {words} “{_shown(right)}”"
+        return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]} “{_shown(right)}”"
     if op in ("is", "is_not"):
         a, b = read_number(left), read_number(right)
         same = (a == b) if (a is not None and b is not None) else (
             left.strip().casefold() == right.strip().casefold()
         )
         held = same if op == "is" else not same
-        return held, f"“{_shown(left)}” {words} “{_shown(right)}”"
+        return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]} “{_shown(right)}”"
     if op == "contains":
         held = right.strip().casefold() in left.casefold() if right.strip() else False
-        return held, f"“{_shown(left)}” {words} “{_shown(right)}”"
+        return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]} “{_shown(right)}”"
     # matches: a wildcard pattern over the whole value (never a regex).
     held = fnmatch.fnmatchcase(left.strip().casefold(), right.strip().casefold())
-    return held, f"“{_shown(left)}” {words} “{_shown(right)}”"
+    return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]} “{_shown(right)}”"
 
 
 def explain(condition: Any, render: Callable[[str], str]) -> tuple[bool, str]:

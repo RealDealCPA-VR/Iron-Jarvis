@@ -214,10 +214,7 @@ class ListFolderTool(Tool):
             # this tool, so the folder's read rules apply; the pattern is
             # matched BEFORE the limit, so a big folder's small PDFs are not
             # cut off by its big files.
-            "pattern": {
-                "type": "string",
-                "description": "Only names that match this pattern, like *.pdf (case does not matter)",
-            },
+            "pattern": {"type": "string", "description": "Only names like *.pdf"},
         },
         "required": ["path"],
     }

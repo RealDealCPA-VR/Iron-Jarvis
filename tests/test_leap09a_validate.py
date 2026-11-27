@@ -88,6 +88,12 @@ BAD = {
     "an empty For each": ([_each(steps=[])], "steps[0] (Each file): a For each needs at least one step inside it"),
     "a limit out of range": ([_each(max_items=5000)], "steps[0] (Each file): max_items is how many items"),
     "a limit that is not a number": ([_each(max_items="lots")], "steps[0] (Each file): max_items is how many items"),
+    # Review: one listing of a folder shows at most 1,000 entries, so a folder
+    # limit past it would work through part of a folder as if it were all.
+    "a folder limit past one listing": (
+        [_each(max_items=1500)],
+        "steps[0] (Each file): a For each over a folder works through at most 1,000 files",
+    ),
     "too many at once": ([_each(parallel=9)], "steps[0] (Each file): parallel is how many items it works on at once, 1 to 4"),
     "an ask in a For each that works on several at once": (
         [_each(parallel=2, steps=[{"name": "OK?", "kind": "ask", "message": "ok?"}])],
@@ -317,6 +323,48 @@ def test_a_chat_draft_keeps_its_blocks_and_their_steps():
     nameless = _sanitize_draft({"name": "w", "steps": [{"kind": "if", "condition": {"left": "1", "op": "is", "right": "1"},
                                                          "steps": [f"say hello number {i}" for i in range(30)]}]})
     assert nameless["steps"][0]["name"] == "If" and len(nameless["steps"][0]["steps"]) == 12
+
+
+def test_a_chat_draft_never_turns_an_unknown_kind_into_an_agent_step():
+    """Review: 'for-each' became one agent step whose task was the block's
+    name, its folder and steps gone, and the save check passed."""
+    inner = [{"name": "Summarize", "agent": "researcher", "task": "Summarize {{item}}"}]
+    over = {"files": {"folder": "C:/Intake", "glob": "*.pdf"}}
+    # The plain spellings of a block are that block, with everything inside.
+    for spelling in ("for-each", "foreach", "forEach", "For each", "FOR_EACH"):
+        d = _sanitize_draft({"name": "w", "steps": [
+            {"name": "Each PDF", "kind": spelling, "over": over, "steps": inner},
+        ]})
+        each = d["steps"][0]
+        assert each["kind"] == "for_each", spelling
+        assert each["over"] == over and [s["name"] for s in each["steps"]] == ["Summarize"]
+        assert step_problem(d["steps"], None) is None
+    d = _sanitize_draft({"name": "w", "steps": [
+        {"name": "Check", "kind": "if-else", "condition": {"left": "1", "op": "is", "right": "1"},
+         "steps": [{"name": "Tell", "kind": "notify", "message": "yes"}]},
+    ]})
+    assert d["steps"][0]["kind"] == "if" and d["steps"][0]["steps"][0]["name"] == "Tell"
+    # Any other word is kept as written and refused BY NAME at save.
+    d = _sanitize_draft({"name": "w", "steps": [
+        {"name": "Each PDF", "kind": "loop", "over": over, "steps": inner},
+    ]})
+    assert d["steps"][0]["kind"] == "loop"
+    problem = step_problem(d["steps"], None) or ""
+    assert problem.startswith("steps[0].kind: 'loop' is not one of"), problem
+    # An empty kind is still an agent step.
+    d = _sanitize_draft({"name": "w", "steps": [{"name": "Draft", "task": "draft it", "kind": ""}]})
+    assert d["steps"][0]["kind"] == "agent"
+
+
+def test_workflow_create_says_what_a_for_each_with_an_agent_inside_costs():
+    """D-09.1, review note: the agent lane's door says the cost line too, so a
+    workflow saved by an agent run is not the one place it goes unsaid."""
+    from iron_jarvis.workflows.tools import each_cost_note
+
+    agent_inside = [_if(steps=[_each(steps=[{"name": "Sum", "agent": "researcher", "task": "sum {{item}}"}])])]
+    assert "one model run per item" in each_cost_note(agent_inside)
+    assert each_cost_note([_each()]) == ""  # a notify step inside costs no model run
+    assert each_cost_note([{"name": "A", "agent": "builder", "task": "t"}]) == ""  # no For each
 
 
 class _FakeAdapter:

@@ -32,6 +32,36 @@ from .store import WorkflowStore
 from .validate import BLOCKS_FOR_MODELS
 
 
+#: D-09.1: said wherever a For each holds an Agent step (the dashboard's
+#: ``EACH_COST_LINE`` in ``components/workflow/blocks.ts`` is the same line).
+EACH_COST_LINE = "Each Agent step inside runs once for every item: one model run per item."
+
+
+def _agent_inside(steps: Any) -> bool:
+    for raw in steps if isinstance(steps, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        if str(raw.get("kind") or "agent").strip().lower() == "agent":
+            return True
+        if _agent_inside(raw.get("steps")) or _agent_inside(raw.get("else_steps")):
+            return True
+    return False
+
+
+def each_cost_note(steps: Any) -> str:
+    """``". Each Agent step inside …"`` when any For each in *steps* (inside
+    blocks too) holds an Agent step; ``""`` otherwise."""
+    for raw in steps if isinstance(steps, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "agent").strip().lower()
+        if kind == "for_each" and _agent_inside(raw.get("steps")):
+            return ". " + EACH_COST_LINE
+        if each_cost_note(raw.get("steps")) or each_cost_note(raw.get("else_steps")):
+            return ". " + EACH_COST_LINE
+    return ""
+
+
 class WorkflowCreateTool(Tool):
     """Save a named, ordered workflow so it persists and shows in the dashboard."""
 
@@ -39,16 +69,12 @@ class WorkflowCreateTool(Tool):
     description = (
         "Save a reusable workflow that persists (the user sees it in the "
         "dashboard and it can be scheduled/run later). `steps` is an ordered "
-        "list of step objects; `kind` decides what each IS: agent (the "
-        "default) runs `agent` on `task`, e.g. {name: \"Draft\", agent: "
-        "\"builder\", task: \"Draft the reply to {{Read}}\"}; tool calls `tool` "
-        "with `args` and no model, e.g. {name: \"Read\", kind: \"tool\", tool: "
-        "\"read_document\", args: {path: \"C:/a.pdf\"}}; ask pauses the run and "
-        "asks the user `message`, e.g. {name: \"OK?\", kind: \"ask\", message: "
-        "\"Send it?\"}; notify sends the user `message`. {{Step}} is an earlier "
-        "step's result. "
+        "list; a step's `kind`: agent (default) runs `agent` on `task`; tool "
+        "calls `tool` with `args`, no model; ask asks the user `message`; "
+        "notify sends it. {{Step}} is an earlier step's result. "
         # Idea 09 (09-a): the two blocks, in the ONE text every door that lets
-        # a model write a workflow uses (``validate.BLOCKS_FOR_MODELS``).
+        # a model write a workflow uses (``validate.BLOCKS_FOR_MODELS``). Kept
+        # short: it goes out with every agent step that offers this tool.
         + BLOCKS_FOR_MODELS
         + " Re-using a `name` updates the existing workflow in place (an existing "
         "project pin is KEPT unless you pass `project`). When this task is "
@@ -70,34 +96,23 @@ class WorkflowCreateTool(Tool):
                 "items": {
                     "type": "object",
                     "properties": {
+                        # What each field is for is said once, in the
+                        # description above (every word here is sent with
+                        # every agent step that offers this tool).
                         "name": {"type": "string"},
-                        "kind": {
-                            "type": "string",
-                            "description": "agent | tool | ask | notify | if | for_each (default agent)",
-                        },
+                        "kind": {"type": "string", "description": "agent|tool|ask|notify|if|for_each"},
                         "agent": {"type": "string"},
                         "task": {"type": "string"},
-                        "tool": {"type": "string", "description": "kind=tool: the tool to call"},
-                        "args": {"type": "object", "description": "kind=tool: its arguments"},
-                        "message": {"type": "string", "description": "kind=ask: the question; kind=notify: the message"},
-                        "on_failure": {"type": "string", "description": "halt | retry | skip (default halt)"},
-                        "condition": {"type": "object", "description": "kind=if: {left, op, right}"},
-                        "over": {
-                            "type": "object",
-                            "description": "kind=for_each: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
-                        },
-                        "steps": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                            "description": "kind=if: the steps when it holds; kind=for_each: the steps for each item",
-                        },
-                        "else_steps": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                            "description": "kind=if: the steps otherwise",
-                        },
-                        "max_items": {"type": "integer", "description": "kind=for_each: at most this many items (default 200)"},
-                        "parallel": {"type": "integer", "description": "kind=for_each: items at once, 1 to 4 (default 1)"},
+                        "tool": {"type": "string"},
+                        "args": {"type": "object"},
+                        "message": {"type": "string"},
+                        "on_failure": {"type": "string", "description": "halt|retry|skip"},
+                        "condition": {"type": "object"},
+                        "over": {"type": "object"},
+                        "steps": {"type": "array", "items": {"type": "object"}},
+                        "else_steps": {"type": "array", "items": {"type": "object"}},
+                        "max_items": {"type": "integer", "description": "for_each: default 200"},
+                        "parallel": {"type": "integer", "description": "for_each: 1-4 at once"},
                     },
                 },
             },
@@ -218,6 +233,9 @@ class WorkflowCreateTool(Tool):
         if pid:
             data["project_id"] = pid
             note = f", pinned to project {pid}"
+        # D-09.1: what a For each with an Agent step inside costs, said here
+        # too, as the chat's card and the canvas's panel say it.
+        note += each_cost_note(steps)
         return ToolResult(
             ok=True,
             output=f"saved workflow '{rec.name}' with {len(steps)} step(s){note}",
