@@ -795,3 +795,61 @@ def test_the_start_up_tidy_runs_beside_start_up_never_in_it(tmp_path, monkeypatc
             assert K().get(root, "sess_young", young) is not None
     finally:
         go.set()
+
+
+async def test_an_agent_run_whose_save_fails_is_cut_as_before_and_gains_no_reader(tmp_path, monkeypatch):
+    from iron_jarvis.agents import runtime as runtime_mod
+
+    platform = build_platform(str(tmp_path / "home"))
+    text = document(20_000)
+    ws = folder(tmp_path, long__txt=text)
+
+    def no_room(_root):
+        raise OSError(5, "the disk went away")
+
+    monkeypatch.setattr(K(), "_make_room", no_room)
+    adapter, _ = await run_agent(platform, ws, [
+        tool_use("read_file", "r1", path="long.txt"), tool_use(READER, "r2", handle="kr-0123456789abcdef"), "Done.",
+    ])
+    assert adapter.sent("r1") == runtime_mod._cut_tool_context(wrap_untrusted(text), 16_000)
+    assert all(READER not in c["tools"] for c in adapter.calls), "asking whether it may join armed nothing"
+    assert "not armed" in adapter.sent("r2") and everything(platform) == []
+
+
+@pytest.mark.parametrize("held", ["daemon-owned turn", "stop handle"])
+async def test_deleting_a_chat_drops_what_its_running_turn_kept_under_the_turns_own_name(tmp_path, held):
+    """A reply that started before its chat was saved keeps under its TURN
+    (``chat:<turn id>``) until the page links the two. Deleting the chat
+    drops that folder too, for both ways the route knows a running turn: the
+    daemon-owned turns (``durable_turns.forget_thread``) and the stop handles
+    held under the chat's key. Real route, real turn registries."""
+    from iron_jarvis.core.turns import TURNS, thread_key
+    from iron_jarvis.daemon.routes import chat as RC
+    from tests.test_fourth_review_stop_v1535 import _deaf_turn
+    from tests.test_third_plan_g18_reply_home import _new_chat, _req
+
+    app = create_app(str(tmp_path))
+    platform = app.state.platform
+    root = K().root_of(platform.engine)
+    keep = lambda owner: K().put(root, owner, MIDDLE, own_source=False, local_only=False)  # noqa: E731
+    tid = await _new_chat(app, "r8c-turn")
+    lg = handle = None
+    if held == "daemon-owned turn":
+        lg = await _deaf_turn(app, "r8c-turn", tid)
+    else:
+        handle = TURNS.register("r8c-turn")
+        RC._hold_thread_handle(thread_key(tid), handle)
+    try:
+        keep("chat:r8c-turn")
+        other = keep("chat:r8c-other-turn")
+        assert (await _req(app, "DELETE", f"/chat/threads/{tid}"))[0] == 200
+        assert not K().holds(root, "chat:r8c-turn"), "what the running turn kept stayed behind its chat"
+        with pytest.raises(ValueError):
+            keep("chat:r8c-turn")  # (and a save of its on the way is refused)
+        assert K().get(root, "chat:r8c-other-turn", other) is not None, "another chat's turn keeps its own"
+    finally:
+        if lg is not None:
+            lg.task.cancel()
+        if handle is not None:
+            RC._drop_thread_handle(thread_key(tid), handle)
+            TURNS.release("r8c-turn", handle)

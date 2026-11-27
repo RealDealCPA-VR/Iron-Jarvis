@@ -9186,8 +9186,9 @@ async def kept_reader_at_start(d: Any, msgs: list, ctx: Any, *, harness: Any = N
     (``tools/kept_results.arm_at_start``: each line's handle is checked
     against the store for this session first). A plain chat's messages never
     carry one (its kept results end with the reply that kept them). Returns
-    how many lines were real. MIRROR NOTE (lock-step): both lanes call it
-    before the first round. Never raises."""
+    how many lines were real. STREAM LANE ONLY (MIRROR NOTE: intentionally
+    absent from ``run_chat_turn``, which never resumes a coding reply: only
+    the stream lane takes a ``reply_record``). Never raises."""
     if harness is None or ctx is None:
         return 0
     from ..tools import kept_results as _kept
@@ -14989,12 +14990,6 @@ async def run_chat_turn(
             await settle_usage_writes(_usage_pending, turn_id=_usage_turn)  # CS8
             raise
 
-    # Release 8 of the intelligence plan (lock-step: routes/chat.py): a
-    # coding reply that starts with a kept-result line has its reader.
-    await kept_reader_at_start(
-        d, msgs, ctx, armed=armed, auto_armed=auto_armed, tool_specs=tool_specs,
-        overrides=overrides, armed_grant=armed_grant, ceiling=_arm_ceiling, harness=_harness,
-    )
     try:
         for _round in turn_rounds(lambda: _rounds):
             if _cut_pending:

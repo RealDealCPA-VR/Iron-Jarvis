@@ -194,6 +194,7 @@ def test_the_whole_takes_the_answers_place_only_in_the_lanes_own_fence_and_only_
     # no fence at all): the message is left as it is.
     assert K()._with_whole(wrap_untrusted("[content withheld — suspected injection]"), answer, whole) is None
     assert K()._with_whole(answer, answer, whole) is None
+    assert K()._with_whole("A title line\n" + fenced, answer, whole) is None, "a tool's own fence is not the lane's"
     assert K()._with_whole(wrap_untrusted(answer + " (reworded)"), answer, whole) is None
     # A whole the scan flags is never used.
     assert K()._with_whole(fenced, answer, whole + "\n" + INJECTION) is None
