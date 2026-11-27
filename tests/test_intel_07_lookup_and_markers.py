@@ -179,12 +179,13 @@ def test_a_saved_chat_with_the_lookup_on_sends_the_same_instructions_and_tools(t
     assert all(c["system"].count(P.BLOCK_NOTE) == 1 for c in calls)
 
 
-def test_the_block_is_laid_out_standing_notes_then_what_was_found_then_this_messages_directives(tmp_path):
+@pytest.mark.parametrize("lane", LANES)
+def test_the_block_is_laid_out_standing_notes_then_what_was_found_then_this_messages_directives(tmp_path, lane):
     """The date, the memory index and the roster first; then the found block;
     then the per-message directives (the tool names, the write directive).
     The roster is not the last thing a model reads on a plain hello, and with
     nothing found the head line does not speak of a found block."""
-    chat = Chat(tmp_path / "home", "/chat/stream")
+    chat = Chat(tmp_path / "home", lane)
     plain = once_of(chat.say("hello there, good morning"))
     order = [plain.index(part) for part in (
         P.ONCE_TOP + "\n" + P.ONCE_HEAD + "\n" + DATE_LINE, "# What I can remember", "# Who can take this work",
@@ -434,20 +435,21 @@ def _holds_of(engine, thread_id: str) -> list[str]:
     return egress.clean_holds(setup.get(egress.HOLDS_KEY))
 
 
-def test_a_link_cancelled_while_the_kept_names_are_homed_has_written_the_holds_and_the_switch(tmp_path, monkeypatch):
+def test_a_link_cancelled_while_the_kept_names_are_homed_has_written_the_chats_own_switch(tmp_path, monkeypatch):
+    """(No hold here: a hold makes the chat Local only by itself, and would
+    hide a switch that was not written yet. The holds are pinned next to it,
+    ``tests/test_intel_07_stay_and_blocks.py``.)"""
     app = create_app(str(tmp_path / "home"))
     engine = app.state.platform.engine
     tid = TestClient(app).put("/chat/threads/new", json={"title": "the chat", "messages": []}).json()["id"]
     turn = "turn-r7-link-switch"
-    egress.note_pending_hold(turn, "ms365")
-    egress.note_pending_hold(turn, "gmail")
     assert egress.note_pending_local_only(turn, True) == ""
     assert _holds_of(engine, tid) == [] and egress.thread_local_only(engine, tid) is False
     entered, release = threading.Event(), threading.Event()
     seen: dict = {}
 
     def blocked(engine_, turn_id, chat):
-        seen["holds"], seen["local_only"] = _holds_of(engine, chat), egress.thread_local_only(engine, chat)
+        seen["local_only"] = egress.thread_local_only(engine, chat)
         entered.set()
         release.wait(60)
 
@@ -464,7 +466,8 @@ def test_a_link_cancelled_while_the_kept_names_are_homed_has_written_the_holds_a
             release.set()
 
     asyncio.run(main())
-    assert seen == {"holds": ["gmail", "ms365"], "local_only": True}, "cancelled there, a hold or the switch was lost"
+    assert seen == {"local_only": True}, "cancelled there, the chat's own switch was not written yet"
+    assert egress.thread_local_only(engine, tid) is True
 
 
 def test_a_link_cancelled_before_the_switch_is_written_still_writes_it(tmp_path, monkeypatch):
@@ -548,20 +551,60 @@ def test_the_per_call_fit_leaves_out_what_was_found_before_any_of_the_persons_wo
     assert chat_turn._question_without_found(out, 3) is None
 
 
-def test_with_no_user_message_the_reply_goes_the_old_way_and_still_knows_the_date(caplog):
+def test_the_per_call_fit_sheds_what_was_found_when_the_question_alone_is_too_long(tmp_path):
+    """Through the refit itself: the request does not fit with what was
+    found, it fits without it, and the person's words are whole."""
+    from iron_jarvis.platform import build_platform
+
+    d = SimpleNamespace(platform=build_platform(str(tmp_path / "home")))
+    question = "what does the attached ledger say about March?"
+    tail = P.own("\n\nA STANDING NOTE") + ("\n\n# Attachments\n" + "ZQXFOUND " * 4000)
+    sent = question + P.once_block(tail, lead=DATE_LINE)
+    msgs = [LLMMessage(role="user", content=sent, stable_chars=len(question))]
+    assert chat_turn._tokens_of(msgs, "SYSTEM", d, "mock", "mock") > 8000
+    fitted = chat_turn._shrink_to_window(d, msgs, "SYSTEM", "mock", "mock", head=1, window=8000, tools=[])
+    assert fitted is not None, "the request could have been sent without what was found"
+    out, _system, dropped = fitted
+    assert dropped == 0 and P.own_words(out[0].content) == question
+    assert "ZQXFOUND" not in out[0].content and P.FOUND_LEFT_OUT in out[0].content and "A STANDING NOTE" in out[0].content
+    assert msgs[0].content == sent
+
+
+def test_with_no_user_message_the_reply_goes_the_old_way_and_still_knows_the_date(tmp_path, caplog):
     """Nothing to place the block beside: it is not dropped in silence. The
     reply is sent the old way (the added text in the instructions), with the
     date, and one line is logged that holds none of the text."""
+    from iron_jarvis.platform import build_platform
+
+    d = SimpleNamespace(platform=build_platform(str(tmp_path / "home")))
     turn = CP.StableTurn(active=True)
     turn.when_sent(lambda: "\n\n# Tools\nZQXTOOLS")
     turn.later("\n\nZQXLATER")
     given = [LLMMessage(role="assistant", content="ZQXSECRET words")]
     with caplog.at_level(logging.WARNING, logger=CP.log.name):
         system, msgs, plan = asyncio.run(turn.place(
-            None, SimpleNamespace(messages=[]), system="SYSTEM", tail=P.own("\n\nZQXTAIL"), plan="PLAN", msgs=given,
-            images=None, tool_specs=[], provider="", model="", ctx_messages=[SimpleNamespace(role="assistant", content="x")]))
+            d, SimpleNamespace(messages=[], thread_id="", turn_id=""), system="SYSTEM", tail=P.own("\n\nZQXTAIL"),
+            plan="PLAN", msgs=given, images=None, tool_specs=[], provider="mock", model="mock",
+            ctx_messages=[SimpleNamespace(role="assistant", content="x")]))
     assert system == "SYSTEM\n\nZQXTAIL\n\n# Tools\nZQXTOOLS\n\nZQXLATER\n\n" + today_mod.today_line()
     assert msgs is given and plan == "PLAN"
     said = [r.getMessage() for r in caplog.records]
     assert len(said) == 1 and "could not be placed beside its message" in said[0]
     assert not any(mark in r.getMessage() for r in caplog.records for mark in ("ZQXSECRET", "ZQXTAIL", "ZQXTOOLS"))
+
+
+def test_the_demo_model_takes_the_persons_words_and_reads_the_apps_lines_where_they_ride():
+    """The demo model (a fresh install's default) writes the task it was
+    given into RESULT.md and answers the "no media service" line with the
+    key card. The task is the person's words alone, never the block beside
+    them, and the line is read beside the message, where it rides now."""
+    from iron_jarvis.providers.adapters import mock
+
+    typed = "write up the plan for the bakery"
+    sent = typed + P.once_block(P.last("\n\n# Tools\n" + mock.NO_MEDIA_MARK), lead=DATE_LINE)
+    message = [LLMMessage(role="user", content=sent)]
+    wrote = asyncio.run(mock.MockLLMAdapter().complete(system="", messages=message, tools=[{"name": "write_file"}]))
+    said = "".join(str(v) for c in wrote.tool_calls for v in c.arguments.values())
+    assert "Task: " + typed + "\n" in said and "ADDED BY THE APP" not in said and DATE_LINE not in said
+    card = asyncio.run(mock.MockLLMAdapter().complete(system="", messages=message, tools=[{"name": "app_connect"}]))
+    assert [c.name for c in card.tool_calls] == ["app_connect"]

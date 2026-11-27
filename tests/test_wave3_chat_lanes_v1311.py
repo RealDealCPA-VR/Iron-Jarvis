@@ -477,7 +477,9 @@ def test_grounded_system_prompt_is_byte_identical(tmp_path, monkeypatch, lane):
     assert system.index(_EXPECTED_STABLE_SEGMENT) < beside_at
     assert "IDX-1" not in system[:beside_at] and "ROSTER-1" not in system[:beside_at]
     assert beside_at < system.index("IDX-1") < system.index(_prefix.FOUND_TOP)
-    assert system.index("ROSTER-1") > system.index(_prefix.FOUND_BOTTOM)
+    # (Second review: the roster is a standing note. It stands BEFORE what
+    # was found, never as the last thing a model reads.)
+    assert system.index("IDX-1") < system.index("ROSTER-1") < system.index(_prefix.FOUND_TOP)
     assert _EXPECTED_QUERY_SEGMENT not in system[:beside_at], "a query-dependent section is in the system prompt"
     assert (_EXPECTED_QUERY_SEGMENT + "\n---\n" + _prefix.FOUND_BOTTOM) in system[beside_at:], (
         f"{lane}: the query-dependent sections are out of order, re-joined, or followed by something:\n"

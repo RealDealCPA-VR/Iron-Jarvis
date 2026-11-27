@@ -215,20 +215,19 @@ def _fenced(text: str) -> str:
     return f"{FOUND_TOP}\n{FOUND_HEAD}\n---\n{body}\n---\n{FOUND_BOTTOM}"
 
 
-def once_block(tail: Any, *, lead: str = "", standing: str = "") -> str:
+def once_block(tail: Any, *, lead: str = "") -> str:
     """The once-only block that rides beside the NEWEST message, in this
     order: *lead* (the app's own first line, the date), the app's own
-    sections and *standing* (notes that stand whatever the message says: who
-    can take the work), then ONE fence around everything it found, then the
-    sections that are read last (this message's own directives). "" when
-    there is nothing to say. The same input gives the same bytes."""
+    sections (the standing notes: the memory index, who can take the work),
+    then ONE fence around everything it found, then the sections that are
+    read last (this message's own directives). "" when there is nothing to
+    say. The same input gives the same bytes."""
     t = as_tail(tail)
     own_text = _defang(t.of(OWN)).strip("\n")
     found_text = t.of(FOUND)
     last_text = _defang(t.of(LAST)).strip("\n")
     lead = _defang(str(lead or "")).strip("\n")
-    standing = _defang(str(standing or "")).strip("\n")
-    parts: list[str] = [p for p in (lead, own_text, standing) if p]
+    parts: list[str] = [p for p in (lead, own_text) if p]
     fenced = bool(found_text.strip())
     if fenced:
         parts.append(_fenced(found_text))

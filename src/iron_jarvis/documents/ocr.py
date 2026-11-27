@@ -1068,14 +1068,9 @@ async def ocr_document(
     if cached_only:
         # The intelligence plan, release 7: the caller may start NO new
         # reading (no child process, no model call). A reading already made
-        # of this exact file, at any page cap, is still served; otherwise the
-        # caller is told, in one sentence, that the scanned pages were not read.
-        try:
-            earlier = await asyncio.to_thread(lookup_cached_text, p)
-        except Exception:  # noqa: BLE001 — no reading to serve
-            earlier = None
-        if earlier is not None and earlier[0]:
-            return earlier[0], earlier[1]
+        # of this exact file was served just above (and by ``extract_text``
+        # before this was reached); otherwise the caller is told, in one
+        # sentence, that the scanned pages were not read.
         return "", STAYED_NO_OCR
     if is_image(p):
         if not vision:

@@ -58,7 +58,7 @@ def test_armed_tools_reach_model_and_unknown_skipped(tmp_path, monkeypatch):
 
         async def c(*, system, messages, tools):
             captured["tools"] = tools
-            captured["system"] = system
+            captured["system"] = with_beside(system, messages)
             return await rc(system=system, messages=messages, tools=tools)
 
         a.complete = c

@@ -30,6 +30,7 @@ from iron_jarvis.daemon.routes.chat import _clean_setup
 from iron_jarvis.learning.engine import _PROMPT_EXCLUDED_SOURCES, LearningEngine
 from iron_jarvis.memory.overview import memory_overview
 from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS, select_auto_tools
+from tests._fakes.sent import with_beside
 
 
 @pytest.fixture
@@ -142,7 +143,7 @@ def _spy_complete(platform, seen: dict):
         real_complete = adapter.complete
 
         async def spy(*, system, messages, tools, **kw):
-            seen.setdefault("systems", []).append(system)
+            seen.setdefault("systems", []).append(with_beside(system, messages))
             return await real_complete(system=system, messages=messages, tools=tools, **kw)
 
         adapter.complete = spy
@@ -175,7 +176,7 @@ def test_both_lanes_carry_the_brief_only_when_the_tool_is_armed(tmp_path):
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools,
                           session_id=None, task_class=None, **kw):
-        captured["system"] = system
+        captured["system"] = with_beside(system, messages)
         adapter = platform.providers.get(provider or platform.router.default_provider, model)
         async for frame in adapter.stream(system=system, messages=messages, tools=tools):
             if frame.get("type") == "final":

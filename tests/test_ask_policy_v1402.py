@@ -43,6 +43,7 @@ from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.adapters.mock import MockLLMAdapter
 from tests._fakes.harness_lane import WHO, body, post, stream, wire
+from tests._fakes.sent import with_beside
 
 POLICY = C.ASK_POLICY
 
@@ -159,7 +160,8 @@ async def _plain(platform, ws, lane: str, tools, monkeypatch) -> str:
             pass
     else:
         await run_chat_turn(platform, BUILTIN_PERSONAS, b)
-    return model.calls[0]["system"]
+    # Release 7: the Tools section rides beside the newest message.
+    return with_beside(model.calls[0]["system"], model.calls[0]["messages"])
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
