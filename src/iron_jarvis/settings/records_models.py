@@ -110,9 +110,35 @@ def _report_lines(d: Any, provider: str, model: str) -> str:
     profile = load_profile(Path(d.platform.config.home), provider, model)
     guided = bool(d.platform.providers.reply_guided(provider, model))
     lines = plain_lines(profile, guided)
-    if not lines:
-        return f"{model}: not measured yet."
-    return f"{model}: " + " ".join(lines)
+    if lines:
+        return f"{model}: " + " ".join(lines)
+    return f"{model}: not measured yet; {_next_words(d, provider, model)}"
+
+
+#: Release 9 review: what happens next for a model not measured yet, TRUE for
+#: this PC and this model (never "tried by itself" where it will not be).
+WILL_BE_TRIED = "it will be tried by itself the next time this PC is idle, or press Measure on Model servers"
+PRESS_MEASURE = "press Measure on Model servers to measure it, or ask me to"
+
+
+def _next_words(d: Any, provider: str, model: str) -> str:
+    """BLOCKING-cheap. The idle trial tries a model only on Windows, only
+    while it waits in line, and not while its server's routing is unknown."""
+    import sys
+
+    from ..envelope import autotrial as T
+
+    trials = getattr(d, "auto_trials", None)
+    if sys.platform != "win32" or trials is None:
+        return PRESS_MEASURE
+    try:
+        with trials._lock:  # noqa: SLF001 — one read of its own entry
+            entry = trials._models.get(trials._key(provider, model))  # noqa: SLF001
+        if entry is not None and entry.state == T.PENDING and entry.why != "not known yet":
+            return WILL_BE_TRIED
+    except Exception:  # noqa: BLE001
+        pass
+    return PRESS_MEASURE
 
 
 class ModelReportTool(Tool):
@@ -165,10 +191,9 @@ class ModelReportTool(Tool):
         except Exception:  # noqa: BLE001 — said in words, never a traceback
             return ToolResult(ok=False, error="Your models could not be read just now.", data={"door": HREF})
         head = f"What your own models are good at ({PLACE}):"
-        tail = "A model not measured yet is tried by itself the next time the PC is idle, or measured now on request."
         return ToolResult(
             ok=True,
-            output="\n".join([head, *(f"- {line}" for line in lines), tail]),
+            output="\n".join([head, *(f"- {line}" for line in lines)]),
             data={"door": HREF, "models": [{"provider": p, "model": m} for p, m in chosen]},
         )
 
@@ -220,17 +245,36 @@ class ModelMeasureTool(Tool):
         provider, model = chosen[0]
         try:
             await start(provider, model)
-        except Exception as exc:  # noqa: BLE001 — the route's own words (400/409)
-            detail = getattr(exc, "detail", None) or str(exc)
-            return ToolResult(ok=False, error=f"{model} could not be measured: {detail}", data={"door": HREF})
+        except Exception as exc:  # noqa: BLE001 — said in plain words (400/409)
+            return ToolResult(ok=False, error=_refusal_words(model, exc), data={"door": HREF})
         return ToolResult(
             ok=True,
             output=(
                 f"Started measuring {model} with made-up text only. It runs in the background on your "
-                f"own model server and is not finished yet; {PLACE} shows the result when it is."
+                f"own model server and is not finished yet; {PLACE} shows the result when it is. "
+                "A new measurement also starts afresh the count Iron Jarvis keeps of its trouble "
+                "with tools."
             ),
             data={"door": HREF, "provider": provider, "model": model},
         )
+
+
+def _refusal_words(model: str, exc: Exception) -> str:
+    """Measure's refusal in plain words (the route's details carry engine
+    words: provider names, "base_url", event names)."""
+    from ..daemon.routes.envelope import NOT_YOURS_WORDS
+
+    status = getattr(exc, "status_code", None)
+    detail = str(getattr(exc, "detail", "") or "")
+    if status == 409:
+        return f"{model} is being measured already; {PLACE} shows the result when it finishes."
+    if detail == NOT_YOURS_WORDS:
+        return detail
+    if "trusted" in detail:
+        return f"Iron Jarvis measures only your own models; {model} is a cloud model."
+    if "base_url" in detail:
+        return f"No model server address is saved for {model}; add it on {PLACE} first."
+    return f"{model} could not be measured just now."
 
 
 def model_tools(platform: Any) -> list[Tool]:

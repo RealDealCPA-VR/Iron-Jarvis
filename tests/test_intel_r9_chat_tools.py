@@ -74,7 +74,8 @@ def test_a_model_not_measured_yet_says_so_and_a_guided_one_says_why(tmp_path):
     app = _app(tmp_path)
     platform = app.state.platform
     out = asyncio.run(RM.ModelReportTool(platform).execute({"model": MODEL}, None))
-    assert out.ok and f"{MODEL}: not measured yet." in out.output
+    assert out.ok and f"{MODEL}: not measured yet; {RM.PRESS_MEASURE}" in out.output
+    assert "tried by itself" not in out.output  # never used here: nothing waits in line
     for _ in range(STUMBLE_RUN):
         platform.providers.note_reply_form("ollama", MODEL, "native", False)
     out = asyncio.run(RM.ModelReportTool(platform).execute({}, None))
@@ -114,7 +115,8 @@ def test_measure_says_the_buttons_own_refusal(tmp_path):
 
     app.state.d.start_measure = busy
     out = asyncio.run(RM.ModelMeasureTool(app.state.platform).execute({"model": MODEL}, None))
-    assert not out.ok and "already running" in out.error
+    assert not out.ok and out.error == f"{MODEL} is being measured already; Model servers shows the result when it finishes."
+    assert "envelope" not in out.error and "probe" not in out.error
 
 
 def test_the_route_exposes_its_measure_press(tmp_path):
@@ -163,3 +165,39 @@ def test_chat_reaches_it_on_both_lanes(tmp_path, monkeypatch, lane, words, want)
         # card and only reads: the report, never the measure press.
         want = want - {"model_measure"}
     assert offered and any(want <= names for names in offered), [sorted(n) for n in offered]
+
+
+def test_the_report_says_the_true_next_step_per_model(tmp_path, monkeypatch):
+    from iron_jarvis.envelope import autotrial as T
+
+    app = _app(tmp_path)
+    trials = app.state.d.auto_trials
+    trials.note_used("ollama", MODEL)
+    report = RM.ModelReportTool(app.state.platform)
+    monkeypatch.setattr("sys.platform", "win32")
+    out = asyncio.run(report.execute({"model": MODEL}, None))
+    assert f"not measured yet; {RM.WILL_BE_TRIED}" in out.output
+    # Waiting for its routing to be known, or left alone: Measure is the way.
+    trials._set("ollama", MODEL, T.PENDING, "not known yet")
+    assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
+    trials._set("ollama", MODEL, T.LEFT, "cut short 3 times")
+    assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
+    # Linux and Mac never try a model unasked.
+    trials._set("ollama", MODEL, T.PENDING, "")
+    monkeypatch.setattr("sys.platform", "linux")
+    assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
+
+
+def test_measure_refuses_a_model_that_does_not_stay_on_your_network(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from iron_jarvis.daemon.routes import envelope as E
+
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    platform.config.custom_base_url = "https://pay-per-use.example.test/v1"
+    platform.providers.configure_local(custom_base_url="https://pay-per-use.example.test/v1", custom_model="big")
+    r = TestClient(app).post("/envelope/custom/big/probe")
+    assert r.status_code == 400 and r.json()["detail"] == E.NOT_YOURS_WORDS
+    out = asyncio.run(RM.ModelMeasureTool(platform).execute({"model": "big"}, None))
+    assert not out.ok and out.error == E.NOT_YOURS_WORDS
