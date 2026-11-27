@@ -691,7 +691,7 @@ def test_the_contract_fixture_is_what_the_record_really_builds():
         # A QUIET line (no problem, nothing worth a look) on which something was not checked.
         "quiet_not_checked": R.payload([
             _row(R.FILE_OPENS, R.PASSED, "opens", "summary.xlsx"),
-            _row(R.SHEET_ERRORS, R.NOT_CHECKED, "2 formulas have no saved result and could not be worked out here",
+            _row(R.SHEET_ERRORS, R.NOT_CHECKED, "2 formulas could not be worked out here",
                  "summary.xlsx")]),
         "unseen": {"raw": spoiled, "clean": R.clean_checked(spoiled)},
         "crossed": {"raw": crossed, "clean": R.clean_checked(crossed)},

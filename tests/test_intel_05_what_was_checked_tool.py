@@ -154,6 +154,24 @@ async def test_an_unsaved_local_only_replys_rows_are_read_only_by_a_reply_that_i
     assert "summary.xlsx" in inside.output
     outside = await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_new_home"))
     assert outside.output == CT.NOTHING
+    # The reader's side errs the other way from the writer's: in doubt the writer keeps rows home, and the
+    # reader hands none over.
+    from iron_jarvis.checks import turn as T
+
+    def broken():
+        raise RuntimeError("the scope cannot be read")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(egress, "current_scope", broken)
+        assert T.reply_is_local_only(platform.engine, "") is True
+        assert T.may_read_home(platform.engine, "") is False
+        assert (await _ask(platform, _ctx(platform, tmp_path, turn_id="turn_new_home"))).output == CT.NOTHING
+    # A turn sent Local only in a saved chat that is not Local only itself may read that chat's kept-home rows.
+    R.write(platform.engine, SHEET[:1], thread_id="chat_plain_scope", turn_id="turn_scoped", kept_home=True)
+    assert (await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_plain_scope"))).output == CT.NOTHING
+    with egress.local_only_scope(True):
+        scoped = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_plain_scope"))
+    assert "summary.xlsx" in scoped.output
 
 
 async def test_a_run_is_read_only_when_it_was_started_from_the_calling_chat(platform, tmp_path):

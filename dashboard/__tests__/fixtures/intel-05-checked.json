@@ -433,13 +433,13 @@
     "more_words": ""
   },
   "quiet_not_checked": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens. Not checked: the spreadsheet (2 formulas have no saved result and could not be worked out here).",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens. Not checked: the spreadsheet (2 formulas could not be worked out here).",
     "tone": "quiet",
     "checks": [
       {
         "check": "sheet_no_error_cells",
         "label": "\u201csummary.xlsx\u201d",
-        "said": "2 formulas have no saved result and could not be worked out here",
+        "said": "2 formulas could not be worked out here",
         "result": "not_checked",
         "result_words": "Not checked",
         "who": "by Iron Jarvis"

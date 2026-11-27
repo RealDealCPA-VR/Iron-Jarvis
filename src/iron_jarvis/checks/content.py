@@ -56,6 +56,10 @@ holds the four outcomes and the allowlist of what may be a "Problem"):
 * **a PDF's pages** (``pdf_pages``): how many it has, said as a fact ("12
   pages"). Nothing is compared with what the reply says.
 
+THE RULE BEHIND ALL OF IT: a phrase is said only where it is true by
+construction for EVERY file. Where it would take a guess about what the
+file's author meant, the answer is no row at all.
+
 RULES OF THE HOUSE. A check never raises: one that breaks is ``not_checked``
 with a plain reason, never ``passed``. Only the files the caller hands over
 are opened, and the callers hand over the files their own tools wrote (both
@@ -1006,12 +1010,15 @@ def _explained(total: float, vals: "list[float]") -> bool:
     return False
 
 
-def _adds_up(total: float, added: float, count: int) -> bool:
-    """Is a total EXACTLY the sum of its cells? Equal but for what a
-    computer's own arithmetic loses over *count* cells (0.1 + 0.2 is 0.3).
-    Nothing else: a total that matches only after rounding is not "adds up"
-    (it is not judged: :func:`_rounder`)."""
-    return abs(total - added) <= (count + 2) * math.ulp(max(abs(total), abs(added), 1e-9))
+def _adds_up(total: float, added: float, vals: "list[float]") -> bool:
+    """Is a total EXACTLY the sum of its cells (*vals*, which add up to
+    *added*)? Equal but for what a computer's own arithmetic loses over
+    those cells (0.1 + 0.2 is 0.3; 1,000,000.1 less 1,000,000 plus 0.2 is
+    0.3): one step of the largest figure involved for each cell. Nothing
+    else: a total that matches only after rounding is not "adds up" (it is
+    not judged: :func:`_rounder`)."""
+    largest = max([abs(total), abs(added), 1e-9, *(abs(v) for v in vals)])
+    return abs(total - added) <= (len(vals) + 2) * math.ulp(largest)
 
 
 def _totals(book: _Book, late: Callable[[], bool] = _never_late) -> "tuple[int, list[str]]":
@@ -1180,18 +1187,18 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
     is not a percent and its column is not headed as a kind that is not
     added (:data:`_NOT_ADDED_RX`: a rate, a price, a balance, an invoice
     number); directly above it stands one list (:func:`_list_above`: two or
-    more plain typed numbers, no gap, under a text heading); and no row of
-    that list is a subtotal of any kind (:func:`_has_subtotal`).
+    more plain typed numbers, no gap, under a text heading); no row of that
+    list is a subtotal of any kind (:func:`_has_subtotal`); and every row
+    of it has a label in words in the total label's own column.
 
     ``passed`` ("adds up") means exactly its arithmetic: a typed figure
     EQUAL to the sum of ALL those cells (:func:`_adds_up`), or a plain
     ``=SUM`` of exactly those cells whose saved result, where the file
     holds one, is that sum.
 
-    ``look``: a TYPED figure that differs, when every row has a text label,
-    the figure is not written rounder than its rows (:func:`_rounder`) and
-    no other plain reading explains it (:func:`_other_reading`). Both
-    figures, no verdict. NEVER ``failed``.
+    ``look``: a TYPED figure that differs, when it is not written rounder
+    than its rows (:func:`_rounder`) and no other plain reading explains it
+    (:func:`_other_reading`). Both figures, no verdict. NEVER ``failed``.
 
     Everything else: None."""
     if (sheet, row, col) in book.percent:
@@ -1201,6 +1208,10 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
         return None
     if _NOT_ADDED_RX.search(str(cells.get((rows[0][0] - 1, col)))) or _has_subtotal(cells, by_row, rows):
         return None
+    for r, _x in rows:
+        label = cells.get((r, label_col))
+        if not (isinstance(label, str) and label.strip() and not _is_formula(label)):
+            return None     # a row with no label in words (a number, a date, nothing): not a list to judge
     vals = [x for _r, x in rows]
     added = math.fsum(vals)
     v = cells.get((row, col))
@@ -1210,18 +1221,14 @@ def _row_total(book: _Book, sheet: str, cells: dict, saved: dict, row: int, col:
                 ref[1], ref[3]) != (rows[0][0], rows[-1][0]):
             return None     # not a plain SUM of exactly the list above it
         last = saved.get((row, col))
-        if last is not None and not (_is_number(last) and _adds_up(float(last), added, len(vals))):
+        if last is not None and not (_is_number(last) and _adds_up(float(last), added, vals)):
             return None     # the file holds another result for it: nothing is said
         return PASSED, ""
     total = float(v)
     if not math.isfinite(total):
         return None
-    if _adds_up(total, added, len(vals)):
+    if _adds_up(total, added, vals):
         return PASSED, ""
-    for r, _x in rows:
-        label = cells.get((r, label_col))
-        if not (isinstance(label, str) and label.strip() and not _is_formula(label)):
-            return None
     if _rounder(total, vals) or _other_reading(cells, by_row, rows, row, label_col, total):
         return None
     said, shown = _figures(total, added)
@@ -1320,11 +1327,10 @@ def _sheet_checks(path: Path, name: str, late: Callable[[], bool] = _never_late,
     elif odd:
         out.append(row(SHEET_ERRORS, NOT_CHECKED, f"{odd} holds a number this check cannot read"))
     elif unworked:
-        out.append(row(
-            SHEET_ERRORS, NOT_CHECKED,
-            f"{_plural(unworked, 'formula')} {'has' if unworked == 1 else 'have'} no saved result and could not "
-            "be worked out here",
-        ))
+        # Only what Iron Jarvis did: a workbook that asks to be worked out
+        # again HOLDS a (placeholder) result for the formula, so "it has no
+        # saved result" would not be true of every file.
+        out.append(row(SHEET_ERRORS, NOT_CHECKED, f"{_plural(unworked, 'formula')} could not be worked out here"))
     elif not held and not found:
         formulas, unsaved = _formula_counts(book)
         if not unsaved:
@@ -1359,9 +1365,11 @@ _TEXT_RUN_RX = re.compile(rb"<(?:[\w.-]+:)?t(?:\s[^>]*)?>[^<]*[^\s<][^<]*<")
 #: under any prefix and in any namespace (a Strict Open XML sheet, a chart's
 #: saved values).
 _CELL_RX = re.compile(rb"<(?:[\w.-]+:)?(?:v|f|is)[\s>]")
-#: The parts looked through: every XML part but the package's own lists and
-#: the document's properties (a title there is not text of the document).
-_WORD_PART_RX = re.compile(r"(?!docProps/|_rels/|\[Content_Types\]).*\.xml", re.IGNORECASE)
+#: The parts looked through: EVERY XML part of a Word package (a run of
+#: text is ``<t>`` under some prefix wherever it sits; the document's
+#: properties hold none, so a title there is not "text"), and every XML
+#: part under ``xl/`` of a workbook.
+_WORD_PART_RX = re.compile(r".*\.xml", re.IGNORECASE)
 _SHEET_PART_RX = re.compile(r"xl/.*\.xml", re.IGNORECASE)
 
 

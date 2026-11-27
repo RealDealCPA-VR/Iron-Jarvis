@@ -116,11 +116,21 @@ def _review_words(state: str, why: Any) -> str:
 def claims_check(until: Any) -> "Check | None":
     """The check-again loop's last look at a reply (``daemon/until_done``):
     ONE row, worth a look, exactly when the loop itself raised a claim of
-    the reply that no step matches and left it open (:data:`OPEN_WORDS`).
-    None for everything else. There is no passed row and no "not checked"
-    row: the loop finding nothing open also means its reading gave up, so
-    nothing is said to be checked, and nobody is told it was."""
+    the reply that no step matches (:data:`OPEN_WORDS`) and STOPPED with it
+    still open (``until.ended`` is one of its own stops: out of steps, two
+    tries that changed nothing, the most tries). That is the reply the loop
+    itself says is not finished. None for everything else: a claim it
+    raised and sent the model back for is not said while the reply goes on,
+    and a claim left over from an earlier look is not said of an answer the
+    loop never looked at (low trust, cut off, a declined step). There is no
+    passed row and no "not checked" row: the loop finding nothing open also
+    means its reading gave up, so nothing is said to be checked, and nobody
+    is told it was."""
     try:
+        from ..daemon.until_done import END_WORDS
+
+        if str(getattr(until, "ended", "") or "") not in END_WORDS:
+            return None
         still = dict.fromkeys(str(k).partition(":")[0] for k in (getattr(until, "open", None) or []))
         said = [OPEN_WORDS[k] for k in still if k in OPEN_WORDS]
         return Check(CLAIMS, LOOK, "; ".join(said)) if said else None

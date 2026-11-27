@@ -471,8 +471,9 @@ describe("the line", () => {
     expect(QUIET_NOT_CHECKED.tone).toBe("quiet");
     expect(QUIET_NOT_CHECKED.line).toContain("Not checked:");
     expect(mark(QUIET_NOT_CHECKED)).toEqual([false, true]);
-    // Nothing passed at all.
+    // Nothing passed at all; and a line that came with no list of checks says nothing passed either.
     expect(mark(NOT_CHECKED)).toEqual([false, true]);
+    expect(mark({ line: "Checked by Iron Jarvis: the document opens.", tone: "quiet", checks: [] })).toEqual([false, true]);
     // More checks than the list holds: what is only counted is not known to have passed.
     expect(MANY.more).toBeGreaterThan(0);
     expect(mark(MANY)).toEqual([false, true]);

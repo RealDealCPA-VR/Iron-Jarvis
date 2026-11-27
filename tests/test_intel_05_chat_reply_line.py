@@ -219,6 +219,12 @@ def test_a_local_only_chats_own_reply_keeps_its_checks_home_after_the_chat_is_sw
     assert set_thread_local_only(engine, plain, False) is False
     assert "plan.xlsx" in asked(plain)
 
+    # A NEW chat (not saved yet) whose reply is sent Local only: the turn's own scope keeps its rows home too.
+    _write_turn(client, monkeypatch, lane, WRONG_SHEET, name="fresh.xlsx", final="Done: I saved fresh.xlsx.",
+                local_only=True, turn_id=f"turn_fresh_{lane}")
+    fresh = [r for r in _rows(platform) if r.turn_id == f"turn_fresh_{lane}"]
+    assert fresh and {(r.thread_id, r.kept_home) for r in fresh} == {("", True)}
+
 
 @pytest.mark.parametrize("lane", LANES)
 def test_a_total_that_differs_is_worth_a_look_with_both_figures_never_a_problem(client, monkeypatch, lane):
@@ -269,7 +275,7 @@ def test_a_formula_nobody_could_work_out_reads_not_checked_never_no_error_cells(
     body, _ = _write_turn(client, monkeypatch, lane, UNWORKED)
     assert body["checked"]["line"] == (
         "Checked by Iron Jarvis: the spreadsheet opens. Not checked: the spreadsheet "
-        "(1 formula has no saved result and could not be worked out here)."
+        "(1 formula could not be worked out here)."
     ), body["checked"]["line"]
     assert body["checked"]["tone"] == "quiet"
     assert not [c for c in body["checked"]["checks"] if c["said"] == "no error cells"]

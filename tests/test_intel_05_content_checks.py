@@ -245,7 +245,7 @@ def test_a_writer_that_saves_zero_for_every_formula_never_reads_no_error_cells(t
     got = content.check_files([str(p)])
     said = {c.result: c.detail for c in _by(got, SHEET_ERRORS)}
     assert said == {LOOK: "D3 works out to an error",
-                    NOT_CHECKED: "1 formula has no saved result and could not be worked out here"}
+                    NOT_CHECKED: "1 formula could not be worked out here"}
     line = line_for(_rows(got))[0]
     assert "no error cells" not in line and "work out," not in line and "works out," not in line
 
@@ -324,7 +324,7 @@ def test_a_formula_the_evaluator_calls_a_value_error_is_only_not_checked(tmp_pat
     p = _write(how, tmp_path / "t.xlsx", rows)
     got = _by(content.check_files([str(p)]), SHEET_ERRORS)
     assert [(c.result, c.detail) for c in got] == [
-        (NOT_CHECKED, "1 formula has no saved result and could not be worked out here")], got
+        (NOT_CHECKED, "1 formula could not be worked out here")], got
     line, tone = line_for(_rows(content.check_files([str(p)])))
     assert tone == "quiet" and "no error cells" not in line and "Worth a look" not in line and "Problem" not in line
 
@@ -336,13 +336,13 @@ def test_a_cell_of_blank_space_is_text_to_a_formula_never_an_empty_cell(tmp_path
     book = content._load(p)
     assert ("Summary", 1, 2) in book.spaces and (1, 2) not in book.formulas["Summary"]
     assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "1 formula has no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "1 formula could not be worked out here", file="t.xlsx")]
 
 
 def test_a_date_that_cannot_exist_is_not_worked_out_to_a_clean_number(tmp_path):
     p = _xlsx(tmp_path / "t.xlsx", [["a", 5], ["t", "=DATE(-1,1,1)"]])
     assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "1 formula has no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "1 formula could not be worked out here", file="t.xlsx")]
     fine = _xlsx(tmp_path / "fine.xlsx", [["a", 5], ["t", "=DATE(2024,1,31)+30"], ["u", "=DATE(99,1,1)"]])
     assert _by(content.check_files([str(fine)]), SHEET_ERRORS) == [
         Check(SHEET_ERRORS, PASSED, "its 2 formulas work out", file="fine.xlsx")]
@@ -401,7 +401,7 @@ def test_a_newer_function_nobody_measured_is_not_worked_out_and_is_no_finding(tm
     p = _xlsx(tmp_path / "t.xlsx", [["a", 5], ["t", formula]])
     got = content.check_files([str(p)])
     assert _by(got, SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "1 formula has no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "1 formula could not be worked out here", file="t.xlsx")]
     line, tone = line_for(_rows(got))
     assert tone == "quiet" and "#NAME?" not in line and "work out" not in line and "no error cells" not in line
 
@@ -420,14 +420,14 @@ def test_a_formula_that_cannot_be_worked_out_is_not_checked_and_the_line_never_s
     p = _xlsx(tmp_path / "t.xlsx", [["k", 1], ["a", "=NOSUCHFUNCTION(B1)"], ["b", "=Missing!A1"], ["c", "=B1*2"]])
     got = content.check_files([str(p)])
     assert _by(got, SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "2 formulas have no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "2 formulas could not be worked out here", file="t.xlsx")]
     line, tone = line_for(_rows(got))
     assert line == ("Checked by Iron Jarvis: the spreadsheet opens. Not checked: the spreadsheet "
-                    "(2 formulas have no saved result and could not be worked out here).")
+                    "(2 formulas could not be worked out here).")
     assert tone == "quiet" and "no error cells" not in line
     one = _xlsx(tmp_path / "one.xlsx", [["k", 1], ["a", "=NOSUCHFUNCTION(B1)"]])
     assert _by(content.check_files([str(one)]), SHEET_ERRORS)[0].detail == (
-        "1 formula has no saved result and could not be worked out here")
+        "1 formula could not be worked out here")
 
 
 def test_the_good_phrase_is_one_of_two_true_ones_never_a_loose_one(tmp_path):
@@ -523,7 +523,7 @@ def test_text_is_a_number_only_when_it_is_spelled_as_one(tmp_path):
     worked, errors, unworked = _worked_out(tmp_path, rows)
     assert (worked, errors, unworked) == ({}, [], 4)
     got = _by(content.check_files([str(_xlsx(tmp_path / "t.xlsx", rows))]), SHEET_ERRORS)
-    assert got == [Check(SHEET_ERRORS, NOT_CHECKED, "4 formulas have no saved result and could not be worked out here",
+    assert got == [Check(SHEET_ERRORS, NOT_CHECKED, "4 formulas could not be worked out here",
                          file="t.xlsx")]
 
 
@@ -626,12 +626,12 @@ def test_what_the_file_holds_what_was_worked_out_and_what_could_not_be_are_each_
     p = _xlsx(tmp_path / "t.xlsx", [["k", 1], ["a", "=B1/0"], ["b", "=NOSUCHFUNCTION(B1)"], ["c", "#REF!"]])
     got = {c.result: c.detail for c in _by(content.check_files([str(p)]), SHEET_ERRORS)}
     assert got == {FAILED: "B4 holds #REF!", LOOK: "B2 works out to an error",
-                   NOT_CHECKED: "1 formula has no saved result and could not be worked out here"}
+                   NOT_CHECKED: "1 formula could not be worked out here"}
     line, tone = line_for(_rows(content.check_files([str(p)])))
     assert line == (
         "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: B4 holds #REF!. "
         "Worth a look: B2 works out to an error. "
-        "Not checked: the spreadsheet (1 formula has no saved result and could not be worked out here)."
+        "Not checked: the spreadsheet (1 formula could not be worked out here)."
     )
     assert tone == "warn"
 
@@ -640,13 +640,13 @@ def test_the_working_out_is_capped_and_what_is_past_the_cap_is_counted_not_passe
     p = _xlsx(tmp_path / "t.xlsx", [["k", 1], *[["f", "=B1+1"] for _ in range(5)]])
     monkeypatch.setattr(content, "MAX_WORKED", 2)
     assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "3 formulas have no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "3 formulas could not be worked out here", file="t.xlsx")]
     # ... and a formula that reads more cells than one may is not worked out.
     monkeypatch.setattr(content, "MAX_WORKED", 20_000)
     monkeypatch.setattr(content, "MAX_FORMULA_READS", 3)
     wide = _xlsx(tmp_path / "wide.xlsx", [[1], [2], [3], [4], [5], ["=SUM(A1:A5)"]])
     assert _by(content.check_files([str(wide)]), SHEET_ERRORS)[0].detail == (
-        "1 formula has no saved result and could not be worked out here")
+        "1 formula could not be worked out here")
 
 
 def test_a_workbook_read_only_in_part_has_no_formula_worked_out(tmp_path, monkeypatch):
@@ -749,7 +749,9 @@ SHAPES: list[Shape] = [
     Shape("a title above the heading",
           [["Budget 2024", None], [None, None], HDR, ["Rent", 100], ["Food", 300], ["Total", 400]], good=1),
     Shape("rows labelled by a date",
-          [["Date", "Amount"], [datetime(2024, 1, 1), 100], [datetime(2024, 1, 2), 300], ["Total", 400]], good=1),
+          [["Date", "Amount"], [datetime(2024, 1, 1), 100], [datetime(2024, 1, 2), 300], ["Total", 400]],
+          note="a row with no label in WORDS (a date, a number, nothing) is not a list this check judges"),
+    Shape("rows labelled by a number", [["Year", "Sales"], [2021, 100], [2022, 140], ["Total", 240]]),
     Shape("amounts written as currency text",
           [HDR, ["a", "$100"], ["b", "$300"], ["Total", 400]]),
     Shape("a profit and loss layout",
@@ -976,7 +978,7 @@ SHAPES: list[Shape] = [
           note="300 = 100 + 200: it may be a subtotal, so nothing is said (it read 'worth a look')"),
     Shape("a last row that equals the rows above it, under a total that repeats it",
           [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 300]], correct=False,
-          note="never 'adds up': the list adds up to 600 (the largest row explains 300: not judged)"),
+          note="never 'adds up': the list adds up to 600. 300 = 100 + 200 may be a subtotal: not judged"),
     Shape("the best two of three scores", [["Quiz", "Score"], ["Quiz 1", 8], ["Quiz 2", 6], ["Quiz 3", 9], ["Total", 17]]),
     Shape("a variance column in points",
           [["Region", "Plan", "Actual", "Variance"], ["North", 100, 105, 5], ["South", 100, 97, -3],
@@ -1052,7 +1054,17 @@ SHAPES: list[Shape] = [
           [HDR, ["A", 100], ["B", 200], [None, None], ["C", 50], ["D", 25], ["Total", 75]], correct=False),
     Shape("a total between its smallest and its largest row",
           [HDR, ["A", 100], ["B", 200], ["C", 300], ["Total", 250]], correct=False,
-          note="admitted: an average reads the same"),
+          note="admitted: an average reads the same (and 300 = 100 + 200 may be a subtotal)"),
+    Shape("a wrong total between the smallest and the largest of rows that are no subtotal",
+          [HDR, ["A", 100], ["B", 250], ["C", 300], ["Total", 260]], correct=False,
+          note="admitted: 260 lies between 100 and 300, and an average or a last value reads the same. Not judged"),
+    Shape("a word in the first row of the list, and a total of the numbers under it",
+          [HDR, ["A", "TBD"], ["B", 50], ["C", 25], ["Total", 75]], good=1,
+          note="admitted: the word reads as a second heading row (a units row reads the same). The total equals "
+               "every number above it, which is all 'adds up' says"),
+    Shape("a word in the first row of the list, and a total that counts a guess for it",
+          [HDR, ["A", "TBD"], ["B", 50], ["C", 25], ["Total", 175]], look=("B5",), correct=False,
+          note="175 may count 100 for the row that says TBD: the numbers above it add up to 75, and both are said"),
     Shape("a number typed as text inside a SUM total's list",
           [HDR, ["A", 100], ["B", "200"], ["C", 300], ["Total", "=SUM(B2:B4)"]]),
     Shape("a totals column that adds a quantity to a price",
@@ -1193,12 +1205,15 @@ def test_one_total_that_adds_up_and_one_that_differs_are_both_said(tmp_path):
 @pytest.mark.parametrize("rows,total,result", [
     # "Adds up" means exactly its arithmetic: EQUAL to the sum of every cell of the list.
     ([33.33, 33.33, 33.34], 100, PASSED), ([0.1, 0.2], 0.3, PASSED), ([0.1, 0.2, 0.35], 0.65, PASSED),
-    ([1e15, 1], 1e15 + 1, PASSED), ([-12.5, -8], -20.5, PASSED),
+    ([1e15, 1], 1e15 + 1, PASSED), ([-12.5, -8], -20.5, PASSED), ([1000000.1, -1000000, 0.2], 0.3, PASSED),
+    ([0.1] * 10, 1, PASSED), ([19.99] * 7, 139.93, PASSED),
     # A total that matches only after ROUNDING is a guess about what its author meant: nothing is said.
     ([12.5, 8], 21, None), ([12.5, 8], 20, None), ([0.25, 0.1], 0.4, None), ([0.25, 0.1], 0.3, None),
     ([-12.5, -8], -21, None), ([-12.5, -8], -20, None),
     ([600.20, 634.29], 1234, None), ([33.4, 66.9], 100, None), ([1.4, 1.4], 3, None),
     ([33.335, 33.335, 33.335], 100.02, None), ([33.333, 33.333, 33.333], 100, None),
+    # A figure between the smallest and the largest row is a plain other reading: not judged.
+    ([1000000.1, -1000000, 0.2], 0.31, None), ([19.99] * 7, 19.99, None),
     # ... and one that is simply different is worth a look, rounded or not.
     ([600.20, 634.29], 1236, LOOK), ([12.5, 8], 22, LOOK), ([0.25, 0.1], 0.5, LOOK), ([100, 200, 310], 650, LOOK),
     ([1e15, 1], 1e15 + 3, LOOK), ([10.10, 20.20], 30.31, LOOK),
@@ -1247,10 +1262,53 @@ def test_a_total_in_any_other_shape_gets_no_row_at_all(tmp_path):
         "one row": [["Item", "Amount"], ["Rent", 100], ["Total", 100]],
         "a blank in the list": [["Item", "Amount"], ["Rent", 100], ["Parking", None], ["Food", 300], ["Total", 400]],
         "a column of line totals": [["Name", "Jan", "Feb", "Total"], ["a", 1, 2, 3], ["b", 10, 20, 30]],
+        # A column that is not added, by its heading: nothing is said even when the figure IS its sum ...
+        "a rate column whose total is the sum of the rates": [["Item", "Rate"], ["a", 0.2], ["b", 0.4], ["Total", 0.6]],
+        # ... or is far from it.
+        "an invoice number column": [["Client", "Invoice no"], ["Acme", 1001], ["Zed", 1002], ["Total", 5000]],
+        # A row whose WORD says it is a subtotal, though it is not the sum of the rows above it.
+        "a row called Net amount": [["Item", "Amount"], ["a", 100], ["b", 200], ["Net amount", 310], ["VAT", 60],
+                                    ["Total", 670]],
+        "a number above the heading": [["Item", 2024], ["Item", "Amount"], ["a", 1], ["b", 5], ["Total", 6]],
     }
     for name, rows in loose.items():
         p = _xlsx(tmp_path / "t.xlsx", rows)
         assert _by(content.check_files([str(p)]), SHEET_TOTALS) == [], name
+
+
+def test_a_workbook_with_too_many_totals_says_nothing_about_them(tmp_path, monkeypatch):
+    """Past the cap nothing is judged at all (never "adds up" over the ones
+    that were reached)."""
+    side = [["Item", "Amount", None, "Item", "Amount"], ["a", 1, None, "x", 10], ["b", 5, None, "y", 20],
+            ["Total", 6, None, "Total", 30]]
+    p = _xlsx(tmp_path / "t.xlsx", side)
+    assert [c.detail for c in _by(content.check_files([str(p)]), SHEET_TOTALS)] == ["2 totals add up"]
+    monkeypatch.setattr(content, "MAX_TOTALS", 1)
+    assert _by(content.check_files([str(p)]), SHEET_TOTALS) == []
+
+
+def test_three_functions_refuse_arguments_outside_their_range_never_a_clean_number(tmp_path):
+    """Decision 12. Each read "its formula works out" where Excel shows an
+    error. EOMONTH to a month before the calendar is the error Excel
+    documents; the other two (and EDATE) cannot be worked out here."""
+    worked, errors, unworked = _worked_out(tmp_path, [["a", "=EOMONTH(1,-5)"]])
+    assert (worked, errors, unworked) == ({}, [(1, 2)], 0)
+    for formula in ("=EDATE(1,-5)", "=SYD(100,10,5,6)", "=SYD(100,10,5,0)", "=SYD(100,10,0,1)", "=PMT(0.05,5,100,0,3)",
+                    "=FV(0.05,5,-100,0,2)", "=PV(0.05,5,-100,0,-1)"):
+        assert _worked_out(tmp_path, [["a", formula]]) == ({}, [], 1), formula
+    # The neighbours that ARE numbers in Excel still are.
+    fine = [["end of month", "=EOMONTH(DATE(2024,1,15),1)"], ["a month on", "=EDATE(DATE(2024,1,31),1)"],
+            ["the second year", "=SYD(100,10,5,2)"], ["the last year", "=SYD(100,10,5,5)"],
+            ["due at the start", "=PMT(0.05,5,100,0,1)"], ["due at the end", "=PMT(0.05,5,100,0,0)"],
+            ["no last argument", "=PMT(0.05,5,100)"]]
+    worked, errors, unworked = _worked_out(tmp_path, fine)
+    assert (errors, unworked) == ([], 0) and len(worked) == 7
+    assert worked[(1, 2)] == 45351.0 and worked[(2, 2)] == 45351.0          # 29 February 2024
+    assert worked[(3, 2)] == pytest.approx(24.0) and worked[(4, 2)] == pytest.approx(6.0)
+    assert worked[(5, 2)] == pytest.approx(worked[(6, 2)] / 1.05) and worked[(6, 2)] == worked[(7, 2)]
+    p = _xlsx(tmp_path / "t.xlsx", [["a", 5], ["t", "=SYD(100,10,5,6)"]])
+    assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [Check(
+        SHEET_ERRORS, NOT_CHECKED, "1 formula could not be worked out here", file="t.xlsx")]
 
 
 def test_the_one_shape_holds_no_subtotal_of_any_kind():
@@ -1388,7 +1446,7 @@ def test_a_total_over_a_formula_nobody_could_work_out_gets_no_row(tmp_path):
     checks = content.check_files([str(p)])
     assert _by(checks, SHEET_TOTALS) == []
     assert _by(checks, SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "3 formulas have no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "3 formulas could not be worked out here", file="t.xlsx")]
 
 
 def test_a_sheet_with_a_subtotal_or_two_totals_in_a_column_says_nothing_about_totals(tmp_path):
@@ -2079,7 +2137,7 @@ def test_an_evaluator_that_breaks_is_not_checked_never_no_error_cells(tmp_path, 
 
     monkeypatch.setattr(content, "_grid", no_grid)
     assert _by(content.check_files([str(p)]), SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "1 formula has no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "1 formula could not be worked out here", file="t.xlsx")]
 
 
 def test_a_file_past_the_size_cap_is_not_opened(tmp_path, monkeypatch):
@@ -2266,7 +2324,7 @@ def test_the_deadline_is_looked_at_before_each_formula_and_each_total(tmp_path, 
     clock = lambda: 99.0 if state["late"] else 0.0   # noqa: E731
     got = content.check_files([str(p)], clock=clock, deadline_s=4.0)
     assert _by(got, SHEET_ERRORS) == [Check(
-        SHEET_ERRORS, NOT_CHECKED, "3 formulas have no saved result and could not be worked out here", file="t.xlsx")]
+        SHEET_ERRORS, NOT_CHECKED, "3 formulas could not be worked out here", file="t.xlsx")]
     assert _by(got, SHEET_TOTALS) == [Check(SHEET_TOTALS, NOT_CHECKED, content.OUT_OF_TIME, file="t.xlsx")]
 
 

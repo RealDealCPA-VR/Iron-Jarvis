@@ -86,12 +86,13 @@ def _owner_rows(engine: Any, ctx: ToolContext, run: str) -> "tuple[list[dict[str
         # Asked from INSIDE a run: its own rows, on this PC.
         rows = record.for_session(engine, inside)
         return rows, "", len(rows) >= record.MAX_READ
-    # Asked from a CHAT. The rows of a run that keeps its words on this PC
-    # (a Local only run: file names, sheet names, figures) are read only by
-    # a chat that is Local only itself, asked now.
+    # Asked from a CHAT. Rows that are kept home (a Local only run's, a
+    # Local only chat's own replies': file names, sheet names, figures) are
+    # read only by a reply that is Local only itself, asked now (False in
+    # any doubt).
     from . import turn as _turn
 
-    local = bool(thread) and _turn._is_local_only(engine, thread)
+    local = _turn.may_read_home(engine, thread)
     if run:
         # A run is answered for ONLY when the record says it was started
         # from the calling chat. A run of no chat is not "everybody's".
@@ -106,7 +107,7 @@ def _owner_rows(engine: Any, ctx: ToolContext, run: str) -> "tuple[list[dict[str
     # that id that sits under a chat is another chat's, and is not read.
     # (Kept-home rows only while this reply itself is Local only.)
     rows = [r for r in record.for_turn(engine, str(getattr(ctx, "turn_id", "") or "")) if not r.get("thread_id")]
-    rows = _turn.home_rows(rows, _turn.reply_is_local_only(engine, ""))
+    rows = _turn.home_rows(rows, local)
     return rows, "", len(rows) >= record.MAX_READ
 
 

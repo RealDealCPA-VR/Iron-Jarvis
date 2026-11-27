@@ -47,9 +47,8 @@ async def test_the_check_again_verdict_is_one_row_and_the_loop_does_what_it_did(
     note = await until.check(_facts("Done. I saved the summary to report.docx."), round_index=0, rounds=8)
     assert note.startswith(NOTE_HEAD) and "report.docx" in note
     assert (until.notes, until.open) == (1, ["claimed_file"])
-    # Read out of the reply's prose: worth a look, never a problem.
-    assert existing.claims_check(until) == Check(
-        R.CLAIMS, R.LOOK, "it says a file was saved that no step wrote")
+    # The model was sent back and the reply goes on: nothing is said of it yet.
+    assert until.ended == "" and existing.claims_check(until) is None
 
     # The next answer no longer claims it: the loop ends "done", says nothing.
     assert await until.check(_facts("I could not save it; here is the text instead."), round_index=1, rounds=8) == ""
@@ -84,27 +83,52 @@ async def test_the_claims_check_has_no_passed_row_ever():
     silent = 0
     for kw in cases:
         until = UntilDone(chat=True)
-        await until.check(Facts(chat=True, **kw), round_index=0, rounds=8)
+        await until.check(Facts(chat=True, **kw), round_index=0, rounds=1)     # its only look: the reply ends here
         row = existing.claims_check(until)
         assert row is None or (row.check, row.result) == (R.CLAIMS, R.LOOK), kw
-        assert bool(row) is bool(set(until.open) & set(existing.OPEN_WORDS)), kw
+        assert bool(row) is (until.ended == "steps" and bool(set(until.open) & set(existing.OPEN_WORDS))), kw
         silent += row is None
     assert silent >= 5, "the replies the loop's reading gives up on get no row: nothing is claimed of them"
     # Only a CLAIM the loop left open writes a row; its other open problems are not claims of the reply.
     assert set(existing.OPEN_WORDS) == {"claimed_file", "changed_file", "claimed_change", "claimed_sent"}
     for kind, said in existing.OPEN_WORDS.items():
-        held = UntilDone(chat=True)
-        held.open = [kind]
-        assert existing.claims_check(held) == Check(R.CLAIMS, R.LOOK, said)
+        for ended in ("steps", "stuck", "limit"):
+            held = UntilDone(chat=True, ended=ended)
+            held.open = [kind]
+            assert existing.claims_check(held) == Check(R.CLAIMS, R.LOOK, said)
+        # A claim left over from an earlier look says nothing of an answer the loop did not stop on: the model
+        # was sent back (""), the last answer was never looked at ("" too), a step was declined, it said what
+        # blocks it, or it is done.
+        for ended in ("", "declined", "blocked", "done"):
+            stale = UntilDone(chat=True, ended=ended)
+            stale.open = [kind]
+            assert existing.claims_check(stale) is None, (kind, ended)
     for other in ("asked_file", "figures", "deliverables", "something_new"):
-        held = UntilDone(chat=True)
+        held = UntilDone(chat=True, ended="steps")
         held.open = [other]
         assert existing.claims_check(held) is None, other
-    both = UntilDone(chat=True)
+    both = UntilDone(chat=True, ended="limit")
     both.open = ["figures", "claimed_sent", "claimed_file", "claimed_sent"]
     assert existing.claims_check(both) == Check(
         R.CLAIMS, R.LOOK, "it says something was sent that no step sent; it says a file was saved that no step wrote")
     assert existing.claims_check(None) is None and existing.claims_check(object()) is None
+    from iron_jarvis.daemon.until_done import END_WORDS
+
+    assert set(END_WORDS) == {"steps", "stuck", "limit"}, "the loop has a new way to stop: read claims_check again"
+
+
+async def test_a_claim_from_an_earlier_look_is_not_said_of_an_answer_the_loop_never_looked_at():
+    """Through the real loop: it raises a claim and sends the model back;
+    the next answer is cut off at its length limit, so the loop does not
+    look at it. The first look's claim is still in ``open``: it is not said
+    (it is about an answer that is gone)."""
+    until = UntilDone(chat=True)
+    claim = _facts("Done. I saved the summary to report.docx.")
+    assert (await until.check(claim, round_index=0, rounds=8)).startswith(NOTE_HEAD)
+    assert await until.check(_facts("Here is the text inst"), round_index=1, rounds=8, truncated=True) == ""
+    assert until.open == ["claimed_file"] and until.ended == ""
+    assert existing.claims_check(until) is None
+    assert until.verdict() == "", "the loop itself says nothing of this reply either"
 
 
 async def test_a_reply_still_unfinished_keeps_its_line_and_reads_failed():
@@ -854,8 +878,8 @@ async def test_a_reply_never_waits_on_the_record_while_another_writer_holds_the_
 
     made = tmp_path / "notes.md"
     made.write_text("hello\n", encoding="utf-8")
-    until = UntilDone(chat=True)
-    until.open = ["claimed_file"]                        # a claim the loop left open: the reply has a row to write
+    until = UntilDone(chat=True, ended="steps")
+    until.open = ["claimed_file"]                        # a claim the loop stopped on: the reply has a row to write
     engine = platform.engine
     assert R.write(engine, [Check(R.CLAIMS, R.LOOK, "x")], turn_id="warm") == 1    # the day's tidy-up has run
 
@@ -1318,6 +1342,52 @@ async def test_two_chats_that_send_one_turn_id_never_read_each_others_files(plat
     assert "payroll" not in json.dumps(two) and {c["label"] for c in two["checks"]} == {"“chatB-notes.md”"}
     assert {(r.thread_id, r.file) for r in _rows(platform.engine, turn_id="same-id")} == {
         ("chatA", "chatA-payroll.md"), ("chatB", "chatB-notes.md")}
+    # A chat that is NOT SAVED yet sends the same id: its line holds its own reply's rows (the ones with no
+    # chat yet), never the saved chats'.
+    new = tmp_path / "new-chat.md"
+    new.write_text("z", encoding="utf-8")
+    three = await T.checked_for_turn(platform, turn_id="same-id", made_docs=[str(new)])
+    assert {c["label"] for c in three["checks"]} == {"“new-chat.md”"}, three
+    assert "payroll" not in json.dumps(three) and "chatB" not in json.dumps(three)
+    # ... and a second file with the SAME NAME as chat A's, from the unsaved chat, replaces nothing of chat A's.
+    again = tmp_path / "other" / "chatA-payroll.md"
+    again.parent.mkdir()
+    again.write_text("", encoding="utf-8")
+    await T.checked_for_turn(platform, turn_id="same-id", made_docs=[str(again)])
+    assert sorted((r.check, r.result) for r in _rows(platform.engine, turn_id="same-id", thread_id="chatA")) == [
+        (R.DOC_TEXT, R.PASSED), (R.FILE_OPENS, R.PASSED)]
+
+
+async def test_every_writer_of_a_replys_rows_keeps_them_home_when_its_chat_is_local_only(platform, tmp_path):
+    """Decision 7, each writer on its own (the reviewer's probe called the
+    seam directly, with no Local only scope set): the reply that waits for
+    its line, the reply that does not (a phone), and a coding reply's
+    finish check. The chat's own setting, read at the write, decides."""
+    from iron_jarvis.providers import egress
+
+    _saved_chat(platform, "chat_w_home", local_only=True)
+    _saved_chat(platform, "chat_w_open", local_only=False)
+    made = tmp_path / "client-payroll.md"
+    made.write_text("figures\n", encoding="utf-8")
+    later: list = []
+    for chat, home in (("chat_w_home", True), ("chat_w_open", False)):
+        assert egress.current_scope().on is False
+        got = await T.checked_for_turn(platform, turn_id=f"wait_{chat}", thread_id=chat, made_docs=[str(made)])
+        assert got["line"] == "Checked by Iron Jarvis: the document opens, has text."
+        assert await T.checked_for_turn(platform, turn_id=f"later_{chat}", thread_id=chat, made_docs=[str(made)],
+                                        wait=False, spawn=later.append) is None
+        assert later.pop()() == 2
+        await T.note_finish(platform, {"tests": "passed"}, turn_id=f"code_{chat}", thread_id=chat, session_id="build_w")
+        for turn in (f"wait_{chat}", f"later_{chat}", f"code_{chat}"):
+            rows = _rows(platform.engine, turn_id=turn)
+            assert rows and {(r.thread_id, r.kept_home) for r in rows} == {(chat, home)}, (turn, rows)
+    # The turn's own Local only scope (a request that said so, a new chat not saved yet) keeps them home too.
+    with egress.local_only_scope(True):
+        await T.checked_for_turn(platform, turn_id="scoped", made_docs=[str(made)])
+    assert {r.kept_home for r in _rows(platform.engine, turn_id="scoped")} == {True}
+    assert T.reply_is_local_only(platform.engine, "") is False
+    assert T.reply_is_local_only(platform.engine, "chat_w_home") is True
+    assert T.reply_is_local_only(platform.engine, "chat_w_open") is False
 
 
 # --------------------------------------------------------------------------- #
@@ -1343,7 +1413,7 @@ async def test_a_reply_that_answers_a_phone_does_not_wait_for_its_checks_and_the
     assert T.draws_no_line() is False
     with phone_surface():
         assert T.draws_no_line() is True
-        open_claim = UntilDone(chat=True)
+        open_claim = UntilDone(chat=True, ended="steps")
         open_claim.open = ["claimed_file"]
         got = await T.checked_for_turn(platform, turn_id="turn_phone", thread_id="th_phone", made_docs=[str(made)],
                                        until=open_claim, spawn=later.append)

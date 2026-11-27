@@ -386,6 +386,23 @@ def run_owner(engine: Any, session: Any) -> "dict[str, Any]":
     return {"thread_id": chat, "kept_home": home}
 
 
+def may_read_home(engine: Any, thread_id: str) -> bool:
+    """BLOCKING. May the reply in flight be handed ``kept_home`` rows: is it
+    Local only itself, NOW (the turn's own Local only scope is on, or its
+    saved chat *thread_id* is Local only)? The READER's side of
+    :func:`reply_is_local_only`, and the other way round in doubt: False
+    when it cannot be told (the words then stay home)."""
+    try:
+        from ..providers import egress
+
+        if bool(egress.current_scope().on):
+            return True
+    except Exception:  # noqa: BLE001
+        log.debug("a reply's Local only scope could not be read", exc_info=True)
+        return False
+    return bool(thread_id) and _is_local_only(engine, thread_id)
+
+
 def home_rows(rows: "list[dict[str, Any]]", local_only: bool) -> "list[dict[str, Any]]":
     """*rows* as a chat may read them: the rows of a run that keeps its
     words on this PC are left out unless the chat is Local only itself."""
@@ -499,5 +516,5 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
         return None
 
 
-__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "not_covered", "note_finish", "reply_is_local_only",
-           "run_payload", "settle_run"]
+__all__ = ["RECORD_WAIT_S", "TURN_CAP_S", "checked_for_turn", "may_read_home", "not_covered", "note_finish",
+           "reply_is_local_only", "run_payload", "settle_run"]
