@@ -31,6 +31,7 @@ from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.base import ToolResult
+from tests._fakes.sent import with_beside
 
 CLAUDE = ("anthropic", "claude-sonnet-4-5")
 GPT = ("openai", "gpt-5.1")
@@ -195,7 +196,7 @@ async def test_the_stream_lane_arms_the_coding_set_in_claudes_dialect_past_the_c
     assert "escalate_to_agent" not in tools and "workflow_draft" not in tools
     # The chat's own "# Tools" block names the REAL tools; a harness turn's
     # guidance is its tree, in the dialect's names.
-    system = model.calls[0]["system"]
+    system = with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     assert "\n\n# Tools\n" not in system and "## Tools\nYour tools use Claude Code's names" in system
     harness = out["done"]["route"]["harness"]
     assert list(out["done"]["route"])[-1] == "harness"
@@ -241,7 +242,7 @@ async def test_the_tree_is_in_the_prompt_before_the_planner_runs(env, monkeypatc
     real = chat_turn._plan_context
 
     def spy(d, body, system, *a, **kw):
-        planned.append(system)
+        planned.append(with_beside(system, kw.get("messages")))
         return real(d, body, system, *a, **kw)
 
     monkeypatch.setattr(chat_turn, "_plan_context", spy)
@@ -267,7 +268,7 @@ async def test_a_harness_turn_hands_work_to_nobody(env, lane):
     else:
         await _post(platform, body)
         await _post(platform, _body(ws), harness=True)
-    off, on = model.calls[0]["system"], model.calls[-1]["system"]
+    off, on = with_beside(model.calls[0]["system"], model.calls[0]["messages"]), model.calls[-1]["system"]
     assert "# Who can take this work" in off and chat_turn._ENV_EXIT_LINES in off
     assert "# Who can take this work" not in on
     assert chat_turn._ENV_EXIT_LINES not in on and M.HARNESS_EXIT_LINES in on
@@ -475,7 +476,7 @@ async def test_a_deny_rule_removes_the_tool_and_narrows_the_overrides(env):
     assert out["route"]["harness"]["layers"] == ["default", "family:claude", "project"]
     rows = _ledger(platform)
     assert [(r.tool, r.ok) for r in rows] == [("web_fetch", False)]
-    assert "- web_fetch: is not available in this folder." in model.calls[0]["system"]
+    assert "- web_fetch: is not available in this folder." in with_beside(model.calls[0]["system"], model.calls[0]["messages"])
 
 
 async def test_an_ask_rule_moves_a_tool_to_the_ask_tier(env):
@@ -590,7 +591,7 @@ async def test_an_invalid_layer_is_ignored_with_one_note_on_the_turn(env):
     assert harness["layers"] == ["default", "family:claude"]
     # Moved on purpose (harness gaps review): "coding-session instructions".
     assert harness["note"].startswith("This folder's coding-session instructions (.ironjarvis/harness) were not used:")
-    assert "PROJECT PROMPT" not in model.calls[0]["system"]
+    assert "PROJECT PROMPT" not in with_beside(model.calls[0]["system"], model.calls[0]["messages"])
 
 
 # --------------------------------------------------------------------------- #
@@ -606,7 +607,7 @@ async def test_a_folder_turns_agents_md_rides_once_and_is_referred_to(env, lane)
     body = _body(ws)
     out = (await _stream(platform, body, harness=True))["done"] if lane == "stream" else await _post(
         platform, body, harness=True)
-    system = model.calls[0]["system"]
+    system = with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     assert system.count("Always run the tests with -q.") == 1
     assert system.count("# Project folder instructions (AGENTS.md)") == 1
     assert "This folder's own instruction files (AGENTS.md)" in system
@@ -634,7 +635,7 @@ async def test_a_project_turns_rule_files_are_not_injected_twice(env, lane, boun
     )
     out = (await _stream(platform, body, harness=True))["done"] if lane == "stream" else await _post(
         platform, body, harness=True)
-    system = model.calls[0]["system"]
+    system = with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     assert system.count("Always run the tests with -q.") == 1
     assert "This folder's own instruction files (AGENTS.md)" in system
     assert out["folder_rules"] == ["AGENTS.md"]
@@ -656,7 +657,7 @@ async def test_a_text_only_model_gets_the_tree_and_no_tools(env, monkeypatch, la
     out = (await _stream(platform, body, harness=True))["done"] if lane == "stream" else await _post(
         platform, body, harness=True)
     assert model.calls[0]["tools"] == []
-    assert "You have no tools in this turn: answer in text." in model.calls[0]["system"]
+    assert "You have no tools in this turn: answer in text." in with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     assert out["route"]["text_only"] is True and out["route"]["harness"]["dialect"] == "claude"
 
 

@@ -35,6 +35,7 @@ from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
 from iron_jarvis.platform import build_platform
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import with_beside
 
 _ROOT = Path(__file__).resolve().parents[1]
 CLAUDE = ("anthropic", "claude-sonnet-4-5")
@@ -124,14 +125,14 @@ class Model:
         self.tools: list[list[str]] = []
 
     async def stream(self, *, system, messages, tools, provider=None, model=None, **kw):
-        self.systems.append(system)
+        self.systems.append(with_beside(system, messages))
         self.tools.append([t["name"] for t in tools or []])
         yield {"type": "text", "text": "Done."}
         yield {"type": "final", "response": LLMResponse(text="Done.", usage={"input_tokens": 3, "output_tokens": 1}),
                "provider": CLAUDE[0], "model": CLAUDE[1]}
 
     async def complete(self, *, system, messages, tools, provider=None, model=None, **kw):
-        self.systems.append(system)
+        self.systems.append(with_beside(system, messages))
         self.tools.append([t["name"] for t in tools or []])
         return RouteResult(LLMResponse(text="Done.", usage={}), *CLAUDE)
 

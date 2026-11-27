@@ -49,6 +49,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.base import ToolResult
+from tests._fakes.sent import with_beside
 
 LANES = ("post", "stream")
 
@@ -125,12 +126,12 @@ def _scripted_router(platform, monkeypatch, rounds: list[list[ToolCall]],
 
     async def fake_complete(*, system, messages, tools, **kw):
         seen["messages"].append(list(messages))
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         return RouteResult(_next(), "mock", "mock")
 
     async def fake_stream(*, system, messages, tools, **kw):
         seen["messages"].append(list(messages))
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         resp = _next()
         if resp.text:
             yield {"type": "text", "text": resp.text}
@@ -300,10 +301,13 @@ _LESSONS = "\n\n# Lessons learned (fake)\n- L-ONE"
 _EXPECTED_STABLE_SEGMENT = (
     "\n\n# Project: Grounded"
     + _LESSONS
-    + "\n\nIDX-1"
-    + "\n\nROSTER-1"
     + "\n\nWF-1"
 )
+#: Release 7 (moved on purpose): the memory index and the roster hold counts
+#: and live state ("Past conversations: N indexed", "(busy, 87% over 23
+#: runs)"), so for a plain chat reply they ride beside the newest message:
+#: the index as Iron Jarvis's own words ahead of the found block, the roster
+#: after it. The stable head holds no number and no live state.
 _EXPECTED_QUERY_SEGMENT = (
     "\n\nProject knowledge (reference):\nKNOW-1"
     + "\n\nFAB-1"
@@ -459,13 +463,27 @@ def test_grounded_system_prompt_is_byte_identical(tmp_path, monkeypatch, lane):
     with nothing after them.
     """
     _probe, system, _body = _grounded_turn(tmp_path, monkeypatch, lane)
-    assert _EXPECTED_GROUNDING_SEGMENT in system, (
-        f"{lane}: grounded sections out of order or re-joined.\n"
-        f"--- got tail ---\n{system[-600:]!r}"
+    # Release 7 (moved on purpose): the STABLE head stays in the system
+    # prompt, in its fixed order; the query-dependent sections ride beside the
+    # newest message, in their fixed order and joins, inside the ONE fence,
+    # with nothing after them in it. (``system`` here is the system prompt
+    # and then what rides beside the message, ``tests/_fakes/sent``.)
+    from iron_jarvis.context import prefix as _prefix
+
+    assert _EXPECTED_STABLE_SEGMENT in system, (
+        f"{lane}: the stable sections are out of order or re-joined.\n{system[-900:]!r}"
     )
-    assert system.endswith(_EXPECTED_QUERY_SEGMENT), (
-        f"{lane}: something now lands after the query-dependent sections:\n"
-        f"{system[system.find(_EXPECTED_QUERY_SEGMENT):]!r}"
+    beside_at = system.index(_prefix.ONCE_TOP)
+    assert system.index(_EXPECTED_STABLE_SEGMENT) < beside_at
+    assert "IDX-1" not in system[:beside_at] and "ROSTER-1" not in system[:beside_at]
+    assert beside_at < system.index("IDX-1") < system.index(_prefix.FOUND_TOP)
+    # (Second review: the roster is a standing note. It stands BEFORE what
+    # was found, never as the last thing a model reads.)
+    assert system.index("IDX-1") < system.index("ROSTER-1") < system.index(_prefix.FOUND_TOP)
+    assert _EXPECTED_QUERY_SEGMENT not in system[:beside_at], "a query-dependent section is in the system prompt"
+    assert (_EXPECTED_QUERY_SEGMENT + "\n---\n" + _prefix.FOUND_BOTTOM) in system[beside_at:], (
+        f"{lane}: the query-dependent sections are out of order, re-joined, or followed by something:\n"
+        f"{system[beside_at:]!r}"
     )
     assert _PROFILE_MARK in system, "the identity spine must reach this seam"
     assert system.index(_PROFILE_MARK) < system.index("# Project: Grounded"), (
@@ -503,8 +521,17 @@ def test_the_named_apps_section_joins_right_after_connector_memory(tmp_path, mon
     })
     system = seen["systems"][0]
     head = "\n\n# Apps named in this message\n"
-    assert "\n\nCONN-1" + head in system, f"{lane}: not right after connector memory:\n{system[-900:]!r}"
-    assert system.index(head) > system.index("\n\nROSTER-1"), f"{lane}: must follow the stable roster"
+    # Release 7 (moved on purpose): the section is Iron Jarvis's own account
+    # of what is connected, so it rides beside the message OUTSIDE the fence
+    # (ahead of it); connector memory is what was found, inside the fence.
+    from iron_jarvis.context import prefix as _prefix
+
+    beside_at = system.index(_prefix.ONCE_TOP)
+    assert beside_at < system.index(head.lstrip("\n")) < system.index(_prefix.FOUND_TOP, beside_at) < system.index("\n\nCONN-1"), (
+        f"{lane}: the apps section is not Iron Jarvis's own words beside the message:\n{system[-900:]!r}"
+    )
+    assert head not in system[:beside_at] and "CONN-1" not in system[:beside_at]
+    assert system.index(head.lstrip("\n")) > system.index("\n\nWF-1"), f"{lane}: must follow the stable head"
     assert "- Dropbox: not connected." in system
     assert probe.peak == len(_GROUND_HOPS), f"{lane}: the hops stopped overlapping"
     assert not any(probe.on_loop.values()), f"{lane}: a hop ran on the loop"

@@ -116,9 +116,17 @@ class MockLLMAdapter(LLMAdapter):
     def _default_behavior(
         messages: list[LLMMessage], tools: list[dict[str, Any]], system: str = ""
     ) -> LLMResponse:
+        # The intelligence plan, release 7: a plain chat's newest message
+        # carries what the app added for it AFTER the person's own words
+        # (``context/prefix``). The demo's task is the person's words alone
+        # (it writes them into RESULT.md), and it reads the app's lines for
+        # the message where they ride now.
+        from ...context.prefix import own_words
+
         task = next(
-            (m.content for m in messages if m.role == "user"), "(unspecified task)"
+            (own_words(m.content) for m in messages if m.role == "user"), "(unspecified task)"
         )
+        told = (system or "") + "".join(str(m.content or "") for m in messages if m.role == "user")
         has_tool_result = any(m.role == "tool" for m in messages)
         tool_names = {t["name"] for t in tools}
         # v1.353.0 integrate: the chat said "no media service is connected"
@@ -127,7 +135,7 @@ class MockLLMAdapter(LLMAdapter):
         # for pixio, which shows the secure key card. Before this the demo
         # answered a fresh install's "make a picture" with its scripted
         # "Wrote RESULT.md" line and no card.
-        wants_media_key = "app_connect" in tool_names and NO_MEDIA_MARK in (system or "")
+        wants_media_key = "app_connect" in tool_names and NO_MEDIA_MARK in told
 
         if not has_tool_result:
             if wants_media_key:

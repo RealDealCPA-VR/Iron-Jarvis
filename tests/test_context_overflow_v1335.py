@@ -109,7 +109,9 @@ def test_post_lane_shrinks_and_retries_once_then_learns_the_window(tmp_path, mon
     first, second = calls
     assert len(second["messages"]) < len(first["messages"])
     # The question always survives, and the model is told what happened.
-    assert second["messages"][-1].content == "THE QUESTION"
+    from tests._fakes.sent import own_words
+
+    assert own_words(second["messages"][-1].content) == "THE QUESTION"  # release 7: the date rides beside it
     assert second["messages"][0].role == "user"
     assert ct.OVERFLOW_NOTE in second["system"]
     # Learned: the next turn's planner plans against the refusal's window.

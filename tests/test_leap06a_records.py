@@ -35,6 +35,7 @@ from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.tools import rehearsal_runs as RR
 from iron_jarvis.tools.base import ToolContext
 from iron_jarvis.tools.rehearsal import rehearsal_of
+from tests._fakes.sent import with_beside
 
 pytestmark = [pytest.mark.usefixtures("no_network"), pytest.mark.timeout(120)]
 
@@ -315,11 +316,11 @@ def test_both_chat_lanes_say_a_rehearsal_changed_nothing(tmp_path):
     seen: list[str] = []
 
     async def fake_complete(*, system, messages, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, messages))
         return RouteResult(LLMResponse(text="Done."), "mock", "mock")
 
     async def fake_stream(*, system, messages, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, messages))
         yield {"type": "text", "text": "Done."}
         yield {"type": "final", "response": LLMResponse(text="Done."), "provider": "mock", "model": "mock"}
 

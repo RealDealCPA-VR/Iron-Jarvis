@@ -7,6 +7,7 @@ import base64
 from fastapi.testclient import TestClient
 
 from iron_jarvis.daemon.app import create_app
+from tests._fakes.sent import own_words, with_beside
 
 
 def _client(tmp_path):
@@ -52,7 +53,10 @@ def test_chat_replies_directly_with_history(tmp_path):
 
     assert r.json()["reply"] == "hey there!" + demo_note([])
     # FULL history reaches the model (real multi-turn, not recap-chaining).
-    assert [m.content for m in captured["messages"]] == ["hi", "hello!", "what did I just say?"]
+    # (Release 7: what Iron Jarvis found for the newest message rides beside
+    # it, after the person's own words, which are read here.)
+    assert [own_words(m.content) for m in captured["messages"]] == ["hi", "hello!", "what did I just say?"]
+    assert [m.content for m in captured["messages"]][:2] == ["hi", "hello!"], "earlier messages go as they were"
 
 
 def test_personas_builtin_and_custom(tmp_path):
@@ -90,7 +94,8 @@ def test_attachments_text_and_image(tmp_path):
         "attachments": [up["path"], up2["path"]],
     })
     assert r.status_code == 200
-    assert "SECRET-NOTE-77" in captured["system"]  # text extracted into context
+    # text extracted into what the model is sent (release 7: beside the message)
+    assert "SECRET-NOTE-77" in with_beside(captured["system"], captured["messages"])
     imgs = captured["messages"][-1].images
     assert imgs and imgs[0]["media_type"] == "image/png"  # image rides to vision
     assert r.json()["images"] == 1

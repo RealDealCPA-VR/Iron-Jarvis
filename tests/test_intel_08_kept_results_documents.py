@@ -32,6 +32,7 @@ from iron_jarvis.documents.writers import write_document
 from iron_jarvis.platform import build_platform
 from iron_jarvis.tools.base import ToolContext
 from tests._fakes.harness_lane import call
+from tests._fakes.sent import with_beside
 from tests.test_intel_08_kept_results_lanes import (
     HANDLE_RX,
     READER,
@@ -104,9 +105,9 @@ async def test_the_last_section_of_a_long_attached_document_is_reached_in_one_st
         in_reply(seen, platform, "chat:chat_doc", "r1", then_read("r1", "r2", end=True)), "Done.",
     ], thread="chat_doc", tools=[tool], attachments=[str(path)])
 
-    # The file really was attached (its block in the prompt is not this
-    # release's: it is whatever it was).
-    assert f"## Attached file: {path.name}" in model.calls[0]["system"]
+    # The file really was attached (its block is not this release's: it
+    # rides beside the message, release 7).
+    assert f"## Attached file: {path.name}" in with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     shown, part = sent(model, "r1"), sent(model, "r2")
     # The start and the END of the document are in the very first result (a
     # chat shows both), within the chat's own limit...

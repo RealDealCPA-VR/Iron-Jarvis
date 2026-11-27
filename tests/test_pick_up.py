@@ -45,6 +45,7 @@ from iron_jarvis.workmap import recap as R
 from iron_jarvis.workmap.clients import ClientRoot, names, store
 from iron_jarvis.workmap.index import work_map
 from iron_jarvis.workmap.models import RECAP_KEPT, WorkRecap
+from tests._fakes.sent import with_beside
 
 H_ID = "client_00000000000a"  # Hartleys
 S_ID = "client_00000000000b"  # Smith
@@ -409,12 +410,12 @@ def lanes(tmp_path, monkeypatch):
     seen: list[str] = []
 
     async def fake_complete(*, provider=None, model=None, system, messages, tools=None, task_class=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, messages))
         return RouteResult(LLMResponse(text="Done."), "mock", "mock")
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools=None, session_id=None,
                           task_class=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, messages))
         yield {"type": "text", "text": "Done."}
         yield {"type": "final", "response": LLMResponse(text="Done."), "provider": "mock", "model": "mock"}
 

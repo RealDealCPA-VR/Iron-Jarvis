@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
+from tests._fakes.sent import own_words, with_beside
 
 
 def _client(tmp_path) -> TestClient:
@@ -81,7 +82,7 @@ def test_history_passthrough_and_cap(tmp_path, monkeypatch):
     got = seen["messages"]
     assert len(got) == 35                      # short turns all fit the window
     assert got[0].content == "msg-0"           # ...so nothing was dropped
-    assert got[-1].content == "the live question"
+    assert own_words(got[-1].content) == "the live question"  # release 7: beside it rides the date
     assert got[-1].role == "user"
     assert got[0].role == "user"               # msg-0 (even index) was the user
     assert got[1].role == "assistant" and got[1].content == "msg-1"
@@ -120,7 +121,7 @@ def test_skill_playbook_is_injected_into_the_system_prompt(tmp_path, monkeypatch
 
     async def fake_complete(*, provider=None, model=None, system, messages, tools,
                             task_class):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         return _text_route("done")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)
@@ -691,7 +692,7 @@ def test_project_spine_block_injected_when_project_id_set(tmp_path, monkeypatch)
 
     async def fake_complete(*, provider=None, model=None, system, messages, tools,
                             task_class):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         return _text_route("ok")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)

@@ -14,6 +14,7 @@ from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS, select_auto_tools
+from tests._fakes.sent import with_beside
 
 
 # --------------------------------------------------------------- selector ---
@@ -89,7 +90,7 @@ def _client_with_capture(tmp_path, monkeypatch):
     seen: dict[str, str] = {"system": ""}
 
     async def fake_complete(*, provider=None, model=None, system, messages, tools, task_class):
-        seen["system"] = system
+        seen["system"] = with_beside(system, messages)
         return RouteResult(LLMResponse(text="Done."), "mock", "mock")
 
     monkeypatch.setattr(platform.router, "complete", fake_complete)

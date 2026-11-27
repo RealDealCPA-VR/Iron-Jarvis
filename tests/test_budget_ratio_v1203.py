@@ -416,7 +416,7 @@ def test_post_lane_measured_ratio_reaches_plan_history(client, monkeypatch):
         "provider": "ollama", "model": "tiny",
     })
     assert r.status_code == 200
-    assert seen == [2.0]
+    assert seen == [2.0, 2.0]  # release 7: the first plan and the final plan
 
 
 def test_post_lane_unmeasured_profile_passes_none(client, monkeypatch):
@@ -432,7 +432,7 @@ def test_post_lane_unmeasured_profile_passes_none(client, monkeypatch):
         "provider": "ollama", "model": "tiny",
     })
     assert r.status_code == 200
-    assert seen == [None]
+    assert seen == [None, None]  # release 7: the first plan and the final plan
 
 
 def test_post_lane_default_route_passes_none(client, monkeypatch):
@@ -445,7 +445,7 @@ def test_post_lane_default_route_passes_none(client, monkeypatch):
         "messages": [{"role": "user", "content": "hello"}],
     })
     assert r.status_code == 200
-    assert seen == [None]
+    assert seen == [None, None]  # release 7: the first plan and the final plan
 
 
 def test_stream_lane_measured_ratio_reaches_plan_history(client, monkeypatch):
@@ -463,7 +463,7 @@ def test_stream_lane_measured_ratio_reaches_plan_history(client, monkeypatch):
         for line in r.iter_lines():
             if line.startswith("data: "):
                 json.loads(line[6:])
-    assert seen == [2.0]
+    assert seen == [2.0, 2.0]  # release 7: the first plan and the final plan
 
 
 # --------------------------------------------------------------------------- #

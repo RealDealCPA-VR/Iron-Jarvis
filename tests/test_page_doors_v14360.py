@@ -63,6 +63,7 @@ from iron_jarvis.daemon.schemas import ChatBody
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from tests.test_connect_door_v13590 import _done, _stream
+from tests._fakes.sent import with_beside
 
 ROOT = Path(__file__).resolve().parents[1]
 DASH = ROOT / "dashboard"
@@ -608,7 +609,7 @@ class _Stream:
         self.systems: list[str] = []
 
     async def __call__(self, *args: Any, **kw: Any):
-        self.systems.append(str(kw.get("system") or ""))
+        self.systems.append(with_beside(kw.get("system") or "", kw.get("messages")))
         yield {"type": "text", "text": "Use the button below."}
         yield {"type": "final", "response": LLMResponse(text="Use the button below.", usage={}),
                "provider": "mock", "model": "mock"}
@@ -621,7 +622,7 @@ class _Post:
         self.systems: list[str] = []
 
     async def complete(self, **kw: Any) -> RouteResult:
-        self.systems.append(str(kw.get("system") or ""))
+        self.systems.append(with_beside(kw.get("system") or "", kw.get("messages")))
         return RouteResult(LLMResponse(text="Use the button below.", usage={}), "mock", "mock")
 
 
@@ -692,7 +693,9 @@ def test_the_line_is_in_the_prompt_the_planner_prices(app, monkeypatch, lane):
     real = CT._plan_context
 
     def spy(d, body, system, *a, **kw):
-        seen.append(system)
+        # (Release 7: the final plan is handed the block beside the newest
+        # message, as that message's rider, instead of in the system text.)
+        seen.append(system + "".join(kw.get("riders") or ()))
         return real(d, body, system, *a, **kw)
 
     monkeypatch.setattr(CT, "_plan_context", spy)
@@ -737,7 +740,7 @@ def test_a_coding_session_turn_gets_the_line_but_no_door(app, monkeypatch, tmp_p
     model = wire(platform, monkeypatch, ["Done."])
     out = asyncio.run(stream(platform, body(ws, "how do I log in to Codex?")))
     assert out["done"]["doors"] == []
-    assert "Signing in to Codex" in model.calls[0]["system"]
+    assert "Signing in to Codex" in with_beside(model.calls[0]["system"], model.calls[0]["messages"])
     res = asyncio.run(post(platform, body(ws, "how do I log in to Codex?")))
     assert res["doors"] == []
 

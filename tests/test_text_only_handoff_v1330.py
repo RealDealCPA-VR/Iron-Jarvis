@@ -37,6 +37,7 @@ from fastapi.testclient import TestClient
 from iron_jarvis.daemon import chat_turn
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMAdapter, LLMResponse
+from tests._fakes.sent import with_beside
 
 _PID = "fleet-sparkl4"
 _LABEL = "Spark proxy (L4)"
@@ -84,7 +85,7 @@ class _Fleet(LLMAdapter):
         return {"provider": _PID, "model": "glm", "tool_use": self._tool_use, "vision": False}
 
     async def complete(self, *, system, messages, tools, **kw):
-        self.systems.append(system)
+        self.systems.append(with_beside(system, messages))
         self.tools.append(tools)
         return LLMResponse(text=self._reply)
 
@@ -158,7 +159,13 @@ def test_with_tools_armed_the_two_notes_do_not_repeat_themselves(client):
 def _roster_section(system: str) -> str:
     at = system.index("\n\n# Who can take this work")
     end = system.find("\n\n#", at + 2)
-    return system[at:] if end < 0 else system[at:end]
+    # (Release 7: the roster rides beside the newest message, last in the
+    # block Iron Jarvis adds there; its section ends where that block does.)
+    from iron_jarvis.context.prefix import ONCE_BOTTOM
+
+    close = system.find("\n" + ONCE_BOTTOM, at)
+    ends = [i for i in (end, close) if i >= 0]
+    return system[at: min(ends)] if ends else system[at:]
 
 
 @pytest.mark.parametrize("lane", ["/chat", "/chat/stream"])
@@ -206,7 +213,7 @@ def test_the_default_route_keeps_its_exits_and_roster(client):
         rc = a.complete
 
         async def complete(*, system, messages, tools, **kw):
-            seen.setdefault("system", system)
+            seen.setdefault("system", with_beside(system, messages))
             return await rc(system=system, messages=messages, tools=tools, **kw)
 
         a.complete = complete

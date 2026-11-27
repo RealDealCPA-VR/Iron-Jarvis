@@ -35,6 +35,7 @@ from pathlib import Path
 
 import pytest
 
+from iron_jarvis.context import prefix as P
 from iron_jarvis.skills import native
 from iron_jarvis.skills.framework import SkillRegistry
 from iron_jarvis.skills.loader import load_skill
@@ -43,6 +44,7 @@ from iron_jarvis.skills.loader import load_skill
 from tests.test_skill_parity_v1417 import (  # noqa: F401
     ACCT, INJ, ORG, OTHER, _ctx, home, mkskill, plat, write,
 )
+from tests._fakes.sent import with_beside
 
 
 def _junction(link: Path, target: Path) -> bool:
@@ -136,6 +138,19 @@ def test_the_invoke_cap_follows_the_window():
     assert native.invoke_cap(1_000_000) == native.INVOKE_CHARS
 
 
+def _skill_section(call, name: str) -> str:
+    """The invoked skill's section as sent: release 7 (fourth check) keeps it
+    at the end of the INSTRUCTIONS, never in the block beside the message,
+    and it ends where the app's one note about that block begins."""
+    from iron_jarvis.context import prefix as P
+
+    beside = with_beside("", call["messages"])
+    head = f"# Skill invoked by the user: {name}"
+    assert head not in beside, "the playbook rode in the block beside the message"
+    part = call["system"].split(head, 1)[1]
+    return part.split("\n\n" + P.BLOCK_NOTE, 1)[0]
+
+
 async def test_a_long_slash_skill_is_cut_to_a_small_models_window_in_both_lanes(plat, monkeypatch):
     from iron_jarvis.daemon.chat_turn import run_chat_turn
     from iron_jarvis.daemon.chat_stream import stream_chat_turn
@@ -155,8 +170,7 @@ async def test_a_long_slash_skill_is_cut_to_a_small_models_window_in_both_lanes(
         else:
             async for _ in await stream_chat_turn(platform, BUILTIN_PERSONAS, b):
                 pass
-        system = model.calls[0]["system"]
-        part = system.split("# Skill invoked by the user: huge", 1)[1]
+        part = _skill_section(model.calls[0], "huge")
         assert "HEAD " in part and "TAIL-MARK-HUGE" not in part, lane
         assert len(part) < 9_000, (lane, len(part))
         assert "is not shown" in part, lane
@@ -209,6 +223,13 @@ async def test_a_long_message_is_not_copied_whole_into_the_system_prompt(plat, m
         else:
             async for _ in await stream_chat_turn(platform, BUILTIN_PERSONAS, b):
                 pass
-        part = model.calls[0]["system"].split("# Skill invoked by the user: plain", 1)[1]
+        part = _skill_section(model.calls[0], "plain")
         assert "No placeholders here." in part and "ARGUMENTS: START-OF-PASTE" in part, lane
         assert "END-OF-PASTE" not in part and len(part) < 9_000, (lane, len(part))
+        # Release 7, fourth check: the person's words are what is cut, never
+        # the playbook they invoked; and what the app adds rides beside them.
+        (msg,) = model.calls[0]["messages"]
+        sent = msg.content
+        words = P.own_words(sent)
+        assert msg.role == "user" and words.startswith("START-OF-PASTE ") and "END-OF-PASTE" not in words, lane
+        assert sent[len(words):].startswith("\n\n" + P.ONCE_TOP), f"{lane}: the block beside the message gave way"

@@ -70,7 +70,10 @@ def _script(platform: Any, seen: list[dict[str, Any]], reply: str = "Noted.") ->
         names = []
         for t in tools or []:
             names.append(str(getattr(t, "name", "") or (t.get("name") if isinstance(t, dict) else "") or ""))
-        seen.append({"system": system, "tools": names})
+        # (Release 7: what was remembered rides beside the newest message.)
+        from tests._fakes.sent import with_beside
+
+        seen.append({"system": with_beside(system, messages), "tools": names})
         return RouteResult(
             LLMResponse(text=reply, tool_calls=[], usage={"input_tokens": 12, "output_tokens": 7}),
             "mock", "mock",

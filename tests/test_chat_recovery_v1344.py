@@ -52,6 +52,7 @@ from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.core.models import PermissionMode
 from iron_jarvis.tools.base import Tool, ToolContext, ToolResult
 from iron_jarvis.tools.permissions import PermissionDecision, PermissionEngine
+from tests._fakes.sent import with_beside
 
 LOOKUP = "notes_lookup_fake"      # armed, allow tier, always succeeds
 FAILS = "flaky_lookup_fake"       # armed, allow tier, always fails
@@ -133,13 +134,13 @@ def _script(rounds: list[LLMResponse]):
 
     async def fake_complete(*, provider=None, model=None, system, messages, tools,
                             task_class=None, **kw):
-        fake_complete.systems.append(system)
+        fake_complete.systems.append(with_beside(system, messages))
         fake_complete.seen.append(list(messages))
         return RouteResult(_next(), "mock", "mock")
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools,
                           session_id=None, task_class=None, **kw):
-        fake_stream.systems.append(system)
+        fake_stream.systems.append(with_beside(system, messages))
         fake_stream.seen.append(list(messages))
         yield {"type": "final", "response": _next(), "provider": "mock", "model": "mock"}
 

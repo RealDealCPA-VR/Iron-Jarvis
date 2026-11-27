@@ -61,6 +61,7 @@ from iron_jarvis.workmap import keys as K
 from iron_jarvis.workmap.clients import block as client_block_mod
 from iron_jarvis.workmap.clients import store as store_mod
 from iron_jarvis.workmap.clients import wall as wall_mod
+from tests._fakes.sent import with_beside
 
 LANES = ("post", "stream")
 
@@ -164,11 +165,11 @@ def _scripted(platform, monkeypatch, rounds=(), final="Done."):
         return LLMResponse(text=final, usage={"input_tokens": 3, "output_tokens": 1})
 
     async def fake_complete(*, system, messages, tools=None, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         return RouteResult(_next(), "mock", "mock")
 
     async def fake_stream(*, system, messages, tools=None, **kw):
-        seen["systems"].append(system)
+        seen["systems"].append(with_beside(system, messages))
         resp = _next()
         if resp.text:
             yield {"type": "text", "text": resp.text}
@@ -645,7 +646,7 @@ async def test_a_chat_code_turn_in_its_own_copy_gets_its_client(scene, monkeypat
     assert status == 200, raw
     assert frames_of(raw)[-1][0] == "done", frames_of(raw)[-3:]
     assert script.calls, "the session's model was never asked"
-    assert BLOCK_H in script.calls[0]["system"], "a Chat › Code turn in its own copy lost its client"
+    assert BLOCK_H in with_beside(script.calls[0]["system"], script.calls[0]["messages"]), "a Chat › Code turn in its own copy lost its client"
     assert str(copy) in scene.clients.block_calls, scene.clients.block_calls
     assert scene.clients.wall_calls[-1][0] == str(copy)
     assert scene.clients.walls[-1].client.client_id == scene.hid
@@ -724,7 +725,7 @@ def _spy_adapters(platform, seen: dict):
         real_complete = adapter.complete
 
         async def spy(*, system, messages, tools, **kw):
-            seen.setdefault("systems", []).append(system)
+            seen.setdefault("systems", []).append(with_beside(system, messages))
             seen.setdefault("walls", []).append(wall_mod.current())
             return await real_complete(system=system, messages=messages, tools=tools, **kw)
 

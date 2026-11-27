@@ -81,6 +81,7 @@ from iron_jarvis.tools.autoselect import select_ask_tools
 from tests.test_build_git_v1375 import make_repo
 from tests.test_chat_approvals_v1187 import _asgi_post, _drive_stream
 from tests.test_page_doors_v14360 import _resolves as _page_resolves
+from tests._fakes.sent import with_beside
 
 pytestmark = pytest.mark.usefixtures("no_network")
 
@@ -702,7 +703,7 @@ class _Scripted:
                        session_id=None, task_class=None, **kw):
         offered = _names(tools)
         self.offered.append(offered)
-        self.systems.append(str(system or ""))
+        self.systems.append(with_beside(system, messages))
         self.shown.append(str(system or "") + json.dumps(messages, default=str))
         i = len(self.called)
         if i < len(self.plan) and not self.missing:

@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.tools.base import Tool, ToolResult
+from tests._fakes.sent import with_beside
 
 
 def _client(tmp_path):
@@ -251,7 +252,7 @@ def _spy_adapter(client, captured):
         rc = a.complete
 
         async def c(*, system, messages, tools):
-            captured["system"] = system
+            captured["system"] = with_beside(system, messages)
             captured["tools"] = tools
             return await rc(system=system, messages=messages, tools=tools)
 

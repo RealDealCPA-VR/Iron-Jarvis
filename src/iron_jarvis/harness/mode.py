@@ -39,7 +39,6 @@ In harness mode a turn:
 from __future__ import annotations
 
 import dataclasses
-import datetime as _dt
 import fnmatch
 import json
 import re
@@ -1116,7 +1115,9 @@ class HarnessTurn:
     def block(self) -> str:
         """The system-prompt section (with today's date, which is NOT part of
         the fingerprint)."""
-        date = f"\n\nToday's date is {self.today}." if self.today else ""
+        from ..core.today import today_block
+
+        date = today_block(self.today) if self.today else ""
         # v1.371.0: the page the user's Browser pane shows (harness/preview),
         # named only when page_screenshot is in this turn's gate. Like the
         # date, it changes per turn and is NOT part of the fingerprint.
@@ -1583,7 +1584,10 @@ def build(
     )
     rendered = _components.render(tree)
     if today is None:
-        today = _dt.date.today().isoformat()
+        # Release 7: the ONE date helper every prompt seam uses (``core/today``).
+        from ..core.today import today_iso
+
+        today = today_iso()
     turn = HarnessTurn(
         requested=requested, plan=plan, layer=layer, tree=tree, rendered=rendered, today=today,
     )

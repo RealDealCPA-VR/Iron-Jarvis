@@ -136,7 +136,11 @@ async def test_a_small_window_still_gets_a_plan_that_fits(tmp_path, monkeypatch,
     assert plan.used_tokens <= plan.window == window
     assert plan.dropped > 0 and plan.recap
     # The newest message is kept, last and whole.
-    assert plan.messages[-1] == {"role": "user", "content": "the newest question"}
+    # (Release 7: the final plan also carries what the app adds beside the
+    # newest message, as its ``rider``; the person's words are untouched.)
+    newest = plan.messages[-1]
+    assert (newest["role"], newest["content"]) == ("user", "the newest question")
+    assert set(newest) <= {"role", "content", "rider"}
     assert not plan.clipped_last
     # Only user/assistant lines: no orphaned tool result can reach the model.
     assert {m["role"] for m in plan.messages} <= {"user", "assistant"}

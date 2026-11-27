@@ -29,6 +29,7 @@ from iron_jarvis.providers.adapters.base import LLMResponse, ToolCall
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.base import ToolContext
 from tests.test_chat_turn_stop_v1241 import _drive_stream
+from tests._fakes.sent import with_beside
 
 GUIDE_MARK = "GUIDE-MARK-always-cite-the-client-file"
 NOTE_MARK = "NOTE-MARK-acme-retainer-renews-in-march"
@@ -69,7 +70,7 @@ def _capture_complete(seen: dict, script=None):
 
     async def fake_complete(*, provider=None, model=None, system, messages, tools, task_class=None, **kw):
         rounds["n"] += 1
-        seen.setdefault("systems", []).append(system)
+        seen.setdefault("systems", []).append(with_beside(system, messages))
         seen.setdefault("tools", []).append(
             [getattr(t, "name", None) or (t.get("name") if isinstance(t, dict) else "") for t in tools or []]
         )
@@ -203,7 +204,7 @@ async def test_stream_lane_carries_the_same_block_and_receipt(tmp_path):
     captured: dict = {}
 
     async def fake_stream(*, provider=None, model=None, system, messages, tools, session_id=None, task_class=None, **kw):
-        captured["system"] = system
+        captured["system"] = with_beside(system, messages)
         captured["tools"] = [getattr(t, "name", None) or t.get("name") for t in tools or []]
         yield {"type": "text", "text": "ok"}
         yield {"type": "final", "response": LLMResponse(text="ok"), "provider": "mock", "model": "mock"}
@@ -229,7 +230,7 @@ def test_an_agent_run_gets_the_block_and_the_tools(tmp_path):
         real = adapter.complete
 
         async def spy(*, system, messages, tools):
-            seen.setdefault("systems", []).append(system)
+            seen.setdefault("systems", []).append(with_beside(system, messages))
             seen.setdefault("tools", []).append([t.get("name") if isinstance(t, dict) else getattr(t, "name", "") for t in tools or []])
             return await real(system=system, messages=messages, tools=tools)
 

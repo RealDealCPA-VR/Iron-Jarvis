@@ -52,6 +52,7 @@ from iron_jarvis.daemon.chat_turn import (
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.autoselect import AUTO_SAFE_TOOLS
+from tests._fakes.sent import with_beside
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
 
@@ -77,7 +78,7 @@ def bound_dir(tmp_path) -> Path:
 
 def _capture_complete(client, monkeypatch, seen: dict):
     async def fake_complete(*args, **kw):
-        seen["system"] = str(kw.get("system") or "")
+        seen["system"] = with_beside(kw.get("system") or "", kw.get("messages"))
         seen["tools"] = list(kw.get("tools") or [])
         return RouteResult(LLMResponse(text="ok"), "mock", "mock")
 
@@ -88,7 +89,7 @@ def _capture_complete(client, monkeypatch, seen: dict):
 
 def _capture_stream(client, monkeypatch, seen: dict):
     async def fake_stream(*args, **kw):
-        seen["system"] = str(kw.get("system") or "")
+        seen["system"] = with_beside(kw.get("system") or "", kw.get("messages"))
         seen["tools"] = list(kw.get("tools") or [])
         yield {"type": "text", "text": "ok"}
         yield {"type": "final", "response": LLMResponse(text="ok"),

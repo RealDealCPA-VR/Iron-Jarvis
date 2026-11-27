@@ -123,6 +123,7 @@ from iron_jarvis.documents.excel_tools import (
 from iron_jarvis.providers.adapters.base import LLMResponse
 from iron_jarvis.providers.router import RouteResult
 from iron_jarvis.tools.base import ToolContext
+from tests._fakes.sent import with_beside
 
 _SRC = Path(__file__).resolve().parents[1] / "src" / "iron_jarvis" / "daemon"
 
@@ -1078,13 +1079,13 @@ def _record_prompts(platform, calls: "list | None" = None) -> list[str]:
     seen: list[str] = []
 
     async def _complete(*, system="", tools=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, kw.get("messages")))
         if calls is not None:
             calls.append([t.get("name") for t in (tools or [])])
         return RouteResult(LLMResponse(text="ok"), "mock", "mock")
 
     async def _stream(*, system="", tools=None, **kw):
-        seen.append(system)
+        seen.append(with_beside(system, kw.get("messages")))
         if calls is not None:
             calls.append([t.get("name") for t in (tools or [])])
         yield {"type": "text", "text": "ok"}
