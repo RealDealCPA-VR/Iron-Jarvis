@@ -77,7 +77,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from ...envelope.probes import ProbeReply
+from ...envelope.probes import TRIAL_TOTAL_TIMEOUT, ProbeReply, trial_battery
 from ...envelope.profile import CapabilityProfile, trusted_profile
 from ...envelope.runner import run_quick_battery
 from ...envelope.seed import seed_profile
@@ -218,6 +218,26 @@ def _seed_kwargs(d, provider: str, base_url: str) -> dict[str, Any]:
     return kw
 
 
+async def run_trial(d, base: CapabilityProfile, adapter: Any, provider: str, model: str, home: Path):
+    """THE measurement both doors run (Measure and the idle trial, release 9):
+    the quick battery, then how fast it writes and how much it holds, against
+    the ONE pinned adapter, under :data:`TRIAL_TOTAL_TIMEOUT`. The HOLD probe
+    fills the window the app really plans with (``chat_turn.
+    _context_window_source``, the one ladder), read off the loop. Made-up
+    text only: every probe's material is its own."""
+    from ..chat_turn import _context_window_source
+
+    try:
+        limit, _src = await asyncio.to_thread(_context_window_source, d, provider, model)
+    except Exception:  # noqa: BLE001 — no window known: HOLD says nothing
+        limit = None
+    battery = trial_battery(limit_tokens=limit, chars_per_token=base.chars_per_token)
+    return await run_quick_battery(
+        base, probe_transport(adapter), probes=battery, home=home,
+        total_timeout=TRIAL_TOTAL_TIMEOUT,
+    )
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
 
@@ -260,9 +280,7 @@ def register(app: FastAPI, d) -> None:
             if base is None:
                 base = CapabilityProfile(model_id=model, provider=provider)
             adapter = d.platform.providers.get(provider, model)
-            session = await run_quick_battery(
-                base, probe_transport(adapter), home=home
-            )
+            session = await run_trial(d, base, adapter, provider, model, home)
             source = session.source
         except asyncio.CancelledError:  # daemon shutdown: release, no event
             inflight.discard(key)

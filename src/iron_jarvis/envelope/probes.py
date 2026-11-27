@@ -21,6 +21,8 @@ overwriting a measured ratio with the 4.0 default.
 from __future__ import annotations
 
 import json
+import re
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -427,3 +429,245 @@ def quick_battery(*, trials: int = DEFAULT_TRIALS) -> list[Any]:
     """The default quick battery: seconds against a live endpoint, and it
     covers every loop-bending decision (rung, verify cadence, token math)."""
     return [ToolFormProbe(trials=trials), JsonStrictProbe(trials=trials), TokenRatioProbe()]
+
+
+# --------------------------------------------------------------------------- #
+# Release 9 of the intelligence plan: how much it holds, how fast it writes.
+# Both send MADE-UP text only (nothing of the user's ever goes into a trial),
+# and both score mechanically: a code word read back, words over a clock.
+# --------------------------------------------------------------------------- #
+
+#: A printed page of plain text, in characters (about 500 words). The ONE
+#: number every "pages" figure on screen is divided by.
+PAGE_CHARS = 3000
+
+#: The largest prompt the HOLD probe sends, in the model's tokens. Bigger
+#: windows are tried up to here and then said as "at least": a 128k-token
+#: prompt can take a home GPU many minutes, and a trial is meant to be about a
+#: minute of the user's own server's time.
+HOLD_CAP_TOKENS = 32768
+#: Never try a text shorter than this (about three pages): below it the
+#: answer is not worth a line on the card.
+HOLD_MIN_CHARS = 8000
+#: How many sizes HOLD tries at most (the first, then halving).
+HOLD_TRIES = 4
+#: The share of the planning window the first try fills, leaving room for the
+#: instructions and the reply.
+_HOLD_SHARE = 0.75
+#: A server that reports fewer prompt tokens than this share of what was sent
+#: cut the text (Ollama trims a prompt past its num_ctx without an error), so
+#: the try fails even when the model happens to answer.
+_HOLD_CUT_SHARE = 0.6
+
+_SYLLABLES = (
+    "ka", "lo", "mi", "ne", "su", "ta", "ri", "po", "va", "de", "zu", "fe", "mo", "li",
+    "ga", "ru", "si", "to", "be", "na", "ko", "pe", "yu", "di",
+)
+
+
+def made_up_text(chars: int, *, seed: int = 0) -> str:
+    """``chars`` characters of made-up words in made-up sentences:
+    deterministic for a seed, no real word, nothing of anyone's. The trials'
+    only material (release 9: "made-up text only, nothing of yours")."""
+    out: list[str] = []
+    size = 0
+    i = seed * 7919 + 1
+    word_no = 0
+    while size < max(0, chars):
+        i = (i * 1103515245 + 12345) & 0x7FFFFFFF
+        n = 2 + (i >> 8) % 3
+        word = "".join(_SYLLABLES[(i >> (4 + 3 * k)) % len(_SYLLABLES)] for k in range(n))
+        word_no += 1
+        if word_no % 12 == 0:
+            word += "."
+        out.append(word)
+        size += len(word) + 1
+    return " ".join(out)[: max(0, chars)]
+
+
+def _code_word(seed: int) -> str:
+    """The code word one HOLD try hides at the start of its text."""
+    words = made_up_text(40, seed=seed + 101).replace(".", "").split()
+    return f"{words[0]}-{4000 + (seed * 37) % 5000}"
+
+
+class HoldProbe:
+    """How much the model holds (fills ``holds_chars`` and ``holds_more``).
+
+    A code word goes at the very START of a long made-up text and the
+    question comes at its END; the try passes when the reply names the code
+    word AND the server did not report cutting the prompt. The first try fills
+    :data:`_HOLD_SHARE` of the window the app plans with (capped at
+    :data:`HOLD_CAP_TOKENS`); each failure halves the size, down to
+    :data:`HOLD_MIN_CHARS`, at most :data:`HOLD_TRIES` tries.
+
+    Honest outcomes only:
+
+    * a size passed -> ``holds_chars`` is that size; ``holds_more`` is 1 only
+      when it was the FIRST try and the window is larger than the cap (the
+      model may hold more: "at least"), else 0;
+    * no size passed, or no window is known -> ``ok=True`` with EMPTY scores
+      (nothing measured, so nothing is said);
+    * a try the server refused (an error on an oversized prompt) is a FAILED
+      size, not a dead probe; only every try erroring is ``ok=False``.
+    """
+
+    id = "HOLD"
+    title = "How much made-up text the model reads back to its first line"
+    targets: Sequence[str] = ("holds_chars", "holds_more")
+
+    def __init__(
+        self,
+        *,
+        limit_tokens: int | None,
+        chars_per_token: float = 4.0,
+        cap_tokens: int = HOLD_CAP_TOKENS,
+        tries: int = HOLD_TRIES,
+    ) -> None:
+        self.limit_tokens = int(limit_tokens) if limit_tokens else 0
+        try:
+            cpt = float(chars_per_token)
+        except (TypeError, ValueError):
+            cpt = 4.0
+        self.chars_per_token = cpt if 1.0 <= cpt <= 8.0 else 4.0
+        self.cap_tokens = max(1, int(cap_tokens))
+        self.tries = max(1, int(tries))
+
+    async def run(self, complete: Transport) -> ProbeResult:
+        if self.limit_tokens <= 0:
+            return ProbeResult(self.id, {}, notes="no window known; not measured", ok=True)
+        want = min(self.limit_tokens, self.cap_tokens)
+        size = int(want * _HOLD_SHARE * self.chars_per_token)
+        more = 1 if self.limit_tokens > self.cap_tokens else 0
+        asked = errors = 0
+        said: list[str] = []
+        for attempt in range(self.tries):
+            if size < HOLD_MIN_CHARS:
+                break
+            code = _code_word(attempt)
+            text = made_up_text(size, seed=attempt)
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "The user sends a long made-up text. Answer the question at its end "
+                        "with the code word only."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"The code word is {code}.\n\n{text}\n\n"
+                        "What was the code word given at the very start? "
+                        "Reply with the code word only."
+                    ),
+                },
+            ]
+            asked += 1
+            try:
+                reply = await complete(messages)
+            except Exception as exc:  # noqa: BLE001 — a refused size is a failed size
+                errors += 1
+                said.append(f"{size} chars errored ({type(exc).__name__})")
+                size //= 2
+                continue
+            passed = code.lower() in (reply.text or "").lower()
+            tokens = _prompt_tokens(reply.usage or {})
+            sent_tokens = sum(len(m["content"]) for m in messages) / self.chars_per_token
+            if passed and tokens and tokens < _HOLD_CUT_SHARE * sent_tokens:
+                passed = False
+                said.append(f"{size} chars cut by the server ({tokens} tokens read)")
+            if passed:
+                return ProbeResult(
+                    self.id,
+                    {"holds_chars": float(size), "holds_more": float(more if attempt == 0 else 0)},
+                    notes="; ".join(said + [f"{size} chars read back"]),
+                    ok=True,
+                )
+            said.append(f"{size} chars not read back")
+            size //= 2
+        if asked and errors == asked:
+            return ProbeResult(self.id, {}, notes=f"every try errored: {'; '.join(said)}", ok=False)
+        return ProbeResult(self.id, {}, notes="; ".join(said) or "no size tried", ok=True)
+
+
+#: SPEED: the best of this many tries (the first may include loading the model).
+SPEED_TRIES = 2
+#: A reply shorter than this many words is not timed (too short to be a rate).
+SPEED_MIN_WORDS = 40
+_WORD_RE = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?", re.UNICODE)
+
+
+class SpeedProbe:
+    """How fast the model writes (fills ``words_per_second``): a made-up
+    story of about 150 words, timed on an injected clock from the request to
+    the whole reply; words over seconds, the best of :data:`SPEED_TRIES`.
+    A reply under :data:`SPEED_MIN_WORDS` words is not timed; no timed reply
+    -> ``ok=True`` with EMPTY scores (not measured, so nothing is said)."""
+
+    id = "SPEED"
+    title = "Words of a made-up story written per second"
+    targets: Sequence[str] = ("words_per_second",)
+
+    def __init__(self, *, clock: Callable[[], float] | None = None, tries: int = SPEED_TRIES) -> None:
+        self.clock = clock or time.monotonic
+        self.tries = max(1, int(tries))
+
+    async def run(self, complete: Transport) -> ProbeResult:
+        messages = [
+            {"role": "system", "content": "Write plain prose. No title, no lists."},
+            {
+                "role": "user",
+                "content": (
+                    "Write a made-up story of about 150 words about a lighthouse keeper "
+                    "on a small island who finds a strange glass bottle."
+                ),
+            },
+        ]
+        best = 0.0
+        errors = 0
+        said: list[str] = []
+        for _ in range(self.tries):
+            start = float(self.clock())
+            try:
+                reply = await complete(messages)
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                said.append(f"errored ({type(exc).__name__})")
+                continue
+            took = float(self.clock()) - start
+            words = len(_WORD_RE.findall(reply.text or ""))
+            if words < SPEED_MIN_WORDS or took <= 0:
+                said.append(f"{words} words, not timed")
+                continue
+            said.append(f"{words} words in {took:.1f}s")
+            best = max(best, words / took)
+        if errors == self.tries:
+            return ProbeResult(self.id, {}, notes="; ".join(said), ok=False)
+        if best <= 0:
+            return ProbeResult(self.id, {}, notes="; ".join(said), ok=True)
+        return ProbeResult(
+            self.id, {"words_per_second": round(best, 2)}, notes="; ".join(said), ok=True
+        )
+
+
+#: The whole trial's time limit, in seconds (the quick battery's own is
+#: ``runner.DEFAULT_TOTAL_TIMEOUT``): HOLD's long prompts need more.
+TRIAL_TOTAL_TIMEOUT = 240.0
+
+
+def trial_battery(
+    *,
+    limit_tokens: int | None,
+    chars_per_token: float = 4.0,
+    trials: int = DEFAULT_TRIALS,
+    clock: Callable[[], float] | None = None,
+) -> list[Any]:
+    """Release 9's battery, run by Measure and by the idle trial: the quick
+    battery, then SPEED, then HOLD (slowest last, so a time limit spends
+    itself on the one that can afford to be cut)."""
+    return [
+        *quick_battery(trials=trials),
+        SpeedProbe(clock=clock),
+        HoldProbe(limit_tokens=limit_tokens, chars_per_token=chars_per_token),
+    ]

@@ -40,8 +40,10 @@ from iron_jarvis.envelope.profile import CapabilityProfile, sanitize_id
 _RELIABILITY_ROOTS = frozenset({"tool_protocols", "json_adherence"})
 #: Non-reliability scalars a probe can measure; a dead probe leaves them at
 #: the base and the SAVED record inherits them from the cached record.
-_INT_FIELDS = frozenset({"honest_context", "context_window", "coherence_horizon"})
-_FLOAT_FIELDS = frozenset({"json_adherence", "chars_per_token"})
+_INT_FIELDS = frozenset(
+    {"honest_context", "context_window", "coherence_horizon", "holds_chars", "holds_more"}
+)
+_FLOAT_FIELDS = frozenset({"json_adherence", "chars_per_token", "words_per_second"})
 _DICT_FIELDS = frozenset({"tool_protocols"})
 
 #: A staging file older than this is nobody's live write, so it is safe to
