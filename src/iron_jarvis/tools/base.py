@@ -188,6 +188,16 @@ class ToolResult:
     #: must still say what the picture is and where its file is. Never
     #: persisted (the ledger keeps ``output`` and ``data``).
     images: list[dict[str, str]] | None = None
+    #: The WHOLE text of ``output`` when the tool's own cap cut it (the
+    #: intelligence plan, release 8): ``read_document`` and ``extract_pdf``
+    #: still answer with their first 16,000 characters and the words that say
+    #: so, and put the uncut answer here beside it. Only a lane that can KEEP
+    #: a long result reads it (``tools/kept_results.hold``): it then shows the
+    #: start and keeps the rest of the whole, instead of losing everything
+    #: past the tool's cap. Every other caller reads ``output`` and gets
+    #: exactly what it always got. None when nothing was cut. The ledger
+    #: keeps ``output``, never this.
+    whole: str | None = None
 
 
 class Reversibility(str, Enum):

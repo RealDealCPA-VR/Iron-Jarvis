@@ -299,6 +299,47 @@ def test_the_oldest_goes_when_a_chat_holds_too_many_or_too_much(root, clock, mon
     assert not K._owner_dir(root, "").exists()
 
 
+def test_the_whole_store_is_bounded_and_the_oldest_of_anyone_go_first(root, clock, monkeypatch):
+    home, hour = root.parent, 3600.0
+    monkeypatch.setattr(K, "MAX_STORE_BYTES", 2_500)
+    assert K.FRESH_S == hour
+    a = K.put(root, "chat:a", "a" * 1_000, fenced=False, local_only=False)
+    clock.t += 2 * hour
+    b = K.put(root, "chat:b", "b" * 1_000, fenced=False, local_only=False)
+    clock.t += 2 * hour
+    c = K.put(root, "run_c", "c" * 1_000, fenced=False, local_only=False)
+
+    def alive() -> str:
+        held = (("a", "chat:a", a), ("b", "chat:b", b), ("c", "run_c", c), ("d", "chat:d", d), ("e", "chat:a", e))
+        return "".join(n for n, owner, h in held if h and K.get(root, owner, h) is not None)
+
+    d = e = ""
+    # Over the bound: the OLDEST goes, whoever it belongs to, and only as many
+    # as are needed (b is old enough to go too, and stays).
+    assert alive() == "bc"
+    clock.t += hour / 6
+    d = K.put(root, "chat:d", "d" * 1_000, fenced=False, local_only=False)
+    assert alive() == "cd", "b was the oldest left"
+    # Nothing saved within the last hour goes: neither the one being saved nor
+    # one a reply may still be reading. The store is over its bound until the
+    # tidy-up finds them old enough.
+    clock.t += hour / 6
+    e = K.put(root, "chat:a", "e" * 1_000, fenced=False, local_only=False)
+    assert alive() == "cde"
+    assert K.sweep(home) == 0 and alive() == "cde", "still within the hour"
+    clock.t += 2 * hour
+    assert K.sweep(home) == 1 and alive() == "de", "the daily tidy-up holds the same line"
+    assert not K._owner_dir(root, "run_c").exists(), "the folder it emptied goes too"
+    # One result alone over the bound is still kept (it is the one being saved).
+    clock.t += 2 * hour
+    big = K.put(root, "chat:big", "x" * 3_000, fenced=False, local_only=False)
+    assert K.get(root, "chat:big", big) is not None and alive() == ""
+
+    # The real bound is 512 MB of kept text.
+    monkeypatch.undo()
+    assert K.MAX_STORE_BYTES == 512 * 1024 * 1024
+
+
 def test_a_kept_result_ends_after_thirty_days(root, clock):
     home = root.parent
     old = K.put(root, "chat:old", MARK, fenced=False, local_only=False)

@@ -8659,6 +8659,7 @@ async def chat_stream(
                                                content=_chat_turn.kept_tool_message(
                                                    ctx, _tool_content,
                                                    getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
+                                                   result,
                                                ),
                                                # v1.371.0: a picture the tool handed
                                                # back (page_screenshot). MIRROR NOTE
