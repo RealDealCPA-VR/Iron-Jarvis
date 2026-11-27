@@ -80,7 +80,7 @@ def test_a_spreadsheet_with_an_error_cell_fails_and_the_line_says_which_cell(cli
     ), checked["line"]
     assert checked["tone"] == "warn"
     failed = [c for c in checked["checks"] if c["result"] == "failed"]
-    assert len(failed) == 1 and failed[0]["label"] == "summary.xlsx" and failed[0]["who"] == "by rule"
+    assert len(failed) == 1 and failed[0]["label"] == "“summary.xlsx”" and failed[0]["who"] == "by rule"
     assert checked["checks"][0] == failed[0], "the problem is not first in the list"
     # The record holds the same finding, under this reply and no other owner.
     rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_ERRORS]
@@ -96,14 +96,15 @@ def test_totals_that_add_up_are_counted_and_pressing_the_line_lists_three_checks
     checked = body["checked"]
     assert checked["line"] == "Checked by Iron Jarvis: the spreadsheet opens, no error cells, 2 totals add up."
     assert checked["tone"] == "quiet" and checked["more"] == 0
-    of_the_file = [(c["said"], c["result"], c["who"]) for c in checked["checks"] if c["label"] == "summary.xlsx"]
+    of_the_file = [(c["said"], c["result"], c["who"]) for c in checked["checks"] if c["label"] == "“summary.xlsx”"]
     assert of_the_file == [
         ("opens", "passed", "by rule"), ("no error cells", "passed", "by rule"), ("2 totals add up", "passed", "by rule"),
     ]
     # The check-again loop's own look at the reply is in the same record and
-    # list, after the three checks of the file.
+    # list, after the three checks of the file: the reply says it saved
+    # summary.xlsx, and the words say no more than what was read.
     assert [(c["label"], c["said"]) for c in checked["checks"]][3:] == [
-        ("The reply", "what it says matches what it did")]
+        ("The reply", "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record")]
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -120,7 +121,7 @@ def test_a_total_that_differs_is_worth_a_look_with_both_figures_never_a_problem(
     assert checked["tone"] == "warn" and "Problem" not in checked["line"]
     first = checked["checks"][0]
     assert (first["label"], first["said"], first["result"], first["result_words"], first["who"]) == (
-        "summary.xlsx", "B4 says 1,700 and the cells above it add up to 1,500", "look", "Worth a look", "by rule")
+        "“summary.xlsx”", "B4 says 1,700 and the cells above it add up to 1,500", "look", "Worth a look", "by rule")
     assert not [c for c in checked["checks"] if c["result"] == "failed"]
     rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_TOTALS]
     assert [(r.result, r.detail) for r in rows] == [(R.LOOK, "B4 says 1,700 and the cells above it add up to 1,500")]
@@ -141,12 +142,12 @@ def test_a_formula_the_writer_saved_no_result_for_is_never_called_no_error_cells
     body, _ = _write_turn(client, monkeypatch, lane, DIVIDES)
     checked = body["checked"]
     assert checked["line"] == (
-        "Checked by Iron Jarvis: the spreadsheet opens. Worth a look: D3 works out to #DIV/0!."
+        "Checked by Iron Jarvis: the spreadsheet opens. Worth a look: D3 works out to an error."
     ), checked["line"]
     assert checked["tone"] == "warn" and "no error cells" not in checked["line"]
-    assert [(c["said"], c["result"]) for c in checked["checks"]][0] == ("D3 works out to #DIV/0!", "look")
+    assert [(c["said"], c["result"]) for c in checked["checks"]][0] == ("D3 works out to an error", "look")
     rows = [r for r in _rows(client.app.state.platform) if r.check == R.SHEET_ERRORS]
-    assert [(r.result, r.detail) for r in rows] == [(R.LOOK, "D3 works out to #DIV/0!")]
+    assert [(r.result, r.detail) for r in rows] == [(R.LOOK, "D3 works out to an error")]
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -190,8 +191,8 @@ def test_a_reply_that_made_no_file_has_no_line_and_writes_no_content_row(client,
     assert opened == [], "a reply that made no file had files checked"
     rows = _rows(platform)
     assert not [r for r in rows if r.check in R.CONTENT_CHECKS]
-    # The reply's own check still wrote its one row to the one record.
-    assert [(r.check, r.result, r.detail) for r in rows] == [(R.CLAIMS, R.PASSED, "what it says matches what it did")]
+    # The answer names nothing it saved, changed or sent: nothing is said to have been checked.
+    assert rows == []
 
 
 @pytest.mark.parametrize("lane", LANES)
@@ -539,4 +540,4 @@ def test_a_check_that_raises_never_costs_the_reply(client, monkeypatch):
     body, _ = _write_turn(client, monkeypatch, "stream", GOOD_SHEET)
     assert body["reply"].startswith("Done: I saved summary.xlsx.")
     assert body["checked"]["line"] == "Not checked: the spreadsheet (it could not be checked here)."
-    assert all(c["result"] != "passed" for c in body["checked"]["checks"] if c["label"] == "summary.xlsx")
+    assert all(c["result"] != "passed" for c in body["checked"]["checks"] if c["label"] == "“summary.xlsx”")

@@ -6,20 +6,35 @@
  * add up."), its tone, and the list a press opens (each check, its result,
  * who checked). This module only decodes it, by whitelist; nothing here
  * composes a word of the line, and a reply with no `checked` draws nothing.
+ * The ONE thing it does not take from the payload is the word beside each
+ * check ("Problem", "Worth a look"): that is read from the check's `result`
+ * (`RESULT_WORDS`, the daemon's own four words), so a payload that says
+ * `look` under the word "Checked" can never draw so.
  *
  * Rides the chat reply (the done frame's and the POST answer's `checked`,
  * saved on the message) and a run's result (`GET /sessions/{id}/result`).
  *
- * FOUR results. `failed` ("Problem") is only what the file itself holds or
- * is. `look` ("Worth a look") is what Iron Jarvis worked out itself and
- * found different (its own adding up, a formula it worked out, a page count
- * read from the reply): figures, no verdict. Both read in the warning
- * colour; which word a check gets is the daemon's decision, never the page's.
+ * FOUR results. `failed` ("Problem") is a short list of facts (a file that
+ * is not a valid file of its kind, a cell whose saved value is an error, a
+ * test that failed, a required file that is not there). `look` ("Worth a
+ * look") is everything Iron Jarvis inferred, read out of the reply or was
+ * told by a model: no verdict. Both read in the warning colour; which
+ * RESULT a check gets is the daemon's decision, never the page's.
  */
 
 export type CheckedResult = "passed" | "failed" | "look" | "not_checked";
 
 const RESULTS: readonly CheckedResult[] = ["passed", "failed", "look", "not_checked"];
+
+/** The word beside a check, by its result: the daemon's own four words
+ *  (`checks/record._RESULT_WORDS`; a shared fixture holds the two equal).
+ *  Never taken from the payload. */
+export const RESULT_WORDS: Record<CheckedResult, string> = {
+  passed: "Checked",
+  failed: "Problem",
+  look: "Worth a look",
+  not_checked: "Not checked",
+};
 
 /** The results that read in the warning colour, in the list as on the line. */
 export function isWarnResult(result: CheckedResult): boolean {
@@ -32,11 +47,11 @@ export const CHECKED_LIST_MAX = 30;
 export interface CheckedItem {
   /** What the check is about: a file's name, "The reply", "Step 2". */
   label: string;
-  /** What it found, in the daemon's words ("Summary!C7 holds #DIV/0!"). */
+  /** What it found, in the daemon's words ("C7 holds #DIV/0!"). */
   said: string;
   result: CheckedResult;
-  /** "Checked" | "Problem" | "Worth a look" | "Not checked" (the daemon's
-   *  words). */
+  /** "Checked" | "Problem" | "Worth a look" | "Not checked": read from
+   *  `result` (`RESULT_WORDS`), never from the payload. */
   resultWords: string;
   /** "by rule", or "by <the model's name>". */
   who: string;
@@ -88,7 +103,7 @@ export function decodeChecked(raw: unknown): CheckedMark | null {
       label,
       said: text(c.said, 400),
       result,
-      resultWords: text(c.result_words ?? c.resultWords, 40),
+      resultWords: RESULT_WORDS[result],
       who: text(c.who, 140),
     });
     if (checks.length >= CHECKED_LIST_MAX) break;

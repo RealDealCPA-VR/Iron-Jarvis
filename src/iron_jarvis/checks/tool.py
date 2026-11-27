@@ -35,7 +35,8 @@ TOOL_NAME = "checks_list"
 MAX_ROWS = 60
 NOTHING = (
     "Iron Jarvis's record holds no check for this chat yet. It checks a reply when the reply ends: whether "
-    "what it says matches what it did, and, when it made or changed a file, what that file holds."
+    "the files it says it saved or changed, and what it says it sent, are in its record, and, when it made or "
+    "changed a file, what that file holds."
 )
 OTHER_RUN = (
     "That run was not started from this chat, so its checks are not read here. Open that run to see what was "
@@ -82,16 +83,24 @@ def _owner_rows(engine: Any, ctx: ToolContext, run: str) -> "tuple[list[dict[str
     thread = str(getattr(ctx, "thread_id", "") or "")
     session = str(getattr(ctx, "session_id", "") or "")
     inside = session if session and session != "chat" else ""
-    if run and run != inside:
+    if inside and (not run or run == inside):
+        # Asked from INSIDE a run: its own rows, on this PC.
+        rows = record.for_session(engine, inside)
+        return rows, "", len(rows) >= record.MAX_READ
+    # Asked from a CHAT. The rows of a run that keeps its words on this PC
+    # (a Local only run: file names, sheet names, figures) are read only by
+    # a chat that is Local only itself, asked now.
+    from . import turn as _turn
+
+    local = bool(thread) and _turn._is_local_only(engine, thread)
+    if run:
         # A run is answered for ONLY when the record says it was started
         # from the calling chat. A run of no chat is not "everybody's".
         mine = [r for r in record.for_session(engine, run) if thread and r.get("thread_id") == thread]
+        mine = _turn.home_rows(mine, local)
         return (mine, "", len(mine) >= record.MAX_READ) if mine else ([], OTHER_RUN, False)
-    if inside:
-        rows = record.for_session(engine, inside)
-        return rows, "", len(rows) >= record.MAX_READ
     if thread:
-        rows, older = newest_replies(record.for_thread(engine, thread, limit=record.MAX_READ))
+        rows, older = newest_replies(_turn.home_rows(record.for_thread(engine, thread, limit=record.MAX_READ), local))
         return rows, "", older
     rows = record.for_turn(engine, str(getattr(ctx, "turn_id", "") or ""))
     return rows, "", len(rows) >= record.MAX_READ
@@ -125,8 +134,9 @@ class ChecksListTool(Tool):
     description = (
         "Say what Iron Jarvis itself checked on the work in THIS chat: whether a file a reply made opens, a "
         "spreadsheet's error cells and whether its totals add up, whether a document has text, a PDF's pages, "
-        "whether a reply matched what it really did, required files, tests and reviews, and what could NOT be "
-        "checked and why. Use it for \"what did you check?\", \"did you check the totals?\", \"how do you know "
+        "whether the files a reply says it saved or changed (and what it says it sent) are in its record, "
+        "required files, tests and reviews, what is only worth a look, and what could NOT be checked and why. "
+        "Use it for \"what did you check?\", \"did you check the totals?\", \"how do you know "
         "it is right?\". It reads Iron Jarvis's own record only, runs no check again and changes nothing. "
         "Leave `run` out for this chat; `run` is the id of an agent run this chat started."
     )

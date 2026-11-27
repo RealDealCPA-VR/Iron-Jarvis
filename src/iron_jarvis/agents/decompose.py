@@ -1261,12 +1261,13 @@ async def _note_step_check(p: Any, session: Any, run: Any, result: StepResult, j
             ) or "")
         row = _existing.step_check(result, judge=judge, run_id=str(getattr(run, "id", "") or ""))
         if row is not None:
-            from .chat_delivery import chat_thread_of
+            from ..checks.turn import run_owner
 
-            await _checks.note(
-                getattr(p, "engine", None), [row], session_id=str(getattr(session, "id", "") or ""),
-                thread_id=str(chat_thread_of(session) or ""),
-            )
+            # Under the run's chat, unless the run keeps its words on this PC
+            # and that chat is not Local only (``run_owner``, off the loop).
+            engine = getattr(p, "engine", None)
+            owner = await asyncio.to_thread(run_owner, engine, session)
+            await _checks.note(engine, [row], session_id=str(getattr(session, "id", "") or ""), **owner)
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — a record is never worth a failed step

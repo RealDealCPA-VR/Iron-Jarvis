@@ -7,6 +7,22 @@ sends the model back and writes its line, the required files still get their
 note, a coding reply's tests still write their event. They also write here,
 so "what did you check?" has one place to read.
 
+WHICH OUTCOME EACH WRITER MAY USE (``record.PROBLEM_CHECKS`` is the
+allowlist; a row of any other check is never a "Problem"):
+
+* :func:`claims_check` (the reply's own claims): ``passed`` only when the
+  reply NAMED something it saved, changed or sent and the record holds it;
+  what the reading found unmatched is ``look`` (a reading of prose).
+* :func:`required_file_checks`: ``failed`` ONLY for a required file that is
+  not on disk (a fact). One that is there and empty, or that the older check
+  could not open, is ``look``.
+* :func:`proof_check`, :func:`finish_checks` (tests): ``failed`` for a test
+  command that ran and failed (a fact). A reviewer that asked for changes is
+  ``look`` (a model's opinion; never its words).
+* :func:`step_check`, :func:`workflow_check`: a step whose check did not
+  pass is ``look``, whether a model judged it or a rule looked for a file
+  the plan named.
+
 NO MODEL'S WORDS. A row's detail is words this module (or the check's own
 code) built: a judging model's reason, a reviewer's read and a tool's raw
 error are never stored, so they can never reach the line under a reply or
@@ -25,8 +41,8 @@ import re
 from typing import Any, Iterable
 
 from .record import (
-    BY_RULE, CLAIMS, FAILED, LINE_HEAD, LINE_NOT_CHECKED, NOT_CHECKED, PASSED, REQUIRED_FILE, REVIEW, STEP_CHECK,
-    TESTS, WORKFLOW_STEP, Check, file_name, open_words, plain_words,
+    BY_RULE, CLAIMS, FAILED, LINE_HEAD, LINE_NOT_CHECKED, LOOK, NOT_CHECKED, PASSED, REQUIRED_FILE, REVIEW,
+    STEP_CHECK, TESTS, WORKFLOW_STEP, Check, file_name, open_words, plain_words, quoted,
 )
 
 log = logging.getLogger(__name__)
@@ -49,7 +65,14 @@ SKIPPED_WORDS = {
     "declined": "a step was declined or no tools were wanted, so it was not checked against what it did",
     "blocked": "it ended by saying what blocks it, so it was not checked again",
 }
-CLAIMS_PASSED = "what it says matches what it did"
+#: The good side of the reply's claims check. No wider than what is READ:
+#: the files a reply says it saved or changed, and what it says it sent
+#: (never "what it says matches what it did": a reply also says it ran
+#: tests, printed, booked, deleted, and none of that is read).
+CLAIMS_PASSED = ("the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record")
+#: A required file's states that are a FACT about the disk: it is not there
+#: (or a folder is where the file should be).
+NOT_ON_DISK = frozenset({"missing", "folder"})
 #: A model-judged step that failed: this, and the model's name in ``by``.
 STEP_FAILED = "its check did not pass"
 #: Why a coding reply's tests did not run, where the finish check's own code
@@ -93,9 +116,12 @@ def _review_words(state: str, why: Any) -> str:
 
 
 def claims_check(until: Any) -> "Check | None":
-    """The check-again loop's last look at a reply (``daemon/until_done``):
-    whether what the reply says matches what it did. None when the loop
-    never looked (the demo model, a text-only reply, a coding session)."""
+    """The check-again loop's last look at a reply (``daemon/until_done``).
+    None when the loop never looked (the demo model, a text-only reply, a
+    coding session), and when it looked, found nothing unmatched, and the
+    reply named NOTHING it saved, changed or sent (``until.claims``): there
+    is then nothing to say was checked. What the reading found unmatched is
+    ``look``: it is read out of the reply's prose."""
     try:
         if until is None:
             return None
@@ -106,9 +132,11 @@ def claims_check(until: Any) -> "Check | None":
             return None
         still = list(dict.fromkeys(str(k) for k in (getattr(until, "open", None) or [])))
         if not still:
+            if not int(getattr(until, "claims", 0) or 0):
+                return None
             return Check(CLAIMS, PASSED, CLAIMS_PASSED)
         said = [OPEN_WORDS.get(k, "something it says does not match what it did") for k in still]
-        return Check(CLAIMS, FAILED, "; ".join(dict.fromkeys(said)))
+        return Check(CLAIMS, LOOK, "; ".join(dict.fromkeys(said)))
     except Exception:  # noqa: BLE001
         log.debug("the check-again verdict could not be recorded", exc_info=True)
         return None
@@ -121,7 +149,11 @@ def required_file_checks(states: Iterable[Any]) -> list[Check]:
     try:
         for s in states or ():
             status = str(getattr(s, "status", "") or "")
-            result = PASSED if status == "ok" else NOT_CHECKED if status == "unchecked" else FAILED
+            # A PROBLEM only for the fact "it is not on disk". A file that is
+            # there and empty, or that the older check could not open (it
+            # reads a cut piece of a large text file), is worth a look.
+            result = (PASSED if status == "ok" else NOT_CHECKED if status == "unchecked"
+                      else FAILED if status in NOT_ON_DISK else LOOK)
             detail = str(getattr(s, "detail", "") or "")
             # The older check's own reason for a file that does not open may
             # name an exception or a part of the package: plain words only.
@@ -186,7 +218,8 @@ def finish_checks(record: Any) -> list[Check]:
             if state == "done" and verdict == "approved":
                 out.append(Check(REVIEW, PASSED, "it approved the change", by=who))
             elif state == "done" and verdict == "changes_needed":
-                out.append(Check(REVIEW, FAILED, "it asked for changes", by=who))
+                # A model's opinion: worth a look, never a problem (and never its words).
+                out.append(Check(REVIEW, LOOK, "it asked for changes", by=who))
             else:
                 # Never the reviewer's own words (its answer, a tool's raw
                 # error): a reason the finish check's own code wrote, else
@@ -224,11 +257,13 @@ def step_check(result: Any, *, judge: str = "", run_id: str = "") -> "Check | No
             # The file gate's own sentence ("expected file(s) not found...:
             # a.xlsx, b.docx") is built by code: the NAMES are kept.
             listed = " ".join(str(get("reason") or "").split()).partition(":")[2]
-            names = ", ".join(n for n in (file_name(x.strip()) for x in listed.split(",")) if n)
+            names = ", ".join(quoted(n) for n in (file_name(x.strip()) for x in listed.split(",")) if n)
             said = "a file it should have made is not there" + (f": {names}" if names else "")
         else:
             said = STEP_FAILED
-        return Check(STEP_CHECK, FAILED, said, by=who, step=step, run_id=run_id)
+        # Worth a look, whoever checked: a model's verdict is an opinion, and
+        # the file a rule looked for is one the plan (a model) named.
+        return Check(STEP_CHECK, LOOK, said, by=who, step=step, run_id=run_id)
     except Exception:  # noqa: BLE001
         log.debug("a step's check could not be recorded", exc_info=True)
         return None
@@ -246,7 +281,7 @@ def _workflow_words(problem: str) -> str:
     m = _EXPECTED_FILE_RX.match(problem)
     if m is not None:
         name = file_name(m.group("name"))
-        return "a file it should have made was not found" + (f": {name}" if name else "")
+        return "a file it should have made was not found" + (f": {quoted(name)}" if name else "")
     if _SUMMARY_RX.match(problem) is not None:
         return "its result does not say what it was expected to say"
     if "expectations need an agent or tool step" in problem:
@@ -265,14 +300,14 @@ def workflow_check(step_name: Any, problem: Any, *, run_id: str = "") -> "Check 
         if text.startswith("could not verify"):
             return Check(WORKFLOW_STEP, NOT_CHECKED, "what it should have made could not be looked for",
                          step=step, run_id=run_id)
-        return Check(WORKFLOW_STEP, FAILED, _workflow_words(text), step=step, run_id=run_id)
+        return Check(WORKFLOW_STEP, LOOK, _workflow_words(text), step=step, run_id=run_id)
     except Exception:  # noqa: BLE001
         log.debug("a workflow step's check could not be recorded", exc_info=True)
         return None
 
 
 __all__ = [
-    "CLAIMS_PASSED", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "SKIPPED_WORDS", "STEP_FAILED",
+    "CLAIMS_PASSED", "NOT_ON_DISK", "OPEN_WORDS", "REVIEW_ENDED_WORDS", "REVIEW_WHY_WORDS", "SKIPPED_WORDS", "STEP_FAILED",
     "TESTS_NOT_RUN_WORDS",
     "claims_check", "finish_checks", "proof_check", "required_file_checks", "step_check", "workflow_check",
 ]

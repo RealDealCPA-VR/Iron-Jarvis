@@ -5,26 +5,35 @@ One row per check: when, what it belongs to (a saved chat, a chat turn, an
 agent run's session, a coding session, a workflow run and its step: whichever
 apply), the check's code, the file's NAME where it is about a file, the
 result (``passed`` | ``failed`` | ``look`` | ``not_checked``), a detail in
-plain words ("C7 on Summary holds #DIV/0!") and who checked (``rule``, or the
-checking model's name).
+plain words ("C7 on “Summary” holds #DIV/0!") and who checked (``rule``, or
+the checking model's name).
 
-FOUR OUTCOMES, and which one a check may use is fixed by what KIND of
-knowledge it is:
+FOUR OUTCOMES. Every phrase a person reads must be literally true by
+construction, the good ones too:
 
-* ``passed``: it was checked and it is so.
-* ``failed`` ("Problem"): ONLY what the file itself holds or is. It does not
-  open; a document kind is empty or has no text; a cell's SAVED value is an
-  error. Never anything Iron Jarvis inferred.
-* ``look`` ("Worth a look"): what Iron Jarvis worked out by its own
-  arithmetic or read out of prose, said as plain figures with no verdict: a
-  typed total that differs from the list above it, a formula with no saved
-  result that works out to an error (or that Excel may not know by that
-  name), a reply's stated page count that differs from the file's.
-* ``not_checked``: it could not be checked, with the reason.
+* ``passed``: Iron Jarvis did this, and it is so. The words say what Iron
+  Jarvis did ("opens": it opened the file with its own reader), never what
+  another program will show.
+* ``failed`` ("Problem") is an ALLOWLIST of facts (:data:`PROBLEM_CHECKS`),
+  not a default: a file of a kind Iron Jarvis really opens that is not a
+  valid file of that kind; a cell whose SAVED value is an error; a test
+  command that ran and failed; a required file that is not on disk.
+* ``look`` ("Worth a look"): everything Iron Jarvis inferred, read out of
+  prose or was told by a model, said with no verdict: a typed total that
+  differs from the list above it, a formula it works out to an error, a
+  document in which it found no text or that is empty, a reply that says a
+  file was saved that no step wrote, a judging model's or a reviewer's
+  failed check (never its words).
+* ``not_checked``: it could not be checked, with the reason. Where Iron
+  Jarvis cannot tell at all, there is no row.
 
-A check whose whole subject is inferred (:data:`INFERRED_CHECKS`: the totals
-and the page count) can never be stored, saved or shown as ``failed``: the
-record turns one into ``look`` (:func:`_clean`, :func:`line_for`).
+A row whose check is not on the allowlist can never be stored, read, shown
+or answered as ``failed``, whoever wrote it: the record turns it into
+``look`` at the write (:func:`_clean`) and at every read (:func:`_result`).
+
+NAMES A MODEL CHOSE (a file's, a folder's, a step's) are shown inside curly
+quotes and cut to a sane length (:func:`quoted`), so a name can never read
+as part of Iron Jarvis's own sentence.
 
 WHAT A ROW MAY HOLD. Names, counts, sizes and plain words. Never a file's
 content beyond the one cell or figure a finding names, and the detail is
@@ -46,12 +55,13 @@ the hop). Nothing here raises: a check's record is never worth a failed reply.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Iterable
 
@@ -92,10 +102,21 @@ WORKFLOW_STEP = "workflow_step"
 #: when the reply's record holds at least one of these.
 CONTENT_CHECKS = frozenset({FILE_OPENS, SHEET_ERRORS, SHEET_TOTALS, DOC_TEXT, PDF_PAGES})
 CHECKS = CONTENT_CHECKS | {CLAIMS, REQUIRED_FILE, TESTS, REVIEW, STEP_CHECK, WORKFLOW_STEP}
-#: The checks that say only what Iron Jarvis worked out itself (its own
-#: adding up) or read out of the reply's prose. One of these is NEVER
-#: ``failed``: a mismatch is ``look`` ("Worth a look"), whoever wrote the row.
-INFERRED_CHECKS = frozenset({SHEET_TOTALS, PDF_PAGES})
+#: THE ALLOWLIST. Only a row of one of these checks may be ``failed``
+#: ("Problem"): each holds a fact, never an inference, a reading of prose or
+#: a model's opinion.
+#:
+#: * ``file_opens``: a file of a kind Iron Jarvis really opens that is not a
+#:   valid file of that kind (not a package, a part missing, the wrong first
+#:   bytes, a PDF with no end);
+#: * ``sheet_no_error_cells``: a cell whose SAVED value is an error;
+#: * ``tests``: a test command that ran and failed;
+#: * ``required_file``: a required file that is not on disk.
+#:
+#: A ``failed`` row of ANY other check is said, stored and answered as
+#: ``look`` ("Worth a look"). The writers of the four keep to the facts
+#: above (:mod:`.content`, :mod:`.existing`).
+PROBLEM_CHECKS = frozenset({FILE_OPENS, SHEET_ERRORS, TESTS, REQUIRED_FILE})
 
 #: The words that open the line. They are the words a coding reply's line
 #: already uses (``hosted/proof.LINE_HEAD`` / ``NOT_CHECKED``); a test holds
@@ -155,6 +176,13 @@ class CheckRecord(SQLModel, table=True):
     detail: str = ""
     #: ``rule``, or the checking model's name.
     by: str = BY_RULE
+    #: A made file's own key (a digest of its whole path, :func:`path_key`;
+    #: never the path): a run's card matches a check to the file it lists by
+    #: this, never by a name two files may share. "" = not about a made file.
+    path_key: str = ""
+    #: The run these rows belong to keeps its words on this PC (a Local only
+    #: run): a chat that is not Local only never reads them.
+    kept_home: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,6 +197,20 @@ class Check:
     step: str = ""
     run_id: str = ""
     folder: str = ""
+    #: Where the file is, as a digest (:func:`path_key`). Not part of what a
+    #: check SAYS: two checks that say the same are equal whatever it is.
+    path_key: str = field(default="", compare=False)
+
+
+def path_key(path: Any) -> str:
+    """A made file's key in the record: a digest of its whole path as the
+    file system spells it (so two files of one name in two folders have two
+    keys). Never the path itself; "" for no path."""
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    spelled = os.path.normcase(os.path.normpath(os.path.abspath(text)))
+    return hashlib.sha256(spelled.encode("utf-8", "replace")).hexdigest()[:24]
 
 
 def file_name(path: Any) -> str:
@@ -178,14 +220,33 @@ def file_name(path: Any) -> str:
 
 
 FOLDER_MAX = 60
+#: A name is shown with at most this many characters (the rest is "…").
+SHOWN_NAME_MAX = 80
+QUOTE_OPEN, QUOTE_CLOSE = "“", "”"
+_QUOTE_RX = re.compile("[“”„‟\"«»]")
+
+
+def quoted(name: Any, cap: int = SHOWN_NAME_MAX) -> str:
+    """A name somebody else chose (a model named the file, the sheet, the
+    step), as Iron Jarvis shows it: inside curly quotes, cut to *cap*
+    characters, with any quote mark of its own turned into an apostrophe. A
+    file called "all totals verified and correct.md" then reads as a NAME,
+    never as part of Iron Jarvis's sentence. "" stays ""."""
+    text = _QUOTE_RX.sub("'", " ".join(seen_text(name).split()))
+    if not text:
+        return ""
+    if len(text) > cap:
+        text = text[:max(1, cap - 1)].rstrip() + "…"
+    return f"{QUOTE_OPEN}{text}{QUOTE_CLOSE}"
 
 
 def apart(name: Any, folder: Any) -> str:
     """Two made files with the same name in two folders, as they are SHOWN:
-    the folder's OWN name beside the file's ("summary.xlsx (in 2023)"). One
-    folder name, never a path. The record keeps the two in two fields
-    (``file``, ``folder``): this is only how a row is said."""
-    base, where = file_name(name), file_name(folder)[:FOLDER_MAX]
+    the folder's OWN name beside the file's (“summary.xlsx” (in “2023”)),
+    each a quoted name (:func:`quoted`). One folder name, never a path. The
+    record keeps the two in two fields (``file``, ``folder``): this is only
+    how a row is said."""
+    base, where = quoted(file_name(name)), quoted(file_name(folder)[:FOLDER_MAX])
     return f"{base} (in {where})" if where else base
 
 
@@ -267,9 +328,9 @@ def _clean(check: Check) -> "Check | None":
     if not code:
         return None
     result = check.result if check.result in RESULTS else NOT_CHECKED
-    if result == FAILED and code in INFERRED_CHECKS:
-        # What Iron Jarvis worked out itself is never a "Problem", whoever
-        # built the row: it is "Worth a look".
+    if result == FAILED and code not in PROBLEM_CHECKS:
+        # "Problem" is an allowlist of facts (PROBLEM_CHECKS). Anything else
+        # that did not pass is "Worth a look", whoever built the row.
         result = LOOK
     try:
         from ..detections.redact import mask
@@ -283,6 +344,7 @@ def _clean(check: Check) -> "Check | None":
         by=(" ".join(seen_text(check.by).split()) or BY_RULE)[:120],
         step=" ".join(seen_text(check.step).split())[:120], run_id=str(check.run_id or "")[:120],
         folder=str(storable_text(seen_text(file_name(check.folder))))[:FOLDER_MAX],
+        path_key=re.sub(r"[^0-9a-f]", "", str(check.path_key or ""))[:24],
     )
 
 
@@ -296,6 +358,7 @@ def write(
     run_id: str = "",
     clock: Any = time.time,
     replace_content: bool = False,
+    kept_home: bool = False,
 ) -> int:
     """Write *checks* for one owner (a chat turn, or a session). A row this
     owner already holds for the same check, file and step is replaced, so a
@@ -306,6 +369,10 @@ def write(
     when *checks* is empty. What the run's files say is said afresh each
     time: a finding about a file that was put right, removed, or is no
     longer one of the run's files does not stay behind.
+
+    *kept_home*: the rows belong to a run whose words stay on this PC (a
+    Local only run). They are marked, and every reader for a chat that is
+    not Local only leaves them out.
 
     Returns how many rows were written; never raises."""
     try:
@@ -344,7 +411,7 @@ def write(
                     created_at=now + timedelta(microseconds=i),
                     thread_id=tid, turn_id=turn, session_id=sid, run_id=c.run_id or rid,
                     step=c.step, check=c.check, file=c.file, folder=c.folder, result=c.result, detail=c.detail,
-                    by=c.by,
+                    by=c.by, path_key=c.path_key, kept_home=bool(kept_home),
                 ))
             db.commit()
         return len(rows)
@@ -373,6 +440,7 @@ def as_dict(row: CheckRecord) -> dict[str, Any]:
         "thread_id": row.thread_id, "turn_id": row.turn_id, "session_id": row.session_id,
         "run_id": row.run_id, "step": row.step, "check": row.check, "file": row.file, "folder": row.folder,
         "result": row.result, "detail": row.detail, "by": row.by,
+        "path_key": str(row.path_key or ""), "kept_home": bool(row.kept_home),
     }
 
 
@@ -468,13 +536,14 @@ def _prune_daily(engine: Any, clock: Any) -> None:
 # --------------------------------------------------------------------------- #
 # The words: built from rows alone
 # --------------------------------------------------------------------------- #
+#: What ONE made file is called, for the kinds Iron Jarvis really opens (the
+#: only kinds a content check writes a row for). Each is singular: the words
+#: after it are "opens", "has text". Every other kind is "the file".
 _KIND_WORDS = {
-    ".xlsx": "the spreadsheet", ".xlsm": "the spreadsheet", ".xls": "the spreadsheet", ".ods": "the spreadsheet",
+    ".xlsx": "the spreadsheet", ".xlsm": "the spreadsheet",
     ".csv": "the table", ".tsv": "the table",
-    ".docx": "the document", ".doc": "the document", ".odt": "the document", ".rtf": "the document",
-    ".md": "the document", ".markdown": "the document", ".txt": "the document",
-    ".pdf": "the PDF", ".pptx": "the slides",
-    ".png": "the picture", ".jpg": "the picture", ".jpeg": "the picture", ".gif": "the picture",
+    ".docx": "the document", ".md": "the document", ".markdown": "the document", ".txt": "the document",
+    ".pdf": "the PDF",
 }
 #: What a row that is not about a file is called on the line and in the list.
 _SUBJECTS = {
@@ -490,11 +559,12 @@ def kind_words(name: str) -> str:
 
 
 def _result(row: dict[str, Any]) -> str:
-    """A row's result as it is SAID: a check of what Iron Jarvis worked out
-    itself (:data:`INFERRED_CHECKS`) is never a "Problem", even from a row
-    written before the rule or by another writer."""
+    """A row's result as it is SAID: only a check on the allowlist
+    (:data:`PROBLEM_CHECKS`) is ever a "Problem", even from a row written
+    before the rule or by another writer; any other ``failed`` is "Worth a
+    look"."""
     result = row.get("result")
-    return LOOK if result == FAILED and row.get("check") in INFERRED_CHECKS else str(result or "")
+    return LOOK if result == FAILED and row.get("check") not in PROBLEM_CHECKS else str(result or "")
 
 
 _MODEL_FAMILY = r"(opus|sonnet|haiku)"
@@ -541,9 +611,10 @@ def _subject(row: dict[str, Any], one_file: bool) -> str:
             return "the other files"
         return kind_words(name) if one_file else shown_name(row)
     if check == REQUIRED_FILE:
-        return f"required file {name}" if name else "a required file"
+        return f"required file {quoted(name)}" if name else "a required file"
     if check in (STEP_CHECK, WORKFLOW_STEP):
-        return f"step {step}" if step else "a step"
+        # A plan step is a number; a workflow step's name is somebody's words.
+        return f"step {step if step.isdigit() else quoted(step)}" if step else "a step"
     return _SUBJECTS.get(check, "the work")
 
 
@@ -586,8 +657,7 @@ def line_for(rows: Iterable[dict[str, Any]]) -> "tuple[str, str]":
                 and str(r.get("folder") or "") == folder and _result(r) == PASSED and r.get("detail")]
         if said:
             passed.append(f"{kind_words(name) if one_file else apart(name, folder)} {', '.join(said)}")
-    problems = [f"{_subject(r, one_file)}: {r.get('detail') or 'it did not pass'}"
-                for r in rows if _result(r) == FAILED]
+    problems = [_about(r, one_file, "it did not pass") for r in rows if _result(r) == FAILED]
     looks = [_look_words(r, one_file) for r in rows if _result(r) == LOOK]
     unchecked = [f"{_subject(r, one_file)} ({r.get('detail') or 'no reason was kept'})"
                  for r in rows if _result(r) == NOT_CHECKED]
@@ -623,11 +693,17 @@ def line_for(rows: Iterable[dict[str, Any]]) -> "tuple[str, str]":
     return line, ("warn" if problems or looks else "quiet")
 
 
+def _about(row: dict[str, Any], one_file: bool, default: str) -> str:
+    """A problem as the line says it: what it is about, then the finding."""
+    return f"{_subject(row, one_file)}: {row.get('detail') or default}"
+
+
 def _look_words(row: dict[str, Any], one_file: bool) -> str:
-    """One "worth a look" finding as the line says it: the figures, no
-    verdict. A finding about the file as a whole ("it has 12 pages and the
-    reply says 40") names the file; one about a cell stands as it is under
-    the one file, and after the file's name among several."""
+    """One "worth a look" finding as the line says it: what was found, no
+    verdict. A finding about the file as a whole ("it is empty") names the
+    file; one about a cell, and one that names Iron Jarvis ("Iron Jarvis
+    found no text in it"), stands as it is under the one file, and after the
+    file's name among several."""
     detail = str(row.get("detail") or "it is not what was worked out")
     if row.get("check") not in CONTENT_CHECKS or not row.get("file"):
         return f"{_subject(row, one_file)}: {detail}"
@@ -695,9 +771,12 @@ def clean_checked(raw: Any) -> "dict[str, Any] | None":
             label = _text(item.get("label"), 240)
             if not label:
                 continue
+            # The result's WORD is this module's, read from the result: a
+            # payload that says "look" under the word "Checked" is not kept
+            # as it came (the page's decoder does the same).
             checks.append({
                 "label": label, "said": _text(item.get("said"), 400), "result": item["result"],
-                "result_words": _text(item.get("result_words"), 40), "who": _text(item.get("who"), 140),
+                "result_words": _RESULT_WORDS[item["result"]], "who": _text(item.get("who"), 140),
             })
             if len(checks) >= MAX_LISTED:
                 break
@@ -722,7 +801,7 @@ __all__ = [
     "BY_RULE", "CHECKS", "CLAIMS", "CONTENT_CHECKS", "Check", "CheckRecord", "DOC_TEXT", "FAILED", "FILE_OPENS",
     "KEEP_DAYS", "LINE_HEAD", "LINE_MAX", "LINE_NOT_CHECKED", "MAX_LISTED", "MAX_READ", "MAX_ROWS_PER_WRITE",
     "NOT_CHECKED", "PASSED", "PDF_PAGES", "REQUIRED_FILE", "RESULTS", "REVIEW", "SHEET_ERRORS", "SHEET_TOTALS",
-    "FOLDER_MAX", "INFERRED_CHECKS", "LINE_LOOK", "LOOK", "seen_text", "shown_name",
+    "FOLDER_MAX", "LINE_LOOK", "LOOK", "PROBLEM_CHECKS", "path_key", "quoted", "seen_text", "shown_name",
     "STEP_CHECK", "TESTS", "WORKFLOW_STEP", "apart", "as_dict", "clean_checked", "drop_thread", "ensure_table",
     "file_name", "for_session", "for_thread", "for_turn", "friendly_model", "has_content", "home_turn",
     "kind_words", "line_for",

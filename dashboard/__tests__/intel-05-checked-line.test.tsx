@@ -142,6 +142,7 @@ import {
   checkedForSave,
   decodeChecked,
   isWarnResult,
+  RESULT_WORDS,
   seenText,
 } from "@/lib/checked";
 import FIXTURE from "./fixtures/intel-05-checked.json";
@@ -156,6 +157,10 @@ const LOOK = FIXTURE.look;
 const BOTH = FIXTURE.both;
 /** The same spoiled payload the daemon's own cleaning is tested on, and what it must become. */
 const UNSEEN = FIXTURE.unseen;
+/** A payload whose WORD beside each check disagrees with its result, and what the daemon makes of it. */
+const CROSSED = FIXTURE.crossed;
+/** A name somebody else chose, as the daemon shows it: inside curly quotes. */
+const Q = (name: string) => "\u201c" + name + "\u201d";
 
 const CHAT_GETS = () => ({
   "/models": { models: [] },
@@ -238,8 +243,16 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
     const mark = decodeChecked(LOOK)!;
     expect(mark.tone).toBe("warn");
     expect(mark.checks[0]).toEqual({
-      label: "summary.xlsx",
-      said: "B4 on Summary says 650 and the cells above it add up to 600",
+      label: Q("summary.xlsx"),
+      said: `B4 on ${Q("Summary")} says 650 and the cells above it add up to 600`,
+      result: "look",
+      resultWords: "Worth a look",
+      who: "by rule",
+    });
+    // What was read out of the reply's prose is worth a look too, never a problem.
+    expect(mark.checks[1]).toEqual({
+      label: "The reply",
+      said: "it says a file was saved that no step wrote",
       result: "look",
       resultWords: "Worth a look",
       who: "by rule",
@@ -249,6 +262,27 @@ describe("the daemon's `checked`, decoded by whitelist", () => {
     expect([isWarnResult("failed"), isWarnResult("look"), isWarnResult("not_checked"), isWarnResult("passed")]).toEqual(
       [true, true, false, false],
     );
+  });
+
+  it("reads the word beside a check from its result, never from the payload (the daemon does the same)", () => {
+    // `result: "look"` under the word "Problem" (or "Checked") must come out "Worth a look" on both sides.
+    const raw = CROSSED.raw.checks.map((c) => [c.result, c.result_words]);
+    expect(raw).toEqual([
+      ["look", "Problem"], ["look", "Checked"], ["failed", "Checked"], ["not_checked", "Checked"], ["passed", "Problem"],
+    ]);
+    const mark = decodeChecked(CROSSED.raw)!;
+    expect(mark.checks.map((c) => c.resultWords)).toEqual(["Worth a look", "Worth a look", "Problem", "Not checked", "Checked"]);
+    expect(mark.checks.map((c) => c.resultWords)).toEqual(CROSSED.clean.checks.map((c) => c.result_words));
+    // The four words are the daemon's own four.
+    expect(RESULT_WORDS).toEqual(FIXTURE.result_words);
+    // A saved reply keeps the same: what the page saves decodes back to the result's own word.
+    const saved = decodeChecked(checkedForSave(mark))!;
+    expect(saved.checks.map((c) => c.resultWords)).toEqual(mark.checks.map((c) => c.resultWords));
+    render(<CheckedLine mark={mark} />);
+    fireEvent.click(screen.getByTestId("checked-line-press"));
+    const rows = screen.getAllByTestId("checked-item");
+    expect(rows[0].textContent).toBe("a.xlsx: B4 says 1 and the cells above it add up to 2 (Worth a look, by rule)");
+    expect(rows.map((r) => r.textContent).filter((t) => t!.includes("(Problem,"))).toHaveLength(1);
   });
 
   it("strips the characters nobody sees from every text, as the daemon does (the same inputs)", () => {
@@ -310,12 +344,13 @@ describe("the line", () => {
     const rows = within(list).getAllByTestId("checked-item");
     // The plan's do-nothing check: three checks of the file (and the reply's own).
     expect(rows.map((r) => r.textContent)).toEqual([
-      "summary.xlsx: opens (Checked, by rule)",
-      "summary.xlsx: no error cells (Checked, by rule)",
-      "summary.xlsx: 3 totals add up (Checked, by rule)",
-      "The reply: what it says matches what it did (Checked, by rule)",
+      `${Q("summary.xlsx")}: opens (Checked, by rule)`,
+      `${Q("summary.xlsx")}: no error cells (Checked, by rule)`,
+      `${Q("summary.xlsx")}: 3 totals add up (Checked, by rule)`,
+      "The reply: the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record " +
+        "(Checked, by rule)",
     ]);
-    expect(rows.filter((r) => r.textContent!.startsWith("summary.xlsx"))).toHaveLength(3);
+    expect(rows.filter((r) => r.textContent!.startsWith(Q("summary.xlsx")))).toHaveLength(3);
     fireEvent.click(press);
     expect(screen.queryByTestId("checked-list")).toBeNull();
     expect(press.getAttribute("aria-expanded")).toBe("false");
@@ -326,11 +361,11 @@ describe("the line", () => {
     const line = screen.getByTestId("checked-line");
     expect(line.getAttribute("data-tone")).toBe("warn");
     expect(line.className).toContain("text-tone-warn");
-    expect(screen.getByTestId("checked-line-words").textContent).toContain("C7 on Summary holds #DIV/0!");
+    expect(screen.getByTestId("checked-line-words").textContent).toContain(`C7 on ${Q("Summary")} holds #DIV/0!`);
     fireEvent.click(screen.getByTestId("checked-line-press"));
     const rows = screen.getAllByTestId("checked-item");
     expect(rows[0].getAttribute("data-result")).toBe("failed");
-    expect(rows[0].textContent).toBe("summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)");
+    expect(rows[0].textContent).toBe(`${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by rule)`);
     expect(rows[1].getAttribute("data-result")).toBe("not_checked");
     expect(rows.at(-1)!.textContent).toBe("Step 2: it passed its check (Checked, by Claude Sonnet 4.5)");
   });
@@ -342,28 +377,34 @@ describe("the line", () => {
     expect(line.className).toContain("text-tone-warn");
     expect(screen.getByTestId("checked-line-words").textContent).toBe(
       "Checked by Iron Jarvis: the spreadsheet opens, no error cells. " +
-        "Worth a look: B4 on Summary says 650 and the cells above it add up to 600.",
+        `Worth a look: B4 on ${Q("Summary")} says 650 and the cells above it add up to 600; ` +
+        "the reply: it says a file was saved that no step wrote.",
     );
     expect(screen.getByTestId("checked-line-words").textContent).not.toContain("Problem");
     fireEvent.click(screen.getByTestId("checked-line-press"));
     let rows = screen.getAllByTestId("checked-item");
     expect(rows[0].getAttribute("data-result")).toBe("look");
     expect(rows[0].textContent).toBe(
-      "summary.xlsx: B4 on Summary says 650 and the cells above it add up to 600 (Worth a look, by rule)",
+      `${Q("summary.xlsx")}: B4 on ${Q("Summary")} says 650 and the cells above it add up to 600 (Worth a look, by rule)`,
     );
     expect(rows[0].querySelector("span span")!.className).toContain("text-tone-warn");
     expect(rows[0].querySelector("svg")!.getAttribute("class")).toContain("text-tone-warn");
     expect(rows.map((r) => r.textContent).join(" ")).not.toContain("Problem");
-    // What passed beside it stays quiet.
-    expect(rows[1].getAttribute("data-result")).toBe("passed");
-    expect(rows[1].querySelector("span span")!.className).not.toContain("text-tone-warn");
+    // A reply that says a file was saved that no step wrote: worth a look as well, in the same colour.
+    expect(rows[1].getAttribute("data-result")).toBe("look");
+    expect(rows[1].textContent).toBe("The reply: it says a file was saved that no step wrote (Worth a look, by rule)");
+    // What passed beside them stays quiet.
+    expect(rows[2].getAttribute("data-result")).toBe("passed");
+    expect(rows[2].querySelector("span span")!.className).not.toContain("text-tone-warn");
     unmount();
     render(<CheckedLine mark={decodeChecked(BOTH)} />);
     fireEvent.click(screen.getByTestId("checked-line-press"));
     rows = screen.getAllByTestId("checked-item");
     expect(rows.map((r) => r.getAttribute("data-result"))).toEqual(["failed", "look", "not_checked", "passed"]);
-    expect(rows[0].textContent).toBe("summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)");
-    expect(rows[1].textContent).toBe("summary.xlsx: D3 on Summary works out to #DIV/0! (Worth a look, by rule)");
+    expect(rows[0].textContent).toBe(`${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by rule)`);
+    expect(rows[1].textContent).toBe(
+      `${Q("summary.xlsx")}: D3 on ${Q("Summary")} works out to an error (Worth a look, by rule)`,
+    );
     expect(rows[2].querySelector("span span")!.className).not.toContain("text-tone-warn");
   });
 
@@ -526,7 +567,7 @@ describe("a task's result", () => {
     expect(screen.getByTestId("checked-line-words").textContent).toBe(BAD.line);
     fireEvent.click(screen.getByTestId("checked-line-press"));
     expect(screen.getAllByTestId("checked-item")[0].textContent).toBe(
-      "summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)",
+      `${Q("summary.xlsx")}: C7 on ${Q("Summary")} holds #DIV/0! (Problem, by rule)`,
     );
     unmount();
     // The quiet form under a run's settled row draws it too.

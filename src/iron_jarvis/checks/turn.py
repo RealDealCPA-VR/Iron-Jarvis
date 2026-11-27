@@ -45,6 +45,8 @@ raises.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import logging
 import os
 import time
@@ -77,6 +79,8 @@ async def checked_for_turn(
     clock: Callable[[], float] = time.monotonic,
     cap_s: "float | None" = None,
     record_wait_s: "float | None" = None,
+    wait: "bool | None" = None,
+    spawn: "Callable[[Callable[[], Any]], Any] | None" = None,
 ) -> "dict[str, Any] | None":
     """One chat reply's checks, written, and its line read back from the
     record (``record.payload``: ``{line, tone, checks, more, more_words}``),
@@ -89,10 +93,29 @@ async def checked_for_turn(
     own words, read only for a page count it states of a PDF it made. A
     coding session (*coding*) has its own line (the finish check), and a
     reply that hands off to an agent run (*escalate*) leaves the checking to
-    that run: neither gets a line here, and a hand-off writes no row."""
+    that run: neither gets a line here, and a hand-off writes no row.
+
+    *wait* False: the caller draws no line. The reply does not wait for its
+    checks AT ALL: the same rows are written on a worker thread
+    (:func:`_checked_later`; *spawn* starts it, for a test) and None comes
+    back at once. "What did you check?" still finds them. Left out (None),
+    the lanes tell by the one marker they already set: a reply that answers
+    a PHONE channel (:func:`draws_no_line`) does not wait; every other reply
+    does."""
     try:
         engine = getattr(platform, "engine", None)
         if engine is None:
+            return None
+        if wait is False or (wait is None and draws_no_line()):
+            turn = str(turn_id or "").strip() or f"reply-{uuid.uuid4().hex[:16]}"
+            docs = [] if coding or escalate else [str(p) for p in (made_docs or ()) if p]
+            work = functools.partial(_checked_later, engine, turn, str(thread_id or "").strip(), docs, until,
+                                     deliverables, bool(escalate), clock)
+            if spawn is not None:
+                spawn(work)
+            else:
+                # The caller's context goes with it (the turn's own chat is read from it).
+                asyncio.get_running_loop().run_in_executor(None, contextvars.copy_context().run, work)
             return None
         # A reply with no id of its own (the phone, an API caller) still
         # needs one for its rows to be read back as ITS rows.
@@ -153,6 +176,46 @@ async def _checked(engine: Any, turn: str, thread_id: str, docs: "list[str]", re
     return record.payload(kept) if record.has_content(kept) else None
 
 
+def draws_no_line() -> bool:
+    """Is the reply in flight for a caller that never draws the line: one
+    that answers a phone channel (``providers/failure_words.phone_surface``,
+    armed by ``comm/inbound`` and by the desktop's reply into a phone
+    thread)? False in any doubt: the reply then waits, as the page's does."""
+    try:
+        from ..providers.failure_words import SURFACE_PHONE, current_surface
+
+        return current_surface() == SURFACE_PHONE
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _checked_later(engine: Any, turn: str, thread_id: str, docs: "list[str]", until: Any, deliverables: Any,
+                   escalate: bool, clock: Callable[[], float]) -> int:
+    """BLOCKING. A reply's checks for a caller that draws no line: the same
+    rows :func:`_checked` writes, with nobody waiting on them (the files get
+    a finished run's longer look). Returns the rows written; never raises."""
+    try:
+        rows: list[record.Check] = []
+        if docs:
+            rows += content.check_files(docs, clock=clock, deadline_s=content.RUN_DEADLINE_S)
+        if not escalate:
+            rows += existing.required_file_checks(getattr(deliverables, "states", None) or ())
+            claims = existing.claims_check(until)
+            if claims is not None:
+                rows.append(claims)
+        if not rows:
+            return 0
+        written = record.write(engine, rows, thread_id=thread_id, turn_id=turn)
+        if not thread_id:
+            chat = _chat_of(turn)
+            if chat:
+                record.home_turn(engine, turn, chat)
+        return written
+    except Exception:  # noqa: BLE001 — a record is never worth anything of the reply's
+        log.debug("a reply's checks could not be recorded", exc_info=True)
+        return 0
+
+
 def _chat_of(turn_id: str) -> str:
     """The saved chat a reply with no chat in its request belongs to: the
     one the page linked this turn to (either lane; the POST lane has no
@@ -202,39 +265,96 @@ async def note_finish(platform: Any, finish: Any, *, turn_id: str = "", thread_i
 
 
 def settle_run(engine: Any, session_id: str, documents: "Iterable[Any] | None", *, thread_id: str = "",
-               reply: str = "", clock: Callable[[], float] = time.monotonic) -> int:
+               reply: str = "", clock: Callable[[], float] = time.monotonic, kept_home: bool = False,
+               chat_local_only: "Callable[[Any, str], bool] | None" = None) -> int:
     """BLOCKING. A finished run's made files (read from its undo journal by
     ``outcome.session_result``: ``documents``), checked by rule and written
     under the run's session, IN PLACE OF the checks of its files an earlier
     settle wrote (``record.write(replace_content=True)``): a run that
     carried on and put a file right, removed it or made another says what
-    its files hold NOW, with nothing left over. Returns the rows written;
-    never raises."""
+    its files hold NOW, with nothing left over.
+
+    *kept_home*: the run's words stay on this PC (a Local only run, or one
+    whose report keeps its words home). Its rows hold file names, sheet
+    names and figures, so they are marked, and they are written under the
+    chat (*thread_id*) ONLY when that chat is Local only itself, asked NOW
+    (*chat_local_only*, default ``providers/egress.thread_local_only``; a
+    read that fails is "no": the rows get no chat). Returns the rows
+    written; never raises."""
     try:
         docs = [str(p) for p in (documents or ()) if p]
         if not str(session_id or ""):
             return 0
         rows = content.check_files(docs, str(reply or ""), clock=clock,
                                    deadline_s=content.RUN_DEADLINE_S) if docs else []
-        return record.write(engine, rows, session_id=str(session_id), thread_id=str(thread_id or ""),
-                            replace_content=True)
+        chat = str(thread_id or "")
+        if kept_home and chat and not _is_local_only(engine, chat, chat_local_only):
+            chat = ""       # a chat that is not Local only never owns these rows
+        return record.write(engine, rows, session_id=str(session_id), thread_id=chat,
+                            replace_content=True, kept_home=bool(kept_home))
     except Exception:  # noqa: BLE001 — a record is never worth a failed finalize
         log.debug("a run's made files could not be checked", exc_info=True)
         return 0
 
 
+def _is_local_only(engine: Any, thread_id: str, ask: "Callable[[Any, str], bool] | None" = None) -> bool:
+    """Is this saved chat Local only NOW? False in any doubt (the words then
+    stay home)."""
+    try:
+        if ask is None:
+            from ..providers.egress import thread_local_only as ask
+        return bool(ask(engine, thread_id))
+    except Exception:  # noqa: BLE001
+        log.debug("a chat's Local only setting could not be read", exc_info=True)
+        return False
+
+
+def run_owner(engine: Any, session: Any) -> "dict[str, Any]":
+    """BLOCKING. Under which chat a RUN's rows are written, and whether they
+    are marked as kept home: ``{thread_id, kept_home}``, for EVERY writer of
+    a run's rows (its files' checks when it is settled, each step's check,
+    the check-again verdict). A run whose words stay on this PC
+    (``agents/chat_delivery.keeps_words_home``: a Local only run, or one
+    whose report keeps its words home) writes under its chat ONLY when that
+    chat is Local only itself, asked now. In any doubt: no chat, kept home."""
+    try:
+        from ..agents import chat_delivery
+
+        chat = str(chat_delivery.chat_thread_of(session) or "")
+        home = bool(chat_delivery.keeps_words_home(session))
+    except Exception:  # noqa: BLE001
+        log.debug("a run's chat could not be read", exc_info=True)
+        return {"thread_id": "", "kept_home": True}
+    if home and chat and not _is_local_only(engine, chat):
+        chat = ""
+    return {"thread_id": chat, "kept_home": home}
+
+
+def home_rows(rows: "list[dict[str, Any]]", local_only: bool) -> "list[dict[str, Any]]":
+    """*rows* as a chat may read them: the rows of a run that keeps its
+    words on this PC are left out unless the chat is Local only itself."""
+    return rows if local_only else [r for r in rows if not r.get("kept_home")]
+
+
 def _row_key(row: "dict[str, Any]") -> "tuple[str, str]":
+    """One made file in the record: by its path's key where the row has one
+    (every row a content check writes), else by its name and its folder's."""
+    key = str(row.get("path_key") or "")
+    if key:
+        return key, ""
     return str(row.get("file") or "").lower(), str(row.get("folder") or "").lower()
 
 
 def _match(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None") -> "tuple[dict[tuple[str, str], str], list[str]]":
-    """Which checked file is which listed document. ``({(file, folder) of a
-    checked file: its document's path}, the documents no check covers)``.
-    A document is matched by its PATH's own name and its folder's name: a
-    checked file told apart by its folder matches only the document in that
-    folder; one that was not told apart matches ONE document of its name, so
-    a second file of that name (a helper's, in another folder) is not read
-    as covered."""
+    """Which checked file is which listed document. ``({the key of a checked
+    file: its document's path}, the documents no check covers)``. A document
+    is matched BY ITS PATH (``record.path_key``: a digest of the whole path,
+    the same one the check wrote): never by a name two files may share, and
+    never by whichever of two same-named files the card lists first. A
+    worker's ``summary.xlsx`` is not covered by the check of the lead's, and
+    the check of a file that is gone never shows off another file. (A row
+    with no path key, from a writer that had none, matches by the file's
+    name and its folder's name, one document a row.)"""
     keys = list(dict.fromkeys(_row_key(r) for r in rows
                               if r.get("check") in record.CONTENT_CHECKS and r.get("file")))
     free = set(keys)
@@ -243,9 +363,7 @@ def _match(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None") -> "
     for doc in dict.fromkeys(str(d) for d in (documents or ()) if d):
         name = record.file_name(doc).lower()
         parent = record.file_name(doc.replace("\\", "/").rstrip("/").rpartition("/")[0]).lower()
-        pick = next((k for k in ((name, parent), (name, "")) if k in free), None)
-        if pick is None:
-            pick = next((k for k in keys if k in free and k[0] == name and k[1].startswith("another folder")), None)
+        pick = next((k for k in ((record.path_key(doc), ""), (name, parent), (name, "")) if k in free), None)
         if pick is None:
             missing.append(doc)
             continue
@@ -270,11 +388,13 @@ def not_covered(rows: "list[dict[str, Any]]", documents: "Iterable[Any] | None")
     the record's rows and the card's own list (:func:`_match`: by the
     document's path, never by a bare name alone): it is not stored."""
     _took, missing = _match(rows, documents)
-    names = list(dict.fromkeys(record.file_name(d) for d in missing))
+    # Only the kinds Iron Jarvis opens: a picture or a slide deck on the card
+    # is checked by nothing, and nothing is said about it.
+    names = list(dict.fromkeys(record.file_name(d) for d in missing if content.opened_kind(d)))
     if not names:
         return None
     n = len(names)
-    shown = ", ".join(names[:record.MAX_LINE_FILES])
+    shown = ", ".join(record.quoted(x) for x in names[:record.MAX_LINE_FILES])
     rest = n - min(n, record.MAX_LINE_FILES)
     return {
         "check": record.FILE_OPENS, "file": "", "folder": "", "result": record.NOT_CHECKED, "by": record.BY_RULE,
@@ -301,6 +421,8 @@ def run_payload(engine: Any, session_id: str, documents: "Iterable[Any] | None" 
       ONCE and by name (:func:`not_covered`; the cap's own "2 more files"
       row gives way to it)."""
     try:
+        if documents is not None and not [d for d in documents if d]:
+            return None     # a card that lists NO file has no file's line
         rows = record.for_session(engine, session_id)
         docs = [str(d) for d in (documents or ()) if d]
         listed = bool(docs)

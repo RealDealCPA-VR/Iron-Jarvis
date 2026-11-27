@@ -128,26 +128,31 @@ def test_a_settle_that_replaces_takes_every_earlier_check_of_a_file_with_it(plat
     assert by_run() == [("wf_1", "next.md"), ("wf_2", "two.md")]
 
 
-@pytest.mark.parametrize("check", sorted(R.INFERRED_CHECKS))
-def test_what_iron_jarvis_worked_out_itself_can_never_be_stored_or_shown_as_a_problem(platform, check):
-    """The totals (its own adding up) and the page count (read out of the
-    reply's prose) are never ``failed``, whoever builds the row: the record
-    stores one as ``look``, and the line and the list say one as "Worth a
-    look" even from a row that got in another way."""
-    assert R.INFERRED_CHECKS == {R.SHEET_TOTALS, R.PDF_PAGES}
-    R.write(platform.engine, [Check(check, R.FAILED, "it has 12 pages and the reply says 40", file="report.pdf")],
-            turn_id=f"t_{check}")
-    (row,) = R.for_turn(platform.engine, f"t_{check}")
-    assert row["result"] == R.LOOK
-    old = _row(check, R.FAILED, "it has 12 pages and the reply says 40", "report.pdf")     # not through the writer
-    line, tone = R.line_for([old])
-    assert line == "Worth a look: report.pdf has 12 pages and the reply says 40." and tone == "warn"
-    assert "Problem" not in line and "problem" not in line
-    shown = R.payload([old])["checks"][0]
-    assert (shown["result"], shown["result_words"]) == ("look", "Worth a look")
-    # What the file itself holds may be a problem.
-    assert R._clean(Check(R.SHEET_ERRORS, R.FAILED, "B1 holds #DIV/0!", file="a.xlsx")).result == R.FAILED
-    assert R._clean(Check(R.FILE_OPENS, R.FAILED, "it is empty", file="a.xlsx")).result == R.FAILED
+def test_problem_is_an_allowlist_of_facts_and_every_other_check_that_did_not_pass_is_worth_a_look(platform):
+    """THE BLANKET. "Problem" is not a default: only a row of a check on the
+    allowlist may be ``failed``. A ``failed`` row of ANY other check code the
+    package can write, whoever built it, is stored, read, shown and listed
+    as "Worth a look"."""
+    assert R.PROBLEM_CHECKS == {R.FILE_OPENS, R.SHEET_ERRORS, R.TESTS, R.REQUIRED_FILE}
+    assert R.PROBLEM_CHECKS < R.CHECKS and len(R.CHECKS) == 11
+    for check in sorted(R.CHECKS | {"a_check_nobody_knows"}):
+        may = check in R.PROBLEM_CHECKS
+        stored = R._clean(Check(check, R.FAILED, "it did not pass", file="a.xlsx", step="2"))
+        assert stored.result == (R.FAILED if may else R.LOOK), check
+        R.write(platform.engine, [Check(check, R.FAILED, "it did not pass", file="a.xlsx", step="2")],
+                turn_id=f"t_{check}")
+        (row,) = R.for_turn(platform.engine, f"t_{check}")
+        assert row["result"] == (R.FAILED if may else R.LOOK), check
+        old = _row(check, R.FAILED, "it did not pass", "a.xlsx", step="2")     # a row that got in another way
+        line, tone = R.line_for([old])
+        assert tone == "warn"
+        assert ("roblem" in line) is may and ("Worth a look" in line) is (not may), (check, line)
+        shown = R.payload([old])["checks"][0]
+        assert (shown["result"], shown["result_words"]) == (("failed", "Problem") if may else ("look", "Worth a look"))
+    # Every other result is kept as it is, for every check.
+    for check in sorted(R.CHECKS):
+        for result in (R.PASSED, R.LOOK, R.NOT_CHECKED):
+            assert R._clean(Check(check, result, "x")).result == result
 
 
 def test_a_row_holds_a_name_a_masked_clipped_detail_and_a_known_result(platform, tmp_path):
@@ -265,10 +270,10 @@ def test_the_line_for_one_file_names_its_kind_and_for_several_their_names():
         "Checked by Iron Jarvis: the spreadsheet opens, no error cells, 3 totals add up.", "quiet")
     two = one + [_row(R.FILE_OPENS, R.PASSED, "opens", "notes.docx"), _row(R.DOC_TEXT, R.PASSED, "has text", "notes.docx")]
     assert R.line_for(two)[0] == (
-        "Checked by Iron Jarvis: summary.xlsx opens, no error cells, 3 totals add up; notes.docx opens, has text.")
+        "Checked by Iron Jarvis: “summary.xlsx” opens, no error cells, 3 totals add up; “notes.docx” opens, has text.")
     many = [_row(R.FILE_OPENS, R.PASSED, "opens", f"f{i}.txt") for i in range(5)]
     assert R.line_for(many)[0] == (
-        "Checked by Iron Jarvis: f0.txt opens; f1.txt opens; f2.txt opens; and 2 more files.")
+        "Checked by Iron Jarvis: “f0.txt” opens; “f1.txt” opens; “f2.txt” opens; and 2 more files.")
     assert R.line_for([]) == ("", "quiet")
 
 
@@ -278,17 +283,20 @@ def test_a_failed_check_is_said_in_the_warn_tone_and_not_checked_says_why():
         _row(R.SHEET_ERRORS, R.FAILED, "C7 on Summary holds #DIV/0!", "summary.xlsx"),
         _row(R.SHEET_TOTALS, R.NOT_CHECKED, "1 total could not be worked out by rule: D9 on Summary is not a plain sum",
              "summary.xlsx"),
-        _row(R.CLAIMS, R.FAILED, "it says a file was saved that no step wrote"),
+        _row(R.CLAIMS, R.FAILED, "it says a file was saved that no step wrote"),    # an old row: said as a look
     ]
     line, tone = R.line_for(rows)
     assert tone == "warn"
+    # What the file holds is a problem; what was read out of the reply's prose is worth a look.
     assert line == (
         "Checked by Iron Jarvis: the spreadsheet opens. "
-        "Problem in the spreadsheet: C7 on Summary holds #DIV/0!; the reply: it says a file was saved that no step wrote. "
+        "Problem in the spreadsheet: C7 on Summary holds #DIV/0!. "
+        "Worth a look: the reply: it says a file was saved that no step wrote. "
         "Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on Summary is not a plain sum)."
     )
-    only_problem = [_row(R.FILE_OPENS, R.FAILED, "it is empty", "summary.xlsx")]
-    assert R.line_for(only_problem) == ("Checked by Iron Jarvis: a problem in the spreadsheet: it is empty.", "warn")
+    only_problem = [_row(R.FILE_OPENS, R.FAILED, "it does not open: it is not a real Office file", "summary.xlsx")]
+    assert R.line_for(only_problem) == (
+        "Checked by Iron Jarvis: a problem in the spreadsheet: it does not open: it is not a real Office file.", "warn")
     only_unchecked = [_row(R.FILE_OPENS, R.NOT_CHECKED, "the check ran out of time", "a.pdf")]
     assert R.line_for(only_unchecked) == ("Not checked: the PDF (the check ran out of time).", "quiet")
 
@@ -326,13 +334,30 @@ def test_worth_a_look_has_its_own_words_its_own_place_and_the_warning_colour():
     assert R.payload(alone)["tone"] == "warn" and R.payload(alone[:1])["tone"] == "quiet"
     # Among several files a finding about a cell is said after its file's name; one about the file names it.
     several = alone + [_row(R.FILE_OPENS, R.PASSED, "opens", "report.pdf"),
-                       _row(R.PDF_PAGES, R.LOOK, "it has 12 pages and the reply says 40", "report.pdf"),
+                       _row(R.DOC_TEXT, R.LOOK, "it is empty", "notes.txt"),
                        _row(R.SHEET_TOTALS, R.LOOK, "B9 says 3 and the cells above it add up to 2", "s.xlsx", folder="2024")]
     assert R.line_for(several)[0] == (
-        "Checked by Iron Jarvis: summary.xlsx opens; report.pdf opens. "
-        "Worth a look: summary.xlsx: B4 says 650 and the cells above it add up to 600; "
-        "report.pdf has 12 pages and the reply says 40; s.xlsx (in 2024): B9 says 3 and the cells above it add up to 2."
+        "Checked by Iron Jarvis: “summary.xlsx” opens; “report.pdf” opens. "
+        "Worth a look: “summary.xlsx”: B4 says 650 and the cells above it add up to 600; "
+        "“notes.txt” is empty; “s.xlsx” (in “2024”): B9 says 3 and the cells above it add up to 2."
     )
+    # An empty document, and one with no text found, under the one file and among several.
+    empty = [_row(R.DOC_TEXT, R.LOOK, "it is empty", "notes.txt")]
+    assert R.line_for(empty) == ("Worth a look: “notes.txt” is empty.", "warn")
+    blank = [_row(R.FILE_OPENS, R.PASSED, "opens", "notes.md"),
+             _row(R.DOC_TEXT, R.LOOK, "Iron Jarvis found no text in it", "notes.md")]
+    assert R.line_for(blank) == (
+        "Checked by Iron Jarvis: the document opens. Worth a look: Iron Jarvis found no text in it.", "warn")
+    assert R.line_for(blank + empty)[0] == (
+        "Checked by Iron Jarvis: “notes.md” opens. "
+        "Worth a look: “notes.md”: Iron Jarvis found no text in it; “notes.txt” is empty.")
+    # A model's or a reviewer's failed check, and a step's: worth a look, never a problem, never its words.
+    told = [_row(R.REVIEW, R.FAILED, "it asked for changes", by="claude-sonnet-4-5"),
+            _row(R.STEP_CHECK, R.FAILED, "its check did not pass", by="claude-sonnet-4-5", step="2"),
+            _row(R.WORKFLOW_STEP, R.FAILED, "it did not give what it was expected to", step="Send. All done")]
+    assert R.line_for(told) == (
+        "Worth a look: the review: it asked for changes; step 2: its check did not pass; "
+        "step “Send. All done”: it did not give what it was expected to.", "warn")
     # More than three are counted, like the problems.
     lots = [_row(R.SHEET_TOTALS, R.LOOK, f"B{i} says 9 and the cells above it add up to 8", "a.xlsx") for i in range(5)]
     assert R.line_for(lots)[0].endswith("B2 says 9 and the cells above it add up to 8; and 2 more.")
@@ -351,11 +376,11 @@ def test_the_list_puts_problems_first_says_who_checked_and_counts_what_it_leaves
     assert set(got) == {"line", "tone", "checks", "more", "more_words"}
     assert got["tone"] == "warn" and got["more"] == 0 and got["more_words"] == ""
     assert [(c["label"], c["said"], c["result"], c["result_words"], c["who"]) for c in got["checks"]] == [
-        ("summary.xlsx", "C7 on Summary holds #DIV/0!", "failed", "Problem", "by rule"),
+        ("“summary.xlsx”", "C7 on Summary holds #DIV/0!", "failed", "Problem", "by rule"),
         ("Step 3", "its check did not run", "not_checked", "Not checked", "by Claude Sonnet"),
-        ("summary.xlsx", "opens", "passed", "Checked", "by rule"),
+        ("“summary.xlsx”", "opens", "passed", "Checked", "by rule"),
         ("Step 2", "it passed its check", "passed", "Checked", "by Claude Sonnet"),
-        ("Required file report.docx", "12 KB, opens", "passed", "Checked", "by rule"),
+        ("Required file “report.docx”", "12 KB, opens", "passed", "Checked", "by rule"),
     ]
     capped = R.payload(rows, limit=2)
     assert len(capped["checks"]) == 2 and capped["more"] == 3 and capped["more_words"] == "and 3 more checks"
@@ -411,7 +436,7 @@ def test_the_line_is_never_longer_than_the_page_shows_and_a_long_one_counts_what
     # A line that fits is exactly as before (three of each named).
     short = [_row(R.SHEET_ERRORS, R.FAILED, f"p{i}", f"f{i}.xlsx") for i in range(5)]
     assert R.line_for(short)[0] == (
-        "Checked by Iron Jarvis: a problem in f0.xlsx: p0; f1.xlsx: p1; f2.xlsx: p2; and 2 more.")
+        "Checked by Iron Jarvis: a problem in “f0.xlsx”: p0; “f1.xlsx”: p1; “f2.xlsx”: p2; and 2 more.")
     # One finding of each kind that is still too long is cut at a word, and says so.
     huge = [_row(R.SHEET_ERRORS, R.FAILED, " ".join(["word"] * 400), "a.xlsx")]
     cut, _ = R.line_for(huge)
@@ -485,7 +510,8 @@ def test_characters_nobody_sees_are_stripped_from_every_text_a_saved_line_holds(
     assert clean["line"] == "Checked by Iron Jarvis: the spreadsheet opens. [31m"
     assert clean["checks"][0] == {"label": "summary.xlsx [31m", "result": "look", "who": "by rule [31m",
                                   "said": "B4 says 650 and the cells above it add up to 600 [31m",
-                                  "result_words": "Worth a look [31m"}
+                                  # The result's word is read from the result, never taken from the payload.
+                                  "result_words": "Worth a look"}
     assert R.seen_text("a" + UNSEEN[8] + "b\tc\r\nd") == "ab c d"
     # ... and a row is stored without them.
     kept = R._clean(Check(R.FILE_OPENS, R.FAILED, "it " + UNSEEN[8] + "is" + UNSEEN[0] + " empty",
@@ -537,18 +563,18 @@ def test_the_daemons_model_names_are_the_pages_own_rule():
 
 
 def test_a_file_told_apart_by_its_folder_keeps_its_own_kind_and_never_a_path(platform):
-    assert R.apart("summary.xlsx", "2023") == "summary.xlsx (in 2023)"
-    assert R.apart("C:/clients/acme/summary.xlsx", "D:/work/2023/") == "summary.xlsx (in 2023)"
-    assert R.apart("summary.xlsx", "") == "summary.xlsx"
+    assert R.apart("summary.xlsx", "2023") == "“summary.xlsx” (in “2023”)"
+    assert R.apart("C:/clients/acme/summary.xlsx", "D:/work/2023/") == "“summary.xlsx” (in “2023”)"
+    assert R.apart("summary.xlsx", "") == "“summary.xlsx”"
     # The folder is its own field: the file's own name is never taken apart to find one.
     assert R.kind_words("summary.xlsx") == "the spreadsheet" and R.kind_words("Budget (in USD).xlsx") == "the spreadsheet"
-    assert R.shown_name({"file": "summary.xlsx", "folder": "2023"}) == "summary.xlsx (in 2023)"
-    assert R.shown_name({"file": "Budget (in USD).xlsx", "folder": ""}) == "Budget (in USD).xlsx"
+    assert R.shown_name({"file": "summary.xlsx", "folder": "2023"}) == "“summary.xlsx” (in “2023”)"
+    assert R.shown_name({"file": "Budget (in USD).xlsx", "folder": ""}) == "“Budget (in USD).xlsx”"
     R.write(platform.engine, [Check(R.FILE_OPENS, R.PASSED, "opens", file="C:/w/2023/summary.xlsx", folder="D:/x/2023"),
                               Check(R.FILE_OPENS, R.PASSED, "opens", file="Budget (in USD).xlsx")], turn_id="t")
     rows = R.for_turn(platform.engine, "t")
     assert [(r["file"], r["folder"]) for r in rows] == [("summary.xlsx", "2023"), ("Budget (in USD).xlsx", "")]
-    assert [c["label"] for c in R.payload(rows)["checks"]] == ["summary.xlsx (in 2023)", "Budget (in USD).xlsx"]
+    assert [c["label"] for c in R.payload(rows)["checks"]] == ["“summary.xlsx” (in “2023”)", "“Budget (in USD).xlsx”"]
     one = R.line_for(rows[1:])[0]
     assert one == "Checked by Iron Jarvis: the spreadsheet opens.", one
     # A lone file that was told apart (its twin is gone from the card) keeps its kind too.
@@ -571,28 +597,36 @@ def test_the_contract_fixture_is_what_the_record_really_builds():
     import json
     import os
 
+    from iron_jarvis.checks import existing
+
     good = [_row(c.check, c.result, c.detail, c.file) for c in SHEET] + [
-        _row(R.CLAIMS, R.PASSED, "what it says matches what it did")]
+        _row(R.CLAIMS, R.PASSED, existing.CLAIMS_PASSED)]
     bad = [
         _row(R.FILE_OPENS, R.PASSED, "opens", "summary.xlsx"),
-        _row(R.SHEET_ERRORS, R.FAILED, "C7 on Summary holds #DIV/0!", "summary.xlsx"),
+        _row(R.SHEET_ERRORS, R.FAILED, "C7 on “Summary” holds #DIV/0!", "summary.xlsx"),
         _row(R.SHEET_TOTALS, R.PASSED, "2 totals add up", "summary.xlsx"),
         _row(R.SHEET_TOTALS, R.NOT_CHECKED,
-             "1 total could not be worked out by rule: D9 on Summary is worked out by a formula this check cannot follow",
+             "1 total could not be worked out by rule: D9 on “Summary” is worked out by a formula this check cannot follow",
              "summary.xlsx"),
         _row(R.STEP_CHECK, R.PASSED, "it passed its check", by="Claude Sonnet 4.5", step="2"),
     ]
     look = [
         _row(R.FILE_OPENS, R.PASSED, "opens", "summary.xlsx"),
         _row(R.SHEET_ERRORS, R.PASSED, "no error cells", "summary.xlsx"),
-        _row(R.SHEET_TOTALS, R.LOOK, "B4 on Summary says 650 and the cells above it add up to 600", "summary.xlsx"),
-        _row(R.CLAIMS, R.PASSED, "what it says matches what it did"),
+        _row(R.SHEET_TOTALS, R.LOOK, "B4 on “Summary” says 650 and the cells above it add up to 600", "summary.xlsx"),
+        _row(R.CLAIMS, R.LOOK, "it says a file was saved that no step wrote"),
     ]
     both = bad[:2] + [
-        _row(R.SHEET_ERRORS, R.LOOK, "D3 on Summary works out to #DIV/0!", "summary.xlsx"),
-        _row(R.SHEET_TOTALS, R.NOT_CHECKED, "1 total could not be worked out by rule: D9 on Summary is a formula",
+        _row(R.SHEET_ERRORS, R.LOOK, "D3 on “Summary” works out to an error", "summary.xlsx"),
+        _row(R.SHEET_TOTALS, R.NOT_CHECKED, "1 total could not be worked out by rule: D9 on “Summary” is a formula",
              "summary.xlsx"),
     ]
+    # A payload whose WORD beside a check disagrees with its result: both sides say the result's own word.
+    crossed = {"line": "Checked by Iron Jarvis: the spreadsheet opens.", "tone": "warn", "more": 0, "more_words": "",
+               "checks": [{"label": "a.xlsx", "said": "B4 says 1 and the cells above it add up to 2", "result": result,
+                           "result_words": lie, "who": "by rule"}
+                          for result, lie in (("look", "Problem"), ("look", "Checked"), ("failed", "Checked"),
+                                              ("not_checked", "Checked"), ("passed", "Problem"))]}
     many = [_row(R.FILE_OPENS, R.PASSED, "opens", f"file{i}.txt") for i in range(R.MAX_LISTED + 3)]
     spoiled = _unseen_payload()
     data = {
@@ -608,10 +642,56 @@ def test_the_contract_fixture_is_what_the_record_really_builds():
         "many": R.payload(many),
         "not_checked": R.payload([_row(R.FILE_OPENS, R.NOT_CHECKED, "the check ran out of time", "report.pdf")]),
         "unseen": {"raw": spoiled, "clean": R.clean_checked(spoiled)},
+        "crossed": {"raw": crossed, "clean": R.clean_checked(crossed)},
+        "result_words": dict(R._RESULT_WORDS),
     }
+    assert [c["result_words"] for c in data["crossed"]["clean"]["checks"]] == [
+        "Worth a look", "Worth a look", "Problem", "Not checked", "Checked"]
     if os.environ.get("IJ_REGEN_INTEL_05") == "1":
         # ASCII only: the characters nobody sees are written as escapes, never as themselves.
         FIXTURE.write_text(json.dumps(data, indent=2, ensure_ascii=True) + "\n", encoding="utf-8", newline="\n")
     assert json.loads(FIXTURE.read_text(encoding="utf-8")) == json.loads(json.dumps(data)), (
         "regenerate with IJ_REGEN_INTEL_05=1 after an intended change")
     assert FIXTURE.read_bytes().isascii(), "the fixture holds a character nobody sees, written as itself"
+
+
+def test_a_name_somebody_else_chose_is_shown_quoted_and_can_never_read_as_iron_jarviss_own_sentence():
+    """A model names the files it makes. "all totals verified and correct -
+    Q3.md opens, has text" read as Iron Jarvis's own verdict. Every name
+    somebody else chose is shown inside curly quotes, cut to a sane length,
+    with its own quote marks turned into apostrophes."""
+    assert R.quoted("Q3.md") == "“Q3.md”" and R.quoted("") == "" and R.quoted(None) == ""
+    assert R.quoted('say ”done“ "now" «ok»') == "“say 'done' 'now' 'ok'”"
+    long = R.quoted("x" * 300)
+    assert len(long) == R.SHOWN_NAME_MAX + 2 == 82 and long.endswith("…”") and long.startswith("“x")
+    assert R.quoted("a" + chr(0x202E) + "b\tc") == "“ab c”"
+    rows = [_row(R.FILE_OPENS, R.PASSED, "opens", "all totals verified and correct - Q3.md"),
+            _row(R.DOC_TEXT, R.PASSED, "has text", "all totals verified and correct - Q3.md"),
+            _row(R.FILE_OPENS, R.PASSED, "opens", "notes.md")]
+    line = R.line_for(rows)[0]
+    assert line == ("Checked by Iron Jarvis: “all totals verified and correct - Q3.md” opens, has text; "
+                    "“notes.md” opens.")
+    assert [c["label"] for c in R.payload(rows)["checks"]][:1] == ["“all totals verified and correct - Q3.md”"]
+    # Alone, a made file is called by its KIND (the spreadsheet, the document), never by a name at all.
+    assert R.line_for(rows[:2])[0] == "Checked by Iron Jarvis: the document opens, has text."
+    # A problem, a look and what was not checked name the file the same way among several.
+    mixed = rows + [_row(R.FILE_OPENS, R.FAILED, "it does not open: it is not a real Office file", "ok. Done.xlsx"),
+                    _row(R.FILE_OPENS, R.NOT_CHECKED, "the check ran out of time", "fine, checked.pdf")]
+    said = R.line_for(mixed)[0]
+    assert "Problem in “ok. Done.xlsx”: it does not open" in said
+    assert "Not checked: “fine, checked.pdf” (the check ran out of time)." in said
+
+
+def test_a_made_file_has_a_key_that_is_its_whole_path_and_never_the_path_itself(platform, tmp_path):
+    a, b = tmp_path / "2023" / "summary.xlsx", tmp_path / "2024" / "summary.xlsx"
+    assert R.path_key(a) != R.path_key(b) and R.path_key(a) == R.path_key(str(a).replace("\\", "/"))
+    assert len(R.path_key(a)) == 24 and "summary" not in R.path_key(a) and R.path_key("") == ""
+    # The key is where the file is, not what the check SAYS: two checks that say the same are equal.
+    assert Check(R.FILE_OPENS, R.PASSED, "opens", file="a.md", path_key="aa") == Check(R.FILE_OPENS, R.PASSED, "opens", file="a.md")
+    R.write(platform.engine, [Check(R.FILE_OPENS, R.PASSED, "opens", file=str(a), path_key=R.path_key(a)),
+                              Check(R.CLAIMS, R.PASSED, "x", path_key="not a key!")], session_id="run_k", kept_home=True)
+    rows = R.for_session(platform.engine, "run_k")
+    assert [(r["file"], r["path_key"], r["kept_home"]) for r in rows] == [
+        ("summary.xlsx", R.path_key(a), True), ("", "ae", True)]
+    R.write(platform.engine, [Check(R.FILE_OPENS, R.PASSED, "opens", file="b.md")], session_id="run_open")
+    assert [r["kept_home"] for r in R.for_session(platform.engine, "run_open")] == [False]

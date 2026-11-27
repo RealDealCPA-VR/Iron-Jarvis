@@ -2251,10 +2251,12 @@ class AgentRuntime:
 
             row = _existing.claims_check(until)
             if row is not None:
-                await _checks.note(
-                    self.p.engine, [row], session_id=session.id, run_id=run.id,
-                    thread_id=_chat_delivery.chat_thread_of(session) or "",
-                )
+                from ..checks.turn import run_owner
+
+                # Under the run's chat, unless the run keeps its words on this
+                # PC and that chat is not Local only (``run_owner``).
+                owner = await asyncio.to_thread(run_owner, self.p.engine, session)
+                await _checks.note(self.p.engine, [row], session_id=session.id, run_id=run.id, **owner)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a record is never worth a failed run

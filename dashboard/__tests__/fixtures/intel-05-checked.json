@@ -5,21 +5,21 @@
     "tone": "quiet",
     "checks": [
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "no error cells",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "3 totals add up",
         "result": "passed",
         "result_words": "Checked",
@@ -27,7 +27,7 @@
       },
       {
         "label": "The reply",
-        "said": "what it says matches what it did",
+        "said": "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
@@ -37,32 +37,32 @@
     "more_words": ""
   },
   "bad": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: C7 on Summary holds #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on Summary is worked out by a formula this check cannot follow).",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up. Problem in the spreadsheet: C7 on \u201cSummary\u201d holds #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on \u201cSummary\u201d is worked out by a formula this check cannot follow).",
     "tone": "warn",
     "checks": [
       {
-        "label": "summary.xlsx",
-        "said": "C7 on Summary holds #DIV/0!",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "C7 on \u201cSummary\u201d holds #DIV/0!",
         "result": "failed",
         "result_words": "Problem",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
-        "said": "1 total could not be worked out by rule: D9 on Summary is worked out by a formula this check cannot follow",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "1 total could not be worked out by rule: D9 on \u201cSummary\u201d is worked out by a formula this check cannot follow",
         "result": "not_checked",
         "result_words": "Not checked",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "2 totals add up",
         "result": "passed",
         "result_words": "Checked",
@@ -80,33 +80,33 @@
     "more_words": ""
   },
   "look": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens, no error cells. Worth a look: B4 on Summary says 650 and the cells above it add up to 600.",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens, no error cells. Worth a look: B4 on \u201cSummary\u201d says 650 and the cells above it add up to 600; the reply: it says a file was saved that no step wrote.",
     "tone": "warn",
     "checks": [
       {
-        "label": "summary.xlsx",
-        "said": "B4 on Summary says 650 and the cells above it add up to 600",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "B4 on \u201cSummary\u201d says 650 and the cells above it add up to 600",
         "result": "look",
         "result_words": "Worth a look",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "The reply",
+        "said": "it says a file was saved that no step wrote",
+        "result": "look",
+        "result_words": "Worth a look",
+        "who": "by rule"
+      },
+      {
+        "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "no error cells",
-        "result": "passed",
-        "result_words": "Checked",
-        "who": "by rule"
-      },
-      {
-        "label": "The reply",
-        "said": "what it says matches what it did",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
@@ -116,32 +116,32 @@
     "more_words": ""
   },
   "both": {
-    "line": "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 on Summary holds #DIV/0!. Worth a look: D3 on Summary works out to #DIV/0!. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on Summary is a formula).",
+    "line": "Checked by Iron Jarvis: the spreadsheet opens. Problem in the spreadsheet: C7 on \u201cSummary\u201d holds #DIV/0!. Worth a look: D3 on \u201cSummary\u201d works out to an error. Not checked: the spreadsheet (1 total could not be worked out by rule: D9 on \u201cSummary\u201d is a formula).",
     "tone": "warn",
     "checks": [
       {
-        "label": "summary.xlsx",
-        "said": "C7 on Summary holds #DIV/0!",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "C7 on \u201cSummary\u201d holds #DIV/0!",
         "result": "failed",
         "result_words": "Problem",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
-        "said": "D3 on Summary works out to #DIV/0!",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "D3 on \u201cSummary\u201d works out to an error",
         "result": "look",
         "result_words": "Worth a look",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
-        "said": "1 total could not be worked out by rule: D9 on Summary is a formula",
+        "label": "\u201csummary.xlsx\u201d",
+        "said": "1 total could not be worked out by rule: D9 on \u201cSummary\u201d is a formula",
         "result": "not_checked",
         "result_words": "Not checked",
         "who": "by rule"
       },
       {
-        "label": "summary.xlsx",
+        "label": "\u201csummary.xlsx\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
@@ -152,214 +152,214 @@
     "more_words": ""
   },
   "many": {
-    "line": "Checked by Iron Jarvis: file0.txt opens; file1.txt opens; file2.txt opens; and 30 more files.",
+    "line": "Checked by Iron Jarvis: \u201cfile0.txt\u201d opens; \u201cfile1.txt\u201d opens; \u201cfile2.txt\u201d opens; and 30 more files.",
     "tone": "quiet",
     "checks": [
       {
-        "label": "file0.txt",
+        "label": "\u201cfile0.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file1.txt",
+        "label": "\u201cfile1.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file2.txt",
+        "label": "\u201cfile2.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file3.txt",
+        "label": "\u201cfile3.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file4.txt",
+        "label": "\u201cfile4.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file5.txt",
+        "label": "\u201cfile5.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file6.txt",
+        "label": "\u201cfile6.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file7.txt",
+        "label": "\u201cfile7.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file8.txt",
+        "label": "\u201cfile8.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file9.txt",
+        "label": "\u201cfile9.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file10.txt",
+        "label": "\u201cfile10.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file11.txt",
+        "label": "\u201cfile11.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file12.txt",
+        "label": "\u201cfile12.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file13.txt",
+        "label": "\u201cfile13.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file14.txt",
+        "label": "\u201cfile14.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file15.txt",
+        "label": "\u201cfile15.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file16.txt",
+        "label": "\u201cfile16.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file17.txt",
+        "label": "\u201cfile17.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file18.txt",
+        "label": "\u201cfile18.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file19.txt",
+        "label": "\u201cfile19.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file20.txt",
+        "label": "\u201cfile20.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file21.txt",
+        "label": "\u201cfile21.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file22.txt",
+        "label": "\u201cfile22.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file23.txt",
+        "label": "\u201cfile23.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file24.txt",
+        "label": "\u201cfile24.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file25.txt",
+        "label": "\u201cfile25.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file26.txt",
+        "label": "\u201cfile26.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file27.txt",
+        "label": "\u201cfile27.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file28.txt",
+        "label": "\u201cfile28.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
         "who": "by rule"
       },
       {
-        "label": "file29.txt",
+        "label": "\u201cfile29.txt\u201d",
         "said": "opens",
         "result": "passed",
         "result_words": "Checked",
@@ -374,7 +374,7 @@
     "tone": "quiet",
     "checks": [
       {
-        "label": "report.pdf",
+        "label": "\u201creport.pdf\u201d",
         "said": "the check ran out of time",
         "result": "not_checked",
         "result_words": "Not checked",
@@ -408,12 +408,106 @@
           "label": "summary.xlsx [31m",
           "said": "B4 says 650 and the cells above it add up to 600 [31m",
           "result": "look",
-          "result_words": "Worth a look [31m",
+          "result_words": "Worth a look",
           "who": "by rule [31m"
         }
       ],
       "more": 2,
       "more_words": "and 2 more checks [31m"
     }
+  },
+  "crossed": {
+    "raw": {
+      "line": "Checked by Iron Jarvis: the spreadsheet opens.",
+      "tone": "warn",
+      "more": 0,
+      "more_words": "",
+      "checks": [
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "look",
+          "result_words": "Problem",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "look",
+          "result_words": "Checked",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "failed",
+          "result_words": "Checked",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "not_checked",
+          "result_words": "Checked",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "passed",
+          "result_words": "Problem",
+          "who": "by rule"
+        }
+      ]
+    },
+    "clean": {
+      "line": "Checked by Iron Jarvis: the spreadsheet opens.",
+      "tone": "warn",
+      "checks": [
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "look",
+          "result_words": "Worth a look",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "failed",
+          "result_words": "Problem",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "not_checked",
+          "result_words": "Not checked",
+          "who": "by rule"
+        },
+        {
+          "label": "a.xlsx",
+          "said": "B4 says 1 and the cells above it add up to 2",
+          "result": "passed",
+          "result_words": "Checked",
+          "who": "by rule"
+        }
+      ],
+      "more": 0,
+      "more_words": ""
+    }
+  },
+  "result_words": {
+    "passed": "Checked",
+    "failed": "Problem",
+    "look": "Worth a look",
+    "not_checked": "Not checked"
   }
 }

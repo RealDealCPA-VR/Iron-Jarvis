@@ -33,7 +33,7 @@ SHEET = [
     Check(R.FILE_OPENS, R.PASSED, "opens", file="summary.xlsx"),
     Check(R.SHEET_ERRORS, R.FAILED, "C7 on Summary holds #DIV/0!", file="summary.xlsx"),
     Check(R.SHEET_TOTALS, R.PASSED, "2 totals add up", file="summary.xlsx"),
-    Check(R.CLAIMS, R.PASSED, "what it says matches what it did"),
+    Check(R.CLAIMS, R.PASSED, "the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's record"),
 ]
 OTHER = [Check(R.FILE_OPENS, R.FAILED, "it is empty", file="payroll-private.xlsx")]
 
@@ -67,14 +67,16 @@ async def test_it_answers_from_the_record_for_the_chat_it_was_asked_in(platform,
     res = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_mine", turn_id="turn_9"))
     assert res.ok, res.error
     assert "Checked by Iron Jarvis: the spreadsheet opens, 2 totals add up." in res.output
-    assert "- summary.xlsx: C7 on Summary holds #DIV/0! (Problem, by rule)" in res.output
-    assert "- The reply: what it says matches what it did (Checked, by rule)" in res.output
+    assert "- “summary.xlsx”: C7 on Summary holds #DIV/0! (Problem, by rule)" in res.output
+    assert ("- The reply: the files it says it saved or changed, and what it says it sent, are in Iron Jarvis's "
+            "record (Checked, by rule)") in res.output
+    assert "matches what it did" not in res.output
     assert "payroll-private" not in res.output, "another chat's check was read"
-    assert [c["label"] for c in res.data["checks"]][0] == "summary.xlsx"
+    assert [c["label"] for c in res.data["checks"]][0] == "“summary.xlsx”"
     assert all("payroll" not in str(c) for c in res.data["checks"])
 
     theirs = await _ask(platform, _ctx(platform, tmp_path, thread_id="chat_other"))
-    assert "payroll-private.xlsx: it is empty" in theirs.output and "summary.xlsx" not in theirs.output
+    assert "“payroll-private.xlsx”: it is empty" in theirs.output and "summary.xlsx" not in theirs.output
     # It reads; it never writes or checks again.
     assert _count(platform.engine) == before
 
@@ -97,10 +99,10 @@ async def test_what_is_worth_a_look_is_answered_in_its_own_words_never_as_a_prob
         "Worth a look: B4 says 650 and the cells above it add up to 600. "
         "Not checked: the spreadsheet (1 total could not be worked out by rule: C9 is a formula).")
     assert lines[2:6] == [
-        "- summary.xlsx: C7 holds #DIV/0! (Problem, by rule)",
-        "- summary.xlsx: B4 says 650 and the cells above it add up to 600 (Worth a look, by rule)",
-        "- summary.xlsx: 1 total could not be worked out by rule: C9 is a formula (Not checked, by rule)",
-        "- summary.xlsx: opens (Checked, by rule)",
+        "- “summary.xlsx”: C7 holds #DIV/0! (Problem, by rule)",
+        "- “summary.xlsx”: B4 says 650 and the cells above it add up to 600 (Worth a look, by rule)",
+        "- “summary.xlsx”: 1 total could not be worked out by rule: C9 is a formula (Not checked, by rule)",
+        "- “summary.xlsx”: opens (Checked, by rule)",
     ]
     assert [c["result"] for c in res.data["checks"]] == ["failed", "look", "not_checked", "passed"]
 
@@ -222,29 +224,85 @@ def test_it_reads_in_plain_words_everywhere():
     assert CT.TOOL_NAME in _READS_ONLY_TOOLS
 
 
-@pytest.mark.parametrize("said", [
+def _arms(said: str) -> bool:
+    return any(CT.TOOL_NAME in tools and rx.search(said) for rx, tools in autoselect._RULES)
+
+
+#: THE HELD TABLE, written before the rule was tightened (the third review:
+#: "did you check the weather for tomorrow?" armed it). A question about
+#: Iron Jarvis's checks of its WORK arms the tool; a request to do something
+#: now, and a question about anything else somebody checked, does not.
+SHOULD_ARM = [
+    "what did you check",
     "What did you check?",
-    "what was checked on that file",
+    "what have you checked so far",
+    "what did Jarvis check",
+    "what was checked",
+    "what has been checked on this file",
+    "which files did you check",
     "did you check the totals?",
+    "did you check the numbers",
+    "did you actually check the spreadsheet",
+    "have you checked the formulas",
+    "did you double-check the figures",
+    "did you check the grand total",
     "Did you actually check that it adds up",
+    "did you check if the file opens",
+    "did you check it?",
     "How do I know the spreadsheet is right?",
+    "how do you know it is correct",
+    "how do we know the totals add up",
+    "how do I know that the report is accurate",
     "what could you not check?",
-])
-def test_plain_words_arm_it(said):
-    assert CT.TOOL_NAME in autoselect.AUTO_SAFE_TOOLS
-    assert any(CT.TOOL_NAME in tools and rx.search(said) for rx, tools in autoselect._RULES), said
-
-
-@pytest.mark.parametrize("said", [
+    "what did you not check",
+    "what was not checked",
+]
+SHOULD_NOT_ARM = [
+    # The third review's own.
+    "did you check the weather for tomorrow?",
+    "did it check out ok at the hotel",
+    "have you checked the mail",
+    "what did you check in to the repo",
+    "how do we know the new hire is right for us",
+    # A request to do something now.
     "check my email",
     "can you check the contract for typos",
     "please check whether the server is up",
-    "how do I know it is installed",
-    "what did we decide about the fee",
+    "please check the totals again",
+    "I need to check the totals",
     "write a check for the rent",
-])
-def test_a_request_to_do_something_now_does_not_arm_it(said):
-    assert not any(CT.TOOL_NAME in tools and rx.search(said) for rx, tools in autoselect._RULES), said
+    # Something else somebody checked, or knows.
+    "did you check with Ann about lunch",
+    "did you check the calendar for Friday",
+    "what did you check out from the library",
+    "have you checked my inbox",
+    "did you check the news",
+    "did you check on the kids",
+    "did you check the price of flights",
+    "did it check the box",
+    "did you check that restaurant",
+    "how do I know the restaurant is right for the party",
+    "how do I know it is installed",
+    "how do you know that",
+    "what should I check before filing",
+    "what did we decide about the fee",
+]
+
+
+@pytest.mark.parametrize("said", SHOULD_ARM)
+def test_plain_words_arm_it(said):
+    assert CT.TOOL_NAME in autoselect.AUTO_SAFE_TOOLS
+    assert _arms(said), said
+
+
+@pytest.mark.parametrize("said", SHOULD_NOT_ARM)
+def test_a_request_to_do_something_now_or_a_question_about_something_else_does_not_arm_it(said):
+    assert not _arms(said), said
+
+
+def test_the_held_table_is_two_lists_with_nothing_in_both():
+    assert len(SHOULD_ARM) >= 20 and len(SHOULD_NOT_ARM) >= 20
+    assert not set(s.lower() for s in SHOULD_ARM) & set(s.lower() for s in SHOULD_NOT_ARM)
 
 
 @pytest.mark.parametrize("query", [
