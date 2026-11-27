@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.587.0 (2026-11-19).*
+holds itself to. Current as of v1.588.0 (2026-11-19).*
 
 ---
 
@@ -2150,7 +2150,7 @@ reads; it never writes, runs commands, or starts work on its own.
 - **Something wrote the wrong thing** → Activity page (or the file's row in
   chat) → Undo. Session-level revert exists for whole runs.
 
-## Which model does best on your code, in the model menu (v1.582.0)
+## Which model does best on your code, in the model menu (v1.588.0)
 
 The model menu of a coding session now says, under each model, what became
 of its work in the folder you are in. One quiet line, for example **In this

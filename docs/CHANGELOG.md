@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.588.0
+
+**Which model does best on your code, in the model menu.** The model menu of a coding session now says, under each model, what became of its work in the folder you are in.
+
 ## v1.587.0
 
 **What you asked for that Iron Jarvis can't do yet.** When you ask for something Iron Jarvis has no feature for, it now keeps a note of it.
@@ -77,7 +81,3 @@
 ## v1.570.0
 
 **Auto reaches helpers and handed-off work.** Under **Auto**, the quick check that lets routine commands through worked only in a reply.
-
-## v1.569.0
-
-**Auto asks less: your own pages open, and the quick check knows your folder.** With the approval level on **Auto**, Iron Jarvis still stopped to ask about work nobody needed to approve, and a card nobody saw held the work for hours.
