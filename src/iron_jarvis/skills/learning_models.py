@@ -30,6 +30,14 @@ from sqlmodel import Field, SQLModel
 
 from ..core.ids import new_id, utcnow
 
+#: Next leaps 19-a: where a skill draft came from.
+SOURCE_RUN = "run"
+SOURCE_CHAT = "chat"
+#: 19-a: a chat draft that names a client is HELD (never shown) until
+#: client-only skills exist (19-c). A candidate status beside pending /
+#: distilled / dismissed.
+HELD = "held"
+
 
 class SkillCandidateRecord(SQLModel, table=True):
     """A finished session flagged as skill-worthy (create) or skill-hurting
@@ -46,11 +54,24 @@ class SkillCandidateRecord(SQLModel, table=True):
     #: Normalized dedup key — ``create::<normalized task>`` /
     #: ``refine::<skill name>`` — so the same procedure is proposed once.
     signature: str = Field(default="", index=True)
-    status: str = "pending"  # pending | distilled | dismissed
+    status: str = "pending"  # pending | distilled | dismissed | held (19-a)
     #: Distillation attempts that produced an unusable reply. At
     #: ``_MAX_ATTEMPTS`` (3) the candidate is dismissed instead of retried.
     attempts: int = 0
     created_at: datetime = Field(default_factory=utcnow)
+    #: Next leaps 19-a: WHERE the candidate came from — ``run`` (one finished
+    #: agent run, the lane above) or ``chat`` (the same kind of task asked for
+    #: in chat on three different days, ``learning/repeats``). A chat
+    #: candidate is drafted ONLY by the night review, pinned to the model of
+    #: its newest chat; the other sweeps leave it alone. Additive: an older
+    #: row reads NULL, which is ``run``.
+    source: str = SOURCE_RUN
+    #: 19-a, a chat candidate only: the repeat it was found from, as JSON
+    #: (``learning/repeats.evidence_of``): each task's chat id, start, end,
+    #: the owner's words, the model that answered and whether it was Local
+    #: only; the tools every task used; the file kinds read and written
+    #: (extensions only, never names); the days. "" for a run's. Additive.
+    evidence_json: str = ""
 
 
 class SkillProposalRecord(SQLModel, table=True):
@@ -73,6 +94,12 @@ class SkillProposalRecord(SQLModel, table=True):
     status: str = "pending"  # pending | approved | rejected
     created_at: datetime = Field(default_factory=utcnow)
     decided_at: datetime | None = None
+    #: 19-a: carried from the candidate (``run`` | ``chat``; NULL = ``run``)
+    #: so Improvements can say what the draft was written from. Additive.
+    source: str = SOURCE_RUN
+    #: 19-a: the candidate's evidence, carried whole (Improvements reads the
+    #: days and the tools from it). "" for a run's draft. Additive.
+    evidence_json: str = ""
 
 
 class SkillUseRecord(SQLModel, table=True):
