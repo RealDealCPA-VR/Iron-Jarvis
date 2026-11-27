@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.594.0
+
+**It offers to run a task you repeat by itself.** When the three times you asked Iron Jarvis for the same kind of task in chat fell on a rhythm (the same day each week, say three Mondays), the night review adds a second suggestion beside the skill draft it wrote from those chats.
+
 ## v1.593.0
 
 **Your own models set themselves up.** Each model on this PC or your network now says, on **Model servers**, what it is good at, in up to three plain lines:
@@ -77,7 +81,3 @@
 ## v1.579.0
 
 **Review comments arrive in the coding session.** When people comment on a pull request a coding session (Chat › Code) opened, their comments now come to that session.
-
-## v1.578.0
-
-**Start coding work from your phone.** Text Iron Jarvis from Telegram, Slack or email: "in the website folder, fix the broken contact form", or the command `/code website: fix the broken contact form`.

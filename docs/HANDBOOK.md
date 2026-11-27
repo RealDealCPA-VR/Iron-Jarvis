@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.593.0 (2026-11-19).*
+holds itself to. Current as of v1.594.0 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,49 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## It offers to run a task you repeat by itself (v1.594.0)
+
+When the three times you asked Iron Jarvis for the same kind of task in chat
+fell on a rhythm (the same day each week, say three Mondays), the night
+review adds a second suggestion beside the skill draft it wrote from those
+chats. It waits in **Improvements** under **Tasks Iron Jarvis could run on a
+schedule**:
+
+- **Run this by itself each Monday at 10am?** (the day, and the hour you
+  usually asked)
+- "You asked for this 3 times, on 10, 17 and 24 November."
+- "Each time Iron Jarvis used: excel read, excel edit."
+- whether it uses the skill: "It uses the skill “x”." once you approved
+  the draft, "The skill draft “x” is waiting under Skill drafts. A schedule
+  made before you approve it runs without it." while it waits, or "It runs
+  without a skill." when you rejected it; and "Not rehearsed yet."
+- **Read it** shows the words the schedule runs each time: your own request,
+  as you typed it in the newest of those chats.
+
+Nothing is made or run until you press something:
+
+- **Rehearse** runs it once now, on the same model your chats used, changing
+  nothing. The report shows on the card: what it would read, write, send or
+  run, and "Nothing was changed."
+- **Accept** (press twice: it starts work by itself) makes the schedule,
+  switched on. It runs your request on the same model and account as your
+  newest chat, and reports into that chat. It uses the skill only if you
+  approved the draft BEFORE pressing Accept; a skill approved later is not
+  added to it. If that account has been removed or turned off, Accept says so
+  and makes nothing. Work done in a Local only chat, or answered by a model on
+  this PC or your network, stays Local only on every run, and no later edit
+  takes that off. If such work was last done on a model that is not on this
+  PC or your network, Iron Jarvis does not offer it (it could never run).
+- **Decline** means it is not offered again for that task. A declined offer
+  keeps none of your words (only what it needs to recognise the same
+  request), and stays declined even if you delete one of those chats.
+
+You can pause or remove the schedule on **Schedules**. In chat, ask "what
+suggestions are waiting?", "rehearse that one", or "accept it".
+
+What it takes: the night review must be on (say Yes once on Improvements).
+Deleting one of the chats removes an offer that is still waiting.
 
 ## Your own models set themselves up (v1.593.0)
 
