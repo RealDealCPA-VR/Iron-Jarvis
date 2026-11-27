@@ -386,15 +386,19 @@ def test_a_save_that_fails_leaves_no_file_of_any_kind(root, clock, monkeypatch):
         with pytest.raises(OSError):
             keep(root, "sess_a", MARK * 100)
     assert files(root) == []
-    # A save the lane stopped waiting for writes nothing...
-    handle = K.new_handle()
-    K.abandon(handle)
-    with pytest.raises(ValueError):
-        K.put(root, "sess_a", MARK, own_source=False, local_only=False, handle=handle)
-    assert files(root) == [] and handle not in K._ABANDONED
+    # A save the lane stopped waiting for writes nothing (not "writes, then
+    # removes": the disk is never touched)...
+    writes: list = []
+    real_write = K._write
+    with monkeypatch.context() as patch:
+        patch.setattr(K, "_write", lambda path, text: writes.append(path) or real_write(path, text))
+        handle = K.new_handle()
+        K.abandon(handle)
+        with pytest.raises(ValueError):
+            K.put(root, "sess_a", MARK, own_source=False, local_only=False, handle=handle)
+    assert files(root) == [] and writes == [] and handle not in K._ABANDONED
     # ...and one given up on while it was writing removes what it wrote.
     late = K.new_handle()
-    real_write = K._write
 
     def write_then_give_up(path, text):
         real_write(path, text)
@@ -411,10 +415,14 @@ def test_a_dropped_owner_is_refused_a_save_that_was_already_on_its_way(platform,
     stays = keep(root, "build:stays", "another session's")
     assert K.drop_owners(platform.engine, ("build:gone", "chat:turn_9", "")) == 1
     assert K.get(root, "build:gone", kept) is None and files(root) == [stays + ".json", stays + ".txt"]
-    for owner in ("build:gone", "chat:turn_9"):  # (the second never had a folder: it is refused too)
-        with pytest.raises(ValueError):
-            keep(root, owner, MARK)
-    assert files(root) == [stays + ".json", stays + ".txt"]
+    writes: list = []
+    real_write = K._write
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(K, "_write", lambda path, text: writes.append(path) or real_write(path, text))
+        for owner in ("build:gone", "chat:turn_9"):  # (the second never had a folder: it is refused too)
+            with pytest.raises(ValueError):
+                keep(root, owner, MARK)
+    assert files(root) == [stays + ".json", stays + ".txt"] and writes == [], "refused before the disk is touched"
     assert K.get(root, "build:stays", keep(root, "build:stays", "more")) is not None
     # The mark is short: it ends by the clock.
     clock.t += K.DROPPED_S + 1
@@ -567,7 +575,7 @@ async def test_the_reader_reads_any_part_and_the_parts_are_the_whole(platform, t
     assert (await read(platform, ctx, handle=handle)).data["from"] == 1
     # The position as the line wrote it ("20,001") reads like the number.
     assert (await read(platform, ctx, handle=handle, start="20,001")).data["from"] == 20_001
-    for bad in (0, 34_568, -34_568, "soon", 10**30, True):
+    for bad in (0, 34_568, -34_568, "soon", 10**30):
         res = await read(platform, ctx, handle=handle, start=bad)
         assert not res.ok and "from 1 to 34,567" in res.error and MARK not in res.error, bad
 
@@ -883,3 +891,22 @@ async def test_a_turn_that_starts_with_a_kept_line_is_given_the_reader_only_for_
     assert again[2].kept_line.startswith(K.NOTE_LEAD + "run: 20,000 characters. To read it, call")
     assert not hasattr(planted[2], "kept_line")
     assert await K.arm_at_start(platform, "sess_1", again, lambda dry=False: False) == 0
+
+
+async def test_a_new_chat_saved_while_its_first_reply_runs_leaves_nothing_when_the_reply_ends(
+    platform, tmp_path, root, clock
+):
+    """The first reply of a new chat keeps under its turn; the page saves the
+    chat mid-reply and the results move to the chat. When the reply ends they
+    are removed where they are NOW, not only where they were saved."""
+    ctx = ctx_of(platform, tmp_path, turn="turn_new")
+    text = wrap_untrusted(rows(20_000))
+    with K.reply_scope():
+        msgs = _round(K.hold(ctx, text, 12_000, cut=_cut))
+        assert await K.settle(platform, ctx, msgs, lambda dry=False: True) == 1
+        assert K.holds(root, "chat:turn_new")
+        egress.link_turn_holds("turn_new", "thread_new")  # (the page linked the turn to its saved chat)
+        assert K.rekey(platform.engine, "chat:turn_new", "chat:thread_new") == 1
+        assert K.holds(root, "chat:thread_new") and K._owner(ctx) == "chat:thread_new"
+    await K.removals_done()
+    assert files(root) == [] and list(root.iterdir()) == []

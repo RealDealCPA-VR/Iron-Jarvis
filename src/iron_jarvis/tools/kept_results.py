@@ -120,8 +120,9 @@ MAX_RESULT_CHARS = 4_000_000
 #: The longest WHOLE a document reader may hand over to be shown or kept
 #: (``ToolResult.whole``). The whole must be scanned for planted instructions
 #: before any of it is shown, and that scan holds the interpreter: measured
-#: 0.07 s at this size on prose. Over it: the tool's own cut, and a line that
-#: says the rest was not kept.
+#: at this size, the event loop stalls 0.09 s on prose and up to 0.65 s on
+#: text built to be slow (2.7 s at 4,000,000). Over it: the tool's own cut,
+#: and a line that says the rest was not kept.
 MAX_WHOLE_CHARS = 1_000_000
 #: The most results one chat, run or coding session holds, and the most
 #: characters in all: the script shelf's own bounds for one chat's kept values
@@ -511,8 +512,11 @@ def put(root: Path, owner: str, text: str, *, own_source: bool, local_only: bool
             if str(root) in _TOTALS:
                 _TOTALS[str(root)] += (folder / (handle + ".txt")).stat().st_size
             _make_room(root)
-            if handle in _ABANDONED or _dropped(root, owner):
-                raise ValueError("not kept: its chat is gone, or nobody waits for it")
+            if handle in _ABANDONED:
+                # (Given up on while it was being written. A dropped owner
+                # needs no second look: the drop waits for this lock, and
+                # removes what it finds.)
+                raise ValueError("not kept: nobody waits for it")
         except BaseException:
             _remove(folder, handle)
             _TOTALS.pop(str(root), None)  # (counted afresh at the next save)
@@ -1021,8 +1025,9 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) 
             if plain and reply is not None:
                 reply.kept.append((root, ctx, owner, handle))
         return len(plans)
-    except Exception:  # noqa: BLE001 — the round's messages stay the old cut
-        log.warning("a long result could not be kept; it was cut as before", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — the round's messages stay the old cut
+        # (The kind of failure only: its own words can name a file's path.)
+        log.warning("a long result could not be kept (%s); it was cut as before", type(exc).__name__)
         return 0
     finally:
         left = [h for h in saved if h not in told]

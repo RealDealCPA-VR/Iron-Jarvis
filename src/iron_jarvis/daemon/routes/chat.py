@@ -6216,9 +6216,10 @@ async def chat_stream(
             # v1.391.0: a resumed coding reply — the cut-off rounds are the
             # turn's own growing part, never fixed history.
             _head = _resume_head
-        # Release 8 of the intelligence plan (lock-step: chat_turn): a coding
-        # reply that starts with a kept-result line (one picked up after a
-        # restart reads its cut-off rounds back) has its reader.
+        # Release 8 of the intelligence plan: a coding reply that starts with
+        # a kept-result line (one picked up after a restart reads its cut-off
+        # rounds back, `resume_tail` above) has its reader. This lane only:
+        # the POST lane never resumes a reply.
         await _chat_turn.kept_reader_at_start(
             d, msgs, ctx, armed=armed, auto_armed=auto_armed, ask_armed=ask_armed,
             tool_specs=tool_specs, overrides=overrides, armed_grant=armed_grant,
