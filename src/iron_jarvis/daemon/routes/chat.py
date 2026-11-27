@@ -9211,6 +9211,10 @@ async def chat_stream(
             # v1.330.0: plain words, the endpoint's own name. MIRROR NOTE
             # (lock-step): chat_turn.run_chat_turn appends the same helper.
             reply += _chat_turn.text_only_note(d.platform, provider_choice)
+        # Release 9: a model that kept stumbling was guided step by step for
+        # this reply; one quiet line says so. MIRROR NOTE (lock-step):
+        # chat_turn.run_chat_turn appends the same helper.
+        reply += _chat_turn.guided_note(_facts)
         # INLINE MEDIA (v1.346.0, contract 4c): every file a tool MADE this
         # turn that the settled reply does not already show is appended as
         # the markdown image syntax — before the done frame, whose `reply`

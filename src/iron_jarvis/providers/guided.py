@@ -524,10 +524,15 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
                 except (TypeError, ValueError):
                     pass
             parsed = parse_guided_tool_call(resp.text, known=known)
+            # Release 9: a reply that needed the repair round was not usable
+            # the first time (router._note_form records it per model).
             if parsed.done:
                 # The done pseudo-tool IS the plain answer of this protocol —
                 # only its message is user-visible, never the JSON envelope.
-                return LLMResponse(text=parsed.message, finish_reason="stop", usage=usage)
+                return LLMResponse(
+                    text=parsed.message, finish_reason="stop", usage=usage,
+                    form_repaired=round_no > 0,
+                )
             if parsed.call is not None:
                 # Indistinguishable from the native path downstream: struct
                 # call, tool_use finish, and NO scaffold text.
@@ -536,6 +541,7 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
                     tool_calls=[parsed.call],
                     finish_reason="tool_use",
                     usage=usage,
+                    form_repaired=round_no > 0,
                 )
             if round_no >= GUIDED_REPAIRS:
                 break
@@ -569,4 +575,6 @@ class GuidedToolsAdapter(PromptedToolsAdapter):
                 fallback.usage[k] = int(fallback.usage.get(k, 0)) + usage[k]
             except (TypeError, ValueError):
                 pass
+        # Release 9: the guided form did not hold twice — not usable.
+        fallback.form_repaired = True
         return fallback

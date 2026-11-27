@@ -362,12 +362,15 @@ class PromptedToolsAdapter(LLMAdapter):
                 except (TypeError, ValueError):
                     pass
             call, cleaned, error = _parse_reply(resp.text, known)
+            # Release 9: a reply that needed a repair round was not usable the
+            # first time (router._note_form records it per model).
             if call is not None:
                 return LLMResponse(
                     text=cleaned,
                     tool_calls=[call],
                     finish_reason="tool_use",
                     usage=usage,
+                    form_repaired=round_no > 0,
                 )
             if error is None:
                 # Plain answer — pass the inner's text through untouched.
@@ -375,6 +378,7 @@ class PromptedToolsAdapter(LLMAdapter):
                     text=resp.text, finish_reason=resp.finish_reason, usage=usage,
                     # v1.323.0: display-only reasoning rides through untouched.
                     thinking=getattr(resp, "thinking", "") or "",
+                    form_repaired=round_no > 0,
                 )
             if round_no >= self._max_repairs:
                 break
@@ -398,4 +402,4 @@ class PromptedToolsAdapter(LLMAdapter):
         # Repairs exhausted: honest degradation — the model's own words, as a
         # plain answer. Never fabricate a call it didn't manage to make.
         assert resp is not None
-        return LLMResponse(text=resp.text, finish_reason="stop", usage=usage)
+        return LLMResponse(text=resp.text, finish_reason="stop", usage=usage, form_repaired=True)

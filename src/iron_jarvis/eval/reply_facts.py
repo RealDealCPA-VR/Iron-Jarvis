@@ -78,6 +78,11 @@ class ReplyFacts:
         self.for_run = False
         #: The ``input_tokens`` of the run's calls that reported a cache figure.
         self.cache_input = 0
+        #: The intelligence plan, release 9: one of this reply's own model
+        #: calls was asked in the more guided form because the model had been
+        #: stumbling (``router._guide_if_stumbling``). The lanes add the quiet
+        #: line from it; nothing else.
+        self.guided = False
         #: The usage scope this reply's own model calls are made in: a call
         #: made in any other scope (a tool's) is not this reply's.
         self._home = _call_scope()
@@ -159,6 +164,19 @@ def current() -> "ReplyFacts | None":
         return None
 
 
+def note_guided() -> None:
+    """THE ROUTER'S SEAM (release 9): this reply's own model call is being
+    guided step by step. Kept only for a call made in the scope the reply
+    began in (a tool's own model call is not this reply's). Never raises."""
+    try:
+        facts = _FACTS.get()
+        if facts is None or _call_scope() is not facts._home:
+            return
+        facts.guided = True
+    except Exception:  # noqa: BLE001 — a record never breaks a request
+        pass
+
+
 def note_model_time(seconds: Any) -> None:
     """THE ROUTER'S SEAM: one model call answered after *seconds*. Counted on
     the current reply only when the call is the reply's own (made in the
@@ -172,4 +190,6 @@ def note_model_time(seconds: Any) -> None:
         pass
 
 
-__all__ = ["ReplyFacts", "begin", "clock", "current", "note_model_time", "now", "scope"]
+__all__ = [
+    "ReplyFacts", "begin", "clock", "current", "note_guided", "note_model_time", "now", "scope",
+]

@@ -461,6 +461,9 @@ class OpenAIAdapter(LLMAdapter):
         # lanes continue the turn honestly.
         length_cut = choice.get("finish_reason") == "length"
         cut_calls: list[str] = []
+        # Release 9: a call whose arguments had to be recovered from broken
+        # JSON was not answered in a usable form (router._note_form).
+        repaired = False
         for raw in message.get("tool_calls") or []:
             fn = raw.get("function") or {}
             args_str = fn.get("arguments") or ""
@@ -479,6 +482,7 @@ class OpenAIAdapter(LLMAdapter):
                 from ...core.jsonish import loads_object
 
                 args = loads_object(args_str) or {}
+                repaired = True
             # v1.228.0 (T2): a local model may wrap the real arguments in an
             # ``{"arguments": "<json>"}`` envelope — valid JSON, so the
             # fallback above never fires and the tool crashed on KeyError.
@@ -521,6 +525,7 @@ class OpenAIAdapter(LLMAdapter):
             usage=usage_dict,
             thinking=_reasoning_of(message),
             cut_calls=cut_calls,
+            form_repaired=repaired,
         )
 
     # -- ChatGPT (Codex) backend shaping -------------------------------------
