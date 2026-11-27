@@ -76,7 +76,12 @@ def test_a_pdf_that_gives_orders_reaches_the_model_as_an_attachment(tmp_path, mo
     users = [m for m in seen["messages"][0] if getattr(m, "role", "") == "user"]
     # (Release 7: the file's text rides beside the message, fenced; the
     # person's own words are still the caption alone.)
-    assert users and own_words(users[-1].content).strip() == "what is the rent?"
+    assert users and own_words(users[-1].content) == "what is the rent?"
+    # ...and the PDF's text is inside the found block, never outside it.
+    from iron_jarvis.context import prefix as _prefix
+
+    assert system.index(_prefix.FOUND_TOP) < system.index("Rent 1,450") < system.index(_prefix.FOUND_BOTTOM)
+    assert system.count("Rent 1,450") == 1
     for msgs in seen["messages"]:
         for m in msgs:
             assert POISON not in str(getattr(m, "content", ""))
