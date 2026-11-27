@@ -1213,6 +1213,12 @@ async def execute_plan(
                 await asyncio.to_thread(record_outcome, bool(ok))
             except Exception:  # noqa: BLE001
                 pass
+        # The intelligence plan, release 5: the step's check also goes to the
+        # one record of checks (``checks/existing.step_check``): passed or
+        # failed, by rule for the file gate or by the judging model's name;
+        # ``not_checked`` for a step whose check did not run. Nothing else
+        # here changes. Off the loop; never raises.
+        await _note_step_check(p, session, run, results[-1], judge_llm)
         prior.append(_prior_line(results[-1]))
         if on_step is not None:
             await on_step(results)
@@ -1235,6 +1241,39 @@ async def execute_plan(
             session_id=session.id,
         )
     return results
+
+
+async def _note_step_check(p: Any, session: Any, run: Any, result: StepResult, judge_llm: Any) -> None:
+    """One row of the record of checks for a step's check (release 5 of the
+    intelligence plan). ``by`` names the model that judged it: the "judge"
+    role's when one is set, else the session's own. Never raises."""
+    try:
+        from ..checks import existing as _existing
+        from ..checks import record as _checks
+
+        judge = ""
+        if result.verified in ("model", NOT_CHECKED):
+            from .model_team import model_words
+
+            judge = str(model_words(
+                p, str(getattr(judge_llm, "provider", None) or getattr(session, "provider", "") or ""),
+                str(getattr(judge_llm, "model", None) or getattr(session, "model", "") or ""),
+            ) or "")
+        row = _existing.step_check(result, judge=judge, run_id=str(getattr(run, "id", "") or ""))
+        if row is not None:
+            from ..checks.turn import run_owner
+
+            # Under the run's chat, unless the run keeps its words on this PC
+            # and that chat is not Local only (``run_owner``, off the loop).
+            engine = getattr(p, "engine", None)
+            owner = await asyncio.to_thread(run_owner, engine, session)
+            await _checks.note(engine, [row], session_id=str(getattr(session, "id", "") or ""), **owner)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — a record is never worth a failed step
+        import logging
+
+        logging.getLogger(__name__).debug("a step's check was not recorded", exc_info=True)
 
 
 # ------------------------------------------------------------------ assembling

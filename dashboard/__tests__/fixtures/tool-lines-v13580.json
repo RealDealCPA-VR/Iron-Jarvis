@@ -224,6 +224,10 @@
       "ok": "saved a chat to the work record",
       "failed": "tried a saved chat and it failed"
     },
+    "checks_list": {
+      "ok": "looked up what Iron Jarvis checked",
+      "failed": "tried a check lookup and it failed"
+    },
     "client_answer": {
       "ok": "noted whether a name is one of your clients",
       "failed": "tried a client answer and it failed"

@@ -318,10 +318,17 @@ def final_note(
     return "\n".join(lines)
 
 
-def turn_note(scope: TaskScope, steplog: Any) -> str:
-    """The whole note for a finished turn (BLOCKING; never raises)."""
+def turn_note(scope: TaskScope, steplog: Any, states_out: "list[FileState] | None" = None) -> str:
+    """The whole note for a finished turn (BLOCKING; never raises).
+
+    *states_out* (the intelligence plan, release 5): when given, it is
+    filled with each required file's state as this look found it, so the one
+    record of checks holds a row per file (``checks/existing``) without a
+    second look on disk. The note is the same either way."""
     try:
         states = check_deliverables(scope)
+        if states_out is not None:
+            states_out[:] = states
         changes = outside_changes(scope)
         return final_note(
             scope, states,

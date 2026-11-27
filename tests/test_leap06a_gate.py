@@ -252,6 +252,10 @@ LETS_RUN: dict[str, str] = {
         "reads the calling chat's own record of what each reply was sent (sizes only; the intelligence "
         "plan, release 6); takes no argument and writes nothing"
     ),
+    "checks_list": (
+        "reads Iron Jarvis's own record of what it checked in the calling chat (the intelligence plan, "
+        "release 5); runs no check again and writes nothing"
+    ),
     "client_list": _RECORDS,
     "code_handoff_check": "waits on a coding helper that code_handoff_start started, and a rehearsal holds that",
     "code_handoff_list": "lists the coding tools and this session's helpers; starts none",

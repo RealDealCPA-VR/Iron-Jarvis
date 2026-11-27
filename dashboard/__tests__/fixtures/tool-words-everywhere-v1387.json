@@ -60,6 +60,7 @@
     "chat_fullness",
     "chat_local_only",
     "chat_record",
+    "checks_list",
     "client_answer",
     "client_list",
     "client_preference_add",
@@ -325,6 +326,7 @@
     "chat_fullness": "look up what is filling this chat",
     "chat_local_only": "change Local only for this chat",
     "chat_record": "save a chat to the work record",
+    "checks_list": "look up what Iron Jarvis checked",
     "client_answer": "say whether a name is one of your clients",
     "client_list": "list your clients",
     "client_preference_add": "keep a preference for one client",
@@ -706,6 +708,10 @@
     "chat_record": [
       "Saved a chat to the work record",
       "Saving a chat to the work record"
+    ],
+    "checks_list": [
+      "Looked up what Iron Jarvis checked",
+      "Looking up what Iron Jarvis checked"
     ],
     "client_answer": [
       "Noted whether a name is one of your clients",
@@ -1424,6 +1430,7 @@
     "chat_fullness": "",
     "chat_local_only": "",
     "chat_record": "",
+    "checks_list": "",
     "client_answer": "",
     "client_list": "",
     "client_preference_add": "",

@@ -840,6 +840,25 @@ def session_result(
                 out["duration_s"] = None
     except Exception:  # noqa: BLE001 — a result card must never break a turn
         return out
+    if receipt and (out.get("files_created_total") or out.get("files_changed_total")):
+        # The intelligence plan, release 5: WHAT IRON JARVIS CHECKED on the
+        # files this run made, read from the one record of checks
+        # (``checks/turn.run_payload``: the line, its tone, the list). The
+        # RECEIPT read only (the result card and the chat's delivered line):
+        # never the finalize, coach or compaction readers, and never the
+        # answer posted back to another computer. Present ONLY when the run
+        # made or changed a file and the record holds a check of one. The
+        # card's own list goes with it: a file on the card that no check of
+        # THIS run covers (a team lead's card lists its workers' documents)
+        # is said on the line as not checked, never left to read as covered.
+        try:
+            from ..checks.turn import run_payload
+
+            checked = run_payload(engine, session_id, out.get("documents"))
+            if checked is not None:
+                out["checked"] = checked
+        except Exception:  # noqa: BLE001 — a receipt line, never the result
+            pass
     return out
 
 

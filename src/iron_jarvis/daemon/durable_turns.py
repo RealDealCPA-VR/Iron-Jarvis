@@ -521,6 +521,17 @@ def reply_line(turn_id: str, frames: Any, status: str, *,
                 more = (done or {}).get("used_more")
                 if isinstance(more, int) and not isinstance(more, bool) and more > 0:
                     line["usedMore"] = more
+            # The intelligence plan, release 5: what Iron Jarvis checked on
+            # the files the reply made, so a reply written home by the daemon
+            # (and a reopened chat) shows its "Checked by Iron Jarvis" line
+            # (only when there is one: every other line is as before). By
+            # whitelist (``checks/record.clean_checked``, the shape the page's
+            # own decoder accepts); the chat's writer cleans it the same way.
+            from ..checks.record import clean_checked
+
+            checked = clean_checked((done or {}).get("checked"))
+            if checked is not None:
+                line["checked"] = checked
             return {**line, **rows_extra}
         if status == "error":
             if partial:

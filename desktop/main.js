@@ -4566,6 +4566,7 @@ const TOOL_WORDS_BUILTIN = {
   chat_fullness: "look up what is filling this chat",
   chat_local_only: "change Local only for this chat",
   chat_record: "save a chat to the work record",
+  checks_list: "look up what Iron Jarvis checked",
   client_answer: "say whether a name is one of your clients",
   client_list: "list your clients",
   client_preference_add: "keep a preference for one client",

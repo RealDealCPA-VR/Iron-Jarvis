@@ -225,6 +225,9 @@ AUTO_SAFE_TOOLS: frozenset[str] = frozenset(
         # What is filling this chat (the intelligence plan, release 6):
         # READ-ONLY, the calling chat's own record of sizes, no argument.
         "chat_fullness",
+        # What Iron Jarvis checked (the intelligence plan, release 5):
+        # READ-ONLY, its own record of checks, for the calling chat only.
+        "checks_list",
         # Saved workflows (v1.170.0): READ-ONLY discovery — name/description/
         # step count/project pin of what the user already saved. Deliberately
         # NOT workflow_run: starting a run spawns multi-minute agent work with
@@ -1629,6 +1632,14 @@ _CHAT_FULL_SUBJECT = (
     r"pits?|pools?|spools?|counts?)\b)"
 )
 
+#: What Iron Jarvis checks on its WORK (the intelligence plan, release 5): the
+#: only things a "did you check ...?" may name for `checks_list` to arm.
+_CHECKED_WORK = (
+    r"(?:totals?|subtotals?|numbers?|figures?|sums?|maths?|arithmetic|formulas?|calculations?|files?"
+    r"|spreadsheets?|workbooks?|sheets?|documents?|docs?|reports?|pdfs?|tables?|outputs?|results?|work"
+    r"|answers?|cells?|columns?|rows?)"
+)
+
 _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
     # --- what the browser downloaded (v1.444.0) -----------------------------
     # "the file I just downloaded", "my downloads", "the PDF I downloaded from
@@ -2858,6 +2869,39 @@ _RULES: list[tuple[re.Pattern[str], dict[str, int]]] = [
             re.IGNORECASE,
         ),
         {"chat_fullness": 8},
+    ),
+    # --- what Iron Jarvis CHECKED (the intelligence plan, release 5) --------
+    # "what did you check?", "what was checked?", "did you check the
+    # totals?", "how do you know the spreadsheet is right?": a question
+    # about Iron Jarvis's checks of its WORK in this chat, which
+    # `checks_list` reads from its own record. Narrow on purpose:
+    #   * "you"/"Jarvis" as the checker, in the past ("check my email" and
+    #     "can you check the contract" ask for something to be done now);
+    #   * what was checked must be the WORK (`_CHECKED_WORK`: totals,
+    #     numbers, a file, a spreadsheet, a report ...), or a bare "it" /
+    #     "that" that ends the question. "did you check the weather?", "have
+    #     you checked the mail" and "what did you check in to the repo" are
+    #     about something else and arm nothing here;
+    #   * "how do I know <the work> is right", never "... is right for us".
+    (
+        re.compile(
+            r"\b(?:what|which\s+(?:things?|files?|parts?|sheets?))\s+(?:did|have|has)\s+"
+            r"(?:you|jarvis|iron\s+jarvis|it)\s+(?:actually\s+|really\s+|already\s+)?"
+            r"(?:check|checked|double[\s-]?check(?:ed)?)\b(?!\s+(?:in|into|out|off|with)\b)"
+            r"|\bwhat\s+(?:was|got|has\s+been|were)\s+(?:actually\s+|really\s+)?checked\b(?!\s+(?:in|into|out|off)\b)"
+            r"|\b(?:did|have)\s+(?:you|jarvis|iron\s+jarvis)\s+(?:actually\s+|really\s+|already\s+|even\s+)?"
+            r"(?:check|checked|double[\s-]?check(?:ed)?)\s+(?:"
+            r"(?:(?:the|that|this|those|these|its|my|your|all\s+(?:of\s+)?the|any\s+of\s+the|all|any)\s+)?"
+            r"(?:grand\s+|final\s+)?" + _CHECKED_WORK + r"\b"
+            r"|(?:if|whether|that)\s+(?:it|they|this|that|the\s+" + _CHECKED_WORK + r")\b"
+            r"|(?:it|them|that|this|those|these)(?=\s*(?:[?.!,;]|$)))"
+            r"|\bhow\s+do\s+(?:you|i|we)\s+know\s+(?:that\s+)?(?:it|this|that|they|the\s+" + _CHECKED_WORK + r")\s+"
+            r"(?:(?:is|are)\s+(?:right|correct|accurate)(?!\s+for\b)|adds?\s+up)\b"
+            r"|\bwhat\s+(?:could|did)\s+(?:you\s+)?not\s+(?:be\s+)?check(?:ed)?\b"
+            r"|\bwhat\s+(?:was|were)\s+not\s+checked\b",
+            re.IGNORECASE,
+        ),
+        {"checks_list": 8},
     ),
     # --- saved workflows (v1.170.0) ---------------------------------------
     # "run my month-end workflow", "what workflows do I have" — the module is

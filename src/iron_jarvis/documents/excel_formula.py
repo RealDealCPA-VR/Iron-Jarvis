@@ -681,6 +681,9 @@ def _raise(exc: Exception) -> Any:
 # ----------------------------------------------------------------- values ----
 
 
+_NUMBER_TEXT_RX = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
 def _as_num(v: Any) -> float:
     if isinstance(v, _Range):
         if v.width == 1 and v.height == 1:
@@ -691,14 +694,18 @@ def _as_num(v: Any) -> float:
     if isinstance(v, bool):
         return 1.0 if v else 0.0
     if isinstance(v, (int, float)):
+        if not math.isfinite(v):
+            # A cell that holds NaN or infinity: no spreadsheet number at all.
+            raise FormulaError("a cell holds a number that is not a number, so this cannot be worked out")
         return float(v)
     text = str(v).strip()
-    try:
-        if text.endswith("%"):
-            return float(text[:-1].replace(",", "")) / 100.0
-        return float(text.replace(",", "").replace("$", ""))
-    except (TypeError, ValueError):
-        raise ExcelError("#VALUE!", f"cannot use text {text[:40]!r} as a number") from None
+    percent = text.endswith("%")
+    digits = (text[:-1] if percent else text).replace(",", "").replace("$", "").strip()
+    # Text is a number only when it is spelled as one. Python's float() also
+    # reads "nan", "inf", "Infinity" and "1_000": Excel reads none of them.
+    if _NUMBER_TEXT_RX.match(digits) is None:
+        raise ExcelError("#VALUE!", f"cannot use text {text[:40]!r} as a number")
+    return float(digits) / 100.0 if percent else float(digits)
 
 
 def _as_text(v: Any) -> str:
@@ -749,12 +756,19 @@ def _divide(a: float, b: float) -> float:
 
 
 def _power(a: float, b: float) -> float:
+    if a == 0 and b == 0:
+        raise ExcelError("#NUM!", "0 to the power 0")      # Excel: =0^0 is #NUM!
+    if a == 0 and b < 0:
+        raise ExcelError("#DIV/0!", "0 to a negative power")
     try:
         out = a ** b
     except (OverflowError, ZeroDivisionError):
         raise ExcelError("#NUM!", "the power is out of range") from None
     if isinstance(out, complex):
-        raise ExcelError("#NUM!", "a negative number cannot take that power")
+        # A negative number to a power that is not whole. Excel works some
+        # of these out (=(-8)^(1/3) is -2) and refuses others (#NUM!): which
+        # is not worked out here, so no clean number and no error is claimed.
+        raise FormulaError("a negative number to a power that is not whole cannot be worked out here")
     return float(out)
 
 
@@ -807,6 +821,33 @@ def _flat(args: list[Any]) -> list[Any]:
         else:
             out.append(a)
     return out
+
+
+def _count(args: list[Any], *, numbers_only: bool) -> float:
+    """COUNT and COUNTA. A cell of a range that holds an ERROR does not make
+    the count an error (Excel: COUNT skips it, COUNTA counts it); every
+    other function over that range still gives the error."""
+    n = 0
+    for a in args:
+        if isinstance(a, _Range):
+            for r in range(a.r1, a.r2 + 1):
+                for c in range(a.c1, a.c2 + 1):
+                    try:
+                        v = a.grid.get(a.sheet, c, r)
+                    except ExcelError:
+                        n += 0 if numbers_only else 1
+                        continue
+                    if numbers_only:
+                        n += isinstance(v, (int, float)) and not isinstance(v, bool)
+                    else:
+                        n += v is not None and v != ""
+        elif numbers_only:
+            if a is not None:
+                _as_num(a)      # a literal argument must be a number, as before
+                n += 1
+        else:
+            n += a is not None and a != ""
+    return float(n)
 
 
 def _numeric_items(args: list[Any]) -> list[float]:
@@ -895,7 +936,10 @@ def _ifs_mask(pairs: list[Any]) -> list[bool]:
 
 
 def _date_of(v: Any) -> _dt.datetime:
-    return from_serial(_as_num(v))
+    n = _as_num(v)
+    if n < 0:
+        raise ExcelError("#NUM!", "a date cannot be a negative number")     # Excel: =YEAR(-5) is #NUM!
+    return from_serial(n)
 
 
 def _add_months(d: _dt.datetime, months: int) -> tuple[int, int]:
@@ -980,11 +1024,25 @@ SUPPORTED: tuple[str, ...] = (
 )
 
 _LAZY = frozenset({"IF", "IFERROR", "IFNA", "AND", "OR", "ISERROR", "ISNA"})
+_KNOWN = frozenset(SUPPORTED)
+
+
+def _not_supported(name: str) -> FormulaError:
+    return FormulaError(
+        f"function {name} is not supported by the checker — it cannot be worked out here. "
+        f"Supported: {', '.join(SUPPORTED)}"
+    )
 
 
 def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - one flat table
     if name in _LAZY:
         return _call_lazy(name, thunks)
+    if name not in _KNOWN:
+        # Refused BEFORE its arguments are worked out: a function this
+        # engine does not know may never look at some of them (CHOOSE works
+        # out only the one it picks), so an error in an argument is not the
+        # formula's result. =CHOOSE(1,5,1/0) is 5 in Excel.
+        raise _not_supported(name)
     args = [t() for t in thunks]
     n = len(args)
 
@@ -997,8 +1055,11 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
     if name == "SUM":
         return math.fsum(_numeric_items(args))
     if name == "PRODUCT":
+        items = _numeric_items(args)
+        if not items:
+            return 0.0      # Excel: the product of no numbers at all is 0
         out = 1.0
-        for v in _numeric_items(args):
+        for v in items:
             out *= v
         return out
     if name == "AVERAGE":
@@ -1026,9 +1087,9 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
             raise ExcelError("#NUM!", f"{name} has no item number {k}")
         return items[k - 1]
     if name == "COUNT":
-        return float(len(_numeric_items(args)))
+        return _count(args, numbers_only=True)
     if name == "COUNTA":
-        return float(sum(1 for v in _flat(args) if v is not None and v != ""))
+        return _count(args, numbers_only=False)
     if name == "COUNTBLANK":
         need(1)
         return float(sum(1 for v in _need_range(args[0], name).values() if v is None or v == ""))
@@ -1066,7 +1127,13 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
         need(1, 2)
         x = _as_num(args[0])
         step = _as_num(args[1]) if n == 2 else 1.0
+        # Excel's own rules: a positive number with a negative step is #NUM!;
+        # FLOOR by 0 is #DIV/0! (CEILING by 0 is 0).
+        if x > 0 and step < 0:
+            raise ExcelError("#NUM!", f"{name} of a positive number needs a positive step")
         if step == 0:
+            if name == "FLOOR" and x != 0:
+                raise ExcelError("#DIV/0!", "FLOOR by zero")
             return 0.0
         q = Decimal(repr(x)) / Decimal(repr(step))
         whole = q.to_integral_value(rounding="ROUND_CEILING" if name == "CEILING" else "ROUND_FLOOR")
@@ -1151,7 +1218,17 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
     if name == "MATCH":
         need(2, 3)
         kind = 1 if n < 3 or args[2] is None else int(_as_num(args[2]))
-        return float(_match(_need_range(args[1], name).values(), _scalar(args[0]), kind) + 1)
+        rng = _need_range(args[1], name)
+        if rng.width > 1 and rng.height > 1:
+            raise ExcelError("#N/A", "MATCH looks along one row or one column")     # Excel: #N/A
+        keys = rng.values()
+        if kind < 0:
+            # -1 needs a list sorted from large to small; over any other
+            # order Excel's answer depends on how it searches. Not guessed.
+            ranks = [_rank(k) for k in keys if k is not None]
+            if any(a < b for a, b in zip(ranks, ranks[1:])):
+                raise FormulaError("MATCH with -1 needs a list sorted from large to small")
+        return float(_match(keys, _scalar(args[0]), kind) + 1)
     if name == "INDEX":
         need(2, 3)
         rng = _need_range(args[0], name)
@@ -1217,6 +1294,12 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
     if name == "DATE":
         need(3)
         y, m, d = int(_as_num(args[0])), int(_as_num(args[1])), int(_as_num(args[2]))
+        if y < 0 or y > 9999:
+            # Excel answers #NUM! here. Adding 1900 to a negative year gave a
+            # date before the calendar starts, as a clean number (the checks
+            # of a made file read that as "no error"). Said as "cannot be
+            # worked out", never as a value.
+            raise FormulaError("DATE: that year is outside the dates a spreadsheet holds")
         year, month = _add_months(_dt.datetime(y if y >= 1900 else y + 1900, 1, 1), m - 1)
         try:
             return to_serial(_dt.datetime(year, month, 1) + _dt.timedelta(days=d - 1))
@@ -1233,14 +1316,32 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
         need(2)
         start = _date_of(_scalar(args[0]))
         year, month = _add_months(start, int(_as_num(args[1])))
-        last = _month_end(year, month)
-        day = last if name == "EOMONTH" else min(start.day, last)
-        return to_serial(_dt.datetime(year, month, day))
+        try:
+            last = _month_end(year, month)
+            day = last if name == "EOMONTH" else min(start.day, last)
+            serial = to_serial(_dt.datetime(year, month, day))
+        except (ValueError, OverflowError):
+            serial = -1.0
+        if serial < 0:
+            # A month before the calendar starts (or past its end) came out
+            # as a clean negative number. Excel documents #NUM! for EOMONTH;
+            # for EDATE it documents nothing, so that one is "cannot be
+            # worked out" (the same rule as DATE above).
+            if name == "EOMONTH":
+                raise ExcelError("#NUM!", "not a valid date")
+            raise FormulaError("EDATE: that month is outside the dates a spreadsheet holds")
+        return serial
     if name in ("PMT", "FV", "PV"):
         need(3, 5)
         rate, nper, third = _as_num(args[0]), _as_num(args[1]), _as_num(args[2])
         fourth = _as_num(args[3]) if n >= 4 and args[3] is not None else 0.0
-        due = 1.0 if n == 5 and _as_num(args[4]) != 0 else 0.0
+        when = _as_num(args[4]) if n == 5 and args[4] is not None else 0.0
+        if when not in (0.0, 1.0):
+            # Payments are due at the end (0) or the start (1) of a period.
+            # Excel documents no other value: "cannot be worked out", never
+            # a clean number read as if 1 had been written.
+            raise FormulaError(f"{name}: the last argument is 0 or 1")
+        due = when
         if nper == 0 and name == "PMT":
             raise ExcelError("#NUM!", "PMT needs at least one period")
         if rate == 0:
@@ -1269,6 +1370,10 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
     if name == "SYD":
         need(4)
         cost, salvage, life, per = (_as_num(a) for a in args)
+        if life <= 0 or per < 1 or per > life:
+            # The same range DDB below checks. Excel documents no error for
+            # SYD here: "cannot be worked out", never a clean number.
+            raise FormulaError("SYD needs a period between 1 and the life")
         return (cost - salvage) * (life - per + 1) * 2 / (life * (life + 1))
     if name == "DDB":
         need(4, 5)
@@ -1281,10 +1386,7 @@ def _call(name: str, thunks: list[Thunk], grid: Grid) -> Any:  # noqa: C901 - on
             dep = min(book * factor / life, max(0.0, book - salvage))
             book -= dep
         return dep
-    raise FormulaError(
-        f"function {name} is not supported by the checker — it cannot be worked out here. "
-        f"Supported: {', '.join(SUPPORTED)}"
-    )
+    raise _not_supported(name)
 
 
 def _call_lazy(name: str, thunks: list[Thunk]) -> Any:
@@ -1368,7 +1470,10 @@ def _evaluate(formula: str, grid: Grid, sheet: str) -> Any:
     if len(src) > 8192:
         raise FormulaError("the formula is too long to work out here")
     try:
-        return _Parser(_tokenize(src), grid, sheet).parse()()
+        out = _Parser(_tokenize(src), grid, sheet).parse()()
+        if isinstance(out, float) and not math.isfinite(out):
+            raise OverflowError      # a result too large to hold: Excel's #NUM!
+        return out
     except RecursionError:
         raise FormulaError("the formula is nested too deeply to work out here") from None
     except (OverflowError, ZeroDivisionError):

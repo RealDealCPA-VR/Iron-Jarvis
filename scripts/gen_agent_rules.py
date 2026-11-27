@@ -58,7 +58,7 @@ PACKAGE_AREAS: dict[str, list[str]] = {
     "browser": ["browser", "computeruse"],
     "build": ["codehost.py", "fsbrowser", "git", "harness", "harness_bench", "hosted",
               "terminals"],
-    "chat": ["capability_search", "deliverables", "search", "voice.py"],
+    "chat": ["capability_search", "checks", "deliverables", "search", "voice.py"],
     "ci": ["changelog.py"],
     "connections": ["connections", "connectors", "integrations", "mcp", "mcpserver"],
     "context": ["context", "repl"],

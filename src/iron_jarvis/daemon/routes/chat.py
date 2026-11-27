@@ -341,11 +341,13 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
     a sync route runs it in the threadpool."""
     from ...core.db import search_index
     from ...core.models import ChatThreadRecord, is_build_thread
+    from ...checks import record as _checks
     from ...documents import source_store as _marks
     from ..chat_append import drop_older, ensure_older_table
 
     older_ok = ensure_older_table(engine)  # outside the transaction
     marks_ok = _marks.ensure_table(engine)  # outside the transaction
+    checks_ok = _checks.ensure_table(engine)  # outside the transaction
     with _THREAD_SAVE_LOCK, session_scope(engine) as db:
         r = db.get(ChatThreadRecord, thread_id)
         if r is None:
@@ -359,6 +361,10 @@ def delete_thread(engine: Any, thread_id: str) -> bool:
         # (not the kept ones), in this same transaction.
         if marks_ok:
             _marks.drop_thread(db, thread_id)
+        # The intelligence plan, release 5: and the record of what Iron
+        # Jarvis checked in it, in this same transaction.
+        if checks_ok:
+            _checks.drop_thread(db, thread_id)
         # Third plan CS7: and its turn records (each reply's text, thinking,
         # tool inputs and results), in this same transaction.
         _durable.drop_thread_records(db, thread_id)
@@ -2248,6 +2254,14 @@ def register(app: FastAPI, d) -> None:
                 derived = _derive_thread_documents(msgs, setup)
             except Exception:  # noqa: BLE001 — recovery must never break a thread
                 derived = []
+        # The intelligence plan, release 5: a reply's saved "Checked by Iron
+        # Jarvis" line says what its files held when the reply ended. The
+        # checks of a file that has changed since are taken off it as the
+        # chat is served (``checks/turn.reopened``: never raises, writes
+        # nothing; a sync route, so its stat calls are off the loop).
+        from ...checks.turn import reopened as _reopened
+
+        msgs = _reopened(d.platform.engine, r.id, msgs)
         return {
             "id": r.id, "title": r.title, "persona": r.persona,
             "project_id": r.project_id, "messages": msgs, "setup": setup,
@@ -3815,7 +3829,23 @@ def register(app: FastAPI, d) -> None:
 
         _pending_lo = take_pending_local_only(turn_id)
         if _pending_lo is not None:
-            await asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+            # Taken off the waiting list once, so written in a step the
+            # request's cancel cannot interrupt (as the holds above are).
+            await asyncio.shield(
+                asyncio.to_thread(set_thread_local_only, d.platform.engine, tid, _pending_lo)
+            )
+        # The intelligence plan, release 5: what Iron Jarvis checked on the
+        # new chat's first reply belongs to the chat now named (never raises).
+        # AFTER the link is readable (`link_turn_holds` above: a reply still
+        # writing its rows reads it, `checks/turn._chat_of`), so no row lands
+        # between this homing and the link and is left with no chat. And
+        # AFTER the Local only holds and the chat's own Local only switch
+        # are written: both are taken off a waiting list ONCE, so a request
+        # cancelled at this homing must find them already on the chat (a
+        # privacy setting is never lost for a line of text).
+        from ...checks import record as _checks
+
+        await asyncio.to_thread(_checks.home_turn, d.platform.engine, turn_id, tid)
         # Idea 39 (39-a, review): a schedule, watcher, workflow run or night
         # task a new chat's first turn set up before this link reports to the
         # chat now named.
@@ -9451,6 +9481,21 @@ async def chat_stream(
         from ...harness.evidence import at_end as _evidence_at_end
 
         _evidence_rec = await _evidence_at_end(made_docs)
+        # WHAT IRON JARVIS CHECKED (the intelligence plan, release 5): the
+        # reply's existing checks are written to the one record of checks,
+        # the files this reply's own tools wrote (`made_docs`) are checked by
+        # rule off the loop, and the line is READ BACK from that record.
+        # Worked out HERE, with the after picture and before the unread notes
+        # are read as owed (a Stop while it runs hands them back on its error
+        # frame); its key is added last (below). MIRROR NOTE (lock-step):
+        # chat_turn.run_chat_turn makes the same call.
+        from ...checks.turn import checked_for_turn as _checked_for_turn
+
+        _checked = await _checked_for_turn(
+            platform, turn_id=_usage_turn, thread_id=str(getattr(body, "thread_id", "") or ""),
+            made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
+            coding=_harness is not None, escalate=bool(escalate),
+        )
         # v1.287.0: present ONLY when a note was left unread (see above).
         # v1.499.3: read as OWED (the notes closed above, handed over once) —
         # read here, right before the frame goes, so a failure between the
@@ -9468,6 +9513,16 @@ async def chat_stream(
             # door, or lowered by a flagged result) — the lead's R answers
             # are never read from a low-trust reply (lock-step: chat_turn).
             done_frame["finish"] = await _finish.record(low_trust=_chat_turn.finish_low_trust(_trust_state))
+            # The intelligence plan, release 5: the finish check's tests and
+            # review also go to the one record of checks (``checks/turn``);
+            # the key above is unchanged. MIRROR NOTE (lock-step): chat_turn.
+            from ...checks.turn import note_finish as _note_finish
+
+            await _note_finish(
+                platform, done_frame["finish"], turn_id=_usage_turn,
+                thread_id=str(getattr(body, "thread_id", "") or ""), session_id=_tool_session,
+                ended=_finish.tests_ended(),
+            )
         # THE CODING-SESSION TEAM (v1.403.0): {lead, workers, reviewer, pieces,
         # lead_did} — LAST, and present ONLY for a turn of a session with a
         # team (every other frame is byte-identical). The Build reply line
@@ -9483,6 +9538,14 @@ async def chat_stream(
         # above, before the owed notes are read.)
         if _evidence_rec is not None:
             done_frame["evidence"] = _evidence_rec
+        # WHAT IRON JARVIS CHECKED (release 5 of the intelligence plan):
+        # `checks/record.payload` (the line, its tone, the list) — LAST, and
+        # present ONLY when a plain chat reply made or changed a file (every
+        # other frame is byte-identical). The page saves it on the reply (`checked`).
+        # MIRROR NOTE (lock-step): chat_turn.py's response carries the same
+        # conditional key. (Worked out above, before the owed notes are read.)
+        if _checked is not None:
+            done_frame["checked"] = _checked
         yield _sse("done", done_frame)
 
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404

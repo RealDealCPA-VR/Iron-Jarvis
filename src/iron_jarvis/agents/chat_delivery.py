@@ -274,6 +274,14 @@ def deliver_session_line(
             from ..providers.egress import thread_local_only
 
             chat_local_only = thread_local_only(engine, thread_id)
+        if isinstance(result, dict) and result.get("checked") is not None and keeps_words_home(session):
+            # What Iron Jarvis checked names the run's files, sheets and
+            # figures: on a card in a chat that is not Local only it is left
+            # off (a read that fails is "not Local only").
+            from ..providers.egress import thread_local_only as _local_only
+
+            if not (chat_local_only or _local_only(engine, thread_id)):
+                result = {k: v for k, v in result.items() if k != "checked"}
         line = line_for_session(session, result, who, chat_local_only=chat_local_only)
         if source is not None:
             # Idea 39 (39-a, review): Stop reporting pressed while this run was
@@ -455,6 +463,24 @@ _KEPT_HOME_FIELDS: tuple[str, ...] = (
     "agent_name", "agent_type", "trust", "unanswered_asks", "plan_steps_unchecked",
     "plan_steps_failed", "on_this_network", "reached_a_model", "rehearsal", "tools_used", "tools_failed",
 )
+
+
+def keeps_words_home(session: Any) -> bool:
+    """Do this run's words stay on this PC unless the chat it reports to is
+    Local only: a Local only run (``options.local_only``), or one whose
+    report is marked :data:`REPORT_WORDS_HOME`? What it checked on the files
+    it made (their names, sheet names, figures) then stays home too
+    (``checks/turn.settle_run``). Never raises; False for a junk row."""
+    try:
+        from ..scheduling.knobs import session_options
+
+        options = session_options(session)
+        if not isinstance(options, dict):
+            return False
+        report = options.get(REPORT_OPTION)
+        return options.get("local_only") is True or (isinstance(report, dict) and bool(report.get(REPORT_WORDS_HOME)))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def receipt_kept_home(result: Any) -> Any:

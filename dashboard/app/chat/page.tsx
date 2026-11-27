@@ -218,6 +218,8 @@ import { excelNowForSend } from "@/lib/excelNow";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 // Next leaps 15-a: "From memory" — what the reply was given from memory.
 import { MemoryUsed, MemoryUsedHidden } from "@/components/chat/MemoryUsed";
+import { CheckedLine } from "@/components/chat/CheckedLine";
+import { checkedForSave, decodeChecked } from "@/lib/checked";
 import {
   decodeMemoryUsed,
   decodePopupMode,
@@ -800,6 +802,12 @@ interface ChatMessage {
   /** Next leaps 15-a: how many more it was given than `used` names (the
    *  daemon's `used_more`, past the cap of 24); absent when none. */
   usedMore?: number;
+  /** The intelligence plan, release 5: what Iron Jarvis itself checked on
+   *  the files this reply made (the daemon's `checked`, lib/checked): the
+   *  one line under the reply and the list a press opens. Saved as the
+   *  daemon sent it, so a reopened chat still shows it; absent on a reply
+   *  that made no file. */
+  checked?: unknown;
   /** Calm UI redesign S3/S4: "Setting changed … [Undo]" and secure credential
    *  cards from this turn. A card's state (undone, saved) is stored here, so a
    *  reopened chat shows what happened, never the ask again. */
@@ -3659,6 +3667,10 @@ const MessageRow = memo(function MessageRow({
   // (a reopened thread hands back whatever the disk held).
   const memoryUsed = decodeMemoryUsed(m.used);
   const memoryMore = memoryUsed.length ? decodeUsedMore(m.usedMore) : 0;
+  // The intelligence plan, release 5: what Iron Jarvis checked on the files
+  // this reply made, decoded again (a reopened thread hands back whatever
+  // the disk held); null draws nothing.
+  const checkedMark = decodeChecked(m.checked);
   // v1.499.0: decoded again, like the suggestion (a reopened thread hands
   // back whatever the disk held). One question line at most: a preference
   // suggestion goes first, so a reply carrying one shows no client line.
@@ -3910,6 +3922,11 @@ const MessageRow = memo(function MessageRow({
           />
         )}
       </div>
+      {/* WHAT IRON JARVIS CHECKED (the intelligence plan, release 5): one
+          quiet line under a reply that made or changed a file, in the
+          daemon's own words from its record of checks; pressing it lists
+          the checks. Nothing under a reply that made no file. */}
+      <CheckedLine mark={checkedMark} />
       {/* PREFERENCE SUGGESTION (v1.305.0): a repeated correction, offered as
           a standing preference in the receipt's own quiet voice — directly
           under it, with Keep · Edit · Not this. Decoded again here because a
@@ -10068,6 +10085,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const memoryMore = memoryUsed.length
           ? decodeUsedMore((streamRes as unknown as { usedMore?: unknown }).usedMore)
           : 0;
+        // The intelligence plan, release 5: what Iron Jarvis checked on the
+        // files this reply made (the done frame's `checked`, whitelisted).
+        // MIRROR NOTE: the POST lane's receiptPost below decodes the same key.
+        const checkedStream = decodeChecked((streamRes as unknown as { checked?: unknown }).checked);
         // Adapted (v1.202.0) — the envelope's disclosure rides the message
         // like route/doors. MIRROR NOTE: keep in step with the POST lane's
         // receiptPost below — this exact merge line is where done-frame
@@ -10119,6 +10140,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           // Next leaps 15-a: what the reply was given from memory. MIRROR NOTE.
           ...(memoryUsed.length ? { used: memoryUsed } : {}),
           ...(memoryMore ? { usedMore: memoryMore } : {}),
+          // Release 5 of the intelligence plan: what was checked. MIRROR NOTE.
+          ...(checkedStream ? { checked: checkedForSave(checkedStream) } : {}),
           // v1.323.0: the reply's own details (kept last: the trust pin reads
           // the head of this object).
           ...(thinkingText ? { thinking: thinkingText } : {}),
@@ -10431,6 +10454,10 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // (always present, [] when nothing). MIRROR NOTE: keep in step.
       const usedPost = decodeMemoryUsed((res as { used?: unknown }).used);
       const usedMorePost = usedPost.length ? decodeUsedMore((res as { used_more?: unknown }).used_more) : 0;
+      // The intelligence plan, release 5: the POST lane's copy of the stream
+      // lane's `checked` (present only for a reply that made a file).
+      // MIRROR NOTE: keep in step.
+      const checkedPost = decodeChecked((res as { checked?: unknown }).checked);
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -10464,6 +10491,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // Next leaps 15-a: what the reply was given from memory. MIRROR NOTE.
         ...(usedPost.length ? { used: usedPost } : {}),
         ...(usedMorePost ? { usedMore: usedMorePost } : {}),
+        // Release 5 of the intelligence plan: what was checked. MIRROR NOTE.
+        ...(checkedPost ? { checked: checkedForSave(checkedPost) } : {}),
         // v1.324.0: the apps' resources this turn read (whitelisted).
         ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
           ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }

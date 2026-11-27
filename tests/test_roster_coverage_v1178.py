@@ -282,6 +282,12 @@ _OFF_ROSTER_BY_DESIGN = {
     # turn's own result was kept (tools/kept_results.arm_chat / arm_run).
     # Pinned by tests/test_intel_08_kept_results_lanes.py.
     "kept_result_read",
+    # The intelligence plan, release 5: "what did you check?" reads the one
+    # record of checks for the chat it is ASKED IN, so it is chat's: chat
+    # arms it by its words (tools.autoselect) and the lookup finds it. An
+    # agent run's own checks are on its result card. Pinned by
+    # tests/test_intel_05_what_was_checked_tool.py.
+    "checks_list",
     # Next leaps 12-a: coding work from the phone — the card goes to the
     # sender the phone door proved, so only the phone's own chat turn arms it
     # (records_build.build_tools_for, phone_code.door_open); an agent run has

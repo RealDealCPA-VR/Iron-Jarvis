@@ -2693,6 +2693,65 @@ def report_for_lead(report: str, cap: int = MAX_REVIEW_REPORT_CHARS) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# how a failed run ended, for the record of checks
+# --------------------------------------------------------------------------- #
+#: A command that is pytest and nothing else (no second command joined to
+#: it): only then is its exit status read by pytest's own table (2, 3 and 4:
+#: interrupted, an internal error, a usage error; 5: it collected no test).
+_PYTEST_ALONE_RX = re.compile(
+    r"^\s*(?:(?:uv|poetry|pdm|hatch)\s+run\s+)?(?:(?:python[\d.]*|py)(?:\.exe)?\s+-m\s+)?"
+    r"(?:pytest|py\.test)(?:\.exe)?(?:\s[^;&|<>`$()]*)?$",
+    re.IGNORECASE,
+)
+
+
+def _sandbox_started_nothing(result: Any, data: "dict[str, Any]") -> bool:
+    """Did the Docker sandbox answer that it started NO program (its own
+    words, ``sandbox/docker_runtime.NOT_STARTED``, first in the output of a
+    result the shell tool marks as the sandbox's)? Its return code cannot
+    say: 127 and 1 are also a program's own."""
+    try:
+        from ..sandbox.docker_runtime import NOT_STARTED
+
+        return (data.get("confinement") == "sandbox"
+                and str(getattr(result, "output", "") or "").lstrip().startswith(NOT_STARTED))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def run_ending(run: Any) -> str:
+    """How ONE failed test run ended, for the record of checks. Pure.
+
+    ``"failed"`` is a FACT and is kept narrow: the command ran to its end
+    with an exit status from 1 to 125, and nothing marks it as not started.
+    Everything else is not a failed test run:
+
+    * ``"timed_out"``: it was stopped at its time;
+    * ``"no_exit"`` (it could not be run): no exit status; the sandbox
+      started no program; an exit status outside 1 to 125 (a negative one:
+      killed from outside; 126 and 127: the shell could not run or find the
+      program; 9009: Windows did not find it; anything larger); pytest's own
+      2, 3 and 4 when the command is pytest alone;
+    * ``"none"``: pytest alone, exit status 5 (it collected no test);
+    * ``"unread"``: a failed verdict over an exit status of 0."""
+    if getattr(run, "timed_out", False):
+        return "timed_out"
+    code = getattr(run, "exit_code", None)
+    if not isinstance(code, int) or isinstance(code, bool) or getattr(run, "not_started", False):
+        return "no_exit"
+    if code == 0:
+        return "unread"
+    if not 1 <= code <= 125:
+        return "no_exit"
+    if _PYTEST_ALONE_RX.match(str(getattr(run, "command", "") or "")):
+        if code == 5:
+            return "none"
+        if code in (2, 3, 4):
+            return "no_exit"
+    return "failed"
+
+
+# --------------------------------------------------------------------------- #
 # the check, for one reply
 # --------------------------------------------------------------------------- #
 
@@ -2708,6 +2767,11 @@ class _Run:
     verdict: str = ""  # TESTS_PASSED / TESTS_FAILED / TESTS_NOT_RUN
     exit_code: int | None = None
     timed_out: bool = False
+    #: The sandbox answered that NO program was started (Docker could not be
+    #: reached, the container could not be made). Read only by
+    #: :meth:`FinishCheck.tests_ended`, for the record of checks: the
+    #: verdict and everything this check does with it are unchanged.
+    not_started: bool = False
     output: str = ""
     why: str = ""
     #: The shell language the command is in (v1.386.0 review): "bash" when it
@@ -4340,6 +4404,7 @@ class FinishCheck:
             run.timed_out = bool(data.get("timed_out"))
             code = data.get("returncode")
             run.exit_code = code if isinstance(code, int) and not isinstance(code, bool) else None
+            run.not_started = _sandbox_started_nothing(result, data)
             if run.timed_out:
                 run.verdict = TESTS_FAILED
             elif getattr(result, "ok", False) and (run.exit_code in (0, None)):
@@ -4506,6 +4571,21 @@ class FinishCheck:
             # v1.403.0: what the workers change AFTER this is the second
             # review's change (``_second_review``).
             self._review_mark = self._answer_mark
+
+    def tests_ended(self) -> str:
+        """How the runs behind a FAILED verdict ended, for the record of
+        checks (``checks/existing.finish_checks``; nothing in this check
+        reads it, and it changes nothing this check does with a red run).
+        One word, by :func:`run_ending` of each failed run, the first of
+        these that any of them has: ``"failed"`` (a command ran to its end
+        and reported failure), ``"timed_out"``, ``"no_exit"`` (it could not
+        be run), ``"none"`` (it ran and found no test), ``"unread"``. ""
+        when no run is failed. Never raises."""
+        try:
+            endings = {run_ending(r) for r in self.runs if r.verdict == TESTS_FAILED}
+            return next((kind for kind in ("failed", "timed_out", "no_exit", "none", "unread") if kind in endings), "")
+        except Exception:  # noqa: BLE001 — a record never breaks a reply
+            return ""
 
     def _settle_tests(self) -> None:
         if self.tests in (TESTS_NONE,) or not self.runs:

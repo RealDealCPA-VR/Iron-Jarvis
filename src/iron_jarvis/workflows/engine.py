@@ -1177,6 +1177,7 @@ class WorkflowEngine:
             return latest
         if step.expect:
             problem = self._expect_failure(step, folded)
+            await self._note_expect_check(record.id, name, problem)  # release 5: the record of checks
             if problem is not None:
                 retries = int(waiting.get("expect_retries") or 0)
                 if step.on_failure == "retry" and retries < 1:
@@ -1448,6 +1449,7 @@ class WorkflowEngine:
             # skip continues, halt stops the run).
             if out.get("status") == "completed" and step.expect:
                 problem = self._expect_failure(step, out)
+                await self._note_expect_check(run_id, step.name, problem)  # release 5: the record of checks
                 if problem is not None:
                     out = {
                         **out,
@@ -1894,6 +1896,24 @@ class WorkflowEngine:
                             str(v) for v in val if isinstance(v, str) and v.strip()
                         )
         return cands, "the tool result's created paths/data"
+
+    async def _note_expect_check(self, run_id: Any, step_name: Any, problem: "str | None") -> None:
+        """The intelligence plan, release 5: a step's stated expectation, as
+        ONE row of the record of checks (``checks/existing.workflow_check``:
+        held, did not hold, or could not be looked for), under the workflow
+        run. What the step and the run do with ``problem`` is unchanged. Off
+        the loop; never raises."""
+        try:
+            from ..checks import existing as _existing
+            from ..checks import record as _checks
+
+            row = _existing.workflow_check(step_name, problem, run_id=str(run_id or ""))
+            if row is not None and str(run_id or ""):
+                await _checks.note(self.platform.engine, [row], run_id=str(run_id))
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a record is never worth a failed step
+            get_logger(__name__).debug("a workflow step's check was not recorded", exc_info=True)
 
     def _expect_failure(self, step: Step, out: dict) -> str | None:
         """Check a COMPLETED step's declared expectations DETERMINISTICALLY.

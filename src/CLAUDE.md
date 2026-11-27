@@ -11,7 +11,7 @@ for every change are in the root `CLAUDE.md`.
 | `goals/`, `motivation/`, `reflex/`, `scheduling/`, `sentinels/`, `triggers/`, `webhooks/`, `workflows/` | `docs/rules/automations.md` |
 | `browser/`, `computeruse/` | `docs/rules/browser.md` |
 | `codehost.py`, `fsbrowser/`, `git/`, `harness/`, `harness_bench/`, `hosted/`, `terminals/` | `docs/rules/build.md` |
-| `capability_search/`, `deliverables/`, `search/`, `voice.py` | `docs/rules/chat.md` |
+| `capability_search/`, `checks/`, `deliverables/`, `search/`, `voice.py` | `docs/rules/chat.md` |
 | `changelog.py` | `docs/rules/ci.md` |
 | `connections/`, `connectors/`, `integrations/`, `mcp/`, `mcpserver/` | `docs/rules/connections.md` |
 | `context/`, `repl/` | `docs/rules/context.md` |

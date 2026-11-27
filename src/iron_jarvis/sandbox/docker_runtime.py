@@ -12,6 +12,16 @@ from pathlib import Path
 from .base import Sandbox, SandboxResult
 from .policy import SandboxPolicy
 
+#: How this runtime's result reads when NO program was started: Docker could
+#: not be reached, or the container could not be made. The words are the
+#: whole of the result's output and stand first in it; a reader that must
+#: tell "the command failed" from "nothing ran" looks for them
+#: (``harness/finish``), since the return code alone cannot say (127 and 1
+#: are also a program's own).
+UNAVAILABLE = "docker unavailable: "
+RUN_FAILED = "docker run failed: "
+NOT_STARTED = (UNAVAILABLE, RUN_FAILED)
+
 
 class DockerSandbox(Sandbox):
     """Execute commands in a one-shot container with ``cwd`` mounted at /workspace."""
@@ -56,7 +66,7 @@ class DockerSandbox(Sandbox):
             client = docker.from_env()
         except Exception as exc:  # SDK missing or daemon down
             return SandboxResult(
-                stderr=f"docker unavailable: {exc}",
+                stderr=f"{UNAVAILABLE}{exc}",
                 returncode=127,
                 duration_s=time.monotonic() - start,
             )
@@ -108,7 +118,7 @@ class DockerSandbox(Sandbox):
             )
         except Exception as exc:  # never raise out of run()
             return SandboxResult(
-                stderr=f"docker run failed: {exc}",
+                stderr=f"{RUN_FAILED}{exc}",
                 returncode=1,
                 duration_s=time.monotonic() - start,
             )
