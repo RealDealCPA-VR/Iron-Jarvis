@@ -571,18 +571,23 @@ def alive(root: Path, owner: str, handles: Iterable[str]) -> set[str]:
         }
 
 
-def forget(root: Path, owner: str, handles: Iterable[str]) -> None:
-    """Remove these kept results of *owner* (a save whose note never reached
-    the model; a plain chat's reply that ended). Never raises."""
+def _forget(root: Path, owner: str, handles: Iterable[str]) -> None:
+    """Remove these kept results of *owner* and its folder when that left it
+    empty (call it under the lock). Never raises."""
     folder = _owner_dir(root, owner)
+    for handle in handles:
+        if _HANDLE_RX.match(str(handle)):
+            _remove(folder, str(handle))
+    try:
+        folder.rmdir()  # (only when this left it empty)
+    except OSError:
+        pass
+
+
+def forget(root: Path, owner: str, handles: Iterable[str]) -> None:
+    """Remove these kept results of *owner*. Never raises."""
     with _LOCK:
-        for handle in handles:
-            if _HANDLE_RX.match(str(handle)):
-                _remove(folder, str(handle))
-        try:
-            folder.rmdir()  # (only when this left it empty)
-        except OSError:
-            pass
+        _forget(root, owner, handles)
 
 
 def holds(root: "Path | None", owner: str) -> bool:
@@ -730,14 +735,35 @@ _REPLY: "ContextVar[_Reply | None]" = ContextVar("iron_jarvis_kept_reply", defau
 _TASKS: "set[asyncio.Task[Any]]" = set()
 
 
-def _forget_reply(kept: list[tuple[Path, Any, str, str]]) -> None:
-    """BLOCKING: remove what a plain chat's reply kept, under the owner it
-    was saved for and under the one it has now (the chat may have been saved,
-    and its results moved, while the reply ran)."""
-    for root, ctx, owner, handle in kept:
-        for who in {owner, _owner(ctx)}:
-            if who:
-                forget(root, who, [handle])
+def _forget_kept(kept: Iterable[tuple[Path, Any, str, str]]) -> None:
+    """BLOCKING: remove these kept results (``(root, ctx, owner, handle)``),
+    each under the name it was saved under AND under the name its turn has
+    now: a new chat may have been saved, and its results moved, meanwhile.
+    The name is read UNDER the store's lock: :func:`rekey` moves a result
+    only under that lock and only after the name changed, so one of the two
+    names is where the result is. Never raises."""
+    with _LOCK:
+        for root, ctx, owner, handle in kept:
+            for who in {str(owner or ""), _owner(ctx)}:
+                if who:
+                    _forget(root, who, [handle])
+
+
+def _later(work: Callable[[], Any]) -> "asyncio.Task[Any] | None":
+    """Run BLOCKING *work* off the event loop WITHOUT waiting for it: its own
+    task, held in :data:`_TASKS` (so :func:`removals_done` waits for it and it
+    is not collected mid-way). A turn that is ending, cancelled or past its
+    bound hands its tidy-up here: it is never made to wait for the disk.
+    With no loop running in this thread the work is done now (None)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        work()
+        return None
+    task = loop.create_task(asyncio.to_thread(work))
+    _TASKS.add(task)
+    task.add_done_callback(_TASKS.discard)
+    return task
 
 
 def _end_reply(reply: "_Reply | None") -> None:
@@ -747,18 +773,12 @@ def _end_reply(reply: "_Reply | None") -> None:
     if reply is None or not reply.kept:
         return
     kept, reply.kept = list(reply.kept), []
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        _forget_reply(kept)
-        return
-    task = loop.create_task(asyncio.to_thread(_forget_reply, kept))
-    _TASKS.add(task)
-    task.add_done_callback(_TASKS.discard)
+    _later(lambda: _forget_kept(kept))
 
 
 async def removals_done() -> None:
-    """Wait for the removals that ended replies started (shutdown, tests).
+    """Wait for every removal handed to :func:`_later`: a reply that ended,
+    a round's own tidy-up (the daemon's shutdown, bounded; tests).
 
     Through ``core/tasks.drain_tasks``: a ``while tasks: await gather(...)``
     loop spins forever once every task has finished and its done callback
@@ -930,15 +950,27 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) 
     whether the reader may join this turn and changes nothing; ``arm()`` puts
     it on the turn's roster, in place. Nothing is written before the first
     says yes, and the second is called only after a save succeeded. Returns
-    how many results were kept. Never raises."""
+    how many results were kept. Never raises, except to pass a cancel on.
+
+    WHAT IT NEVER LEAVES BEHIND. Every handle is noted BEFORE its save is
+    awaited, with the name it is saved under (read again for each save: a
+    new chat may be linked, and its results moved, while a save is in its
+    thread). Whatever ends the round (a cancel, a save that does not come
+    back, the reader refused, a result that is not where its reader will
+    look), each handle no message names is removed under the name it was
+    saved under AND the name the turn has by then (:func:`_forget_kept`).
+    Every wait here is bounded by :data:`IO_TIMEOUT_S`; a round that was
+    cancelled, or whose save did not come back, does not wait for that
+    tidy-up at all (it needs the lock the stalled save holds): it is handed
+    to :func:`_later`."""
     put_by = list(waiting(ctx))
     if not put_by:
         return 0
     ctx._kept_waiting = []  # taken: nothing of the round stays put by
-    owner = _owner(ctx)
-    saved: list[str] = []
+    saved: list[tuple[str, str]] = []  # (the name it was saved under, handle)
     told: set[str] = set()
     root = None
+    hurry = False  # cancelled, or a save did not come back: no wait for the tidy-up
     try:
         from ..providers import egress as _egress
 
@@ -953,7 +985,7 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) 
         if plain and reply is None:
             return 0  # no reply to end with: nothing a plain chat keeps may outlive it
         root = root_of(getattr(ctx, "engine", None) or getattr(platform, "engine", None))
-        if root is None or not owner:
+        if root is None or not _owner(ctx):
             return 0
         local_only = bool(scope.on)
         where = _where(ctx)
@@ -995,12 +1027,15 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) 
                 may = bool(arm(dry=True))
             if not may:
                 continue
+            name = _owner(ctx)  # (now: not the name the round started under)
             handle = new_handle()
+            earlier = tuple(h for _name, h in saved)
+            saved.append((name, handle))  # BEFORE the wait: known however the wait ends
             try:
                 await asyncio.wait_for(
                     asyncio.to_thread(
-                        put, root, owner, split_fence(text)[1], own_source=item.own_source,
-                        local_only=local_only, handle=handle, keep=tuple(saved),
+                        put, root, name, split_fence(text)[1], own_source=item.own_source,
+                        local_only=local_only, handle=handle, keep=earlier,
                     ),
                     IO_TIMEOUT_S,
                 )
@@ -1009,17 +1044,24 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) 
                 used.add(id(target))
                 target.content = item.cut(item.content, item.cap - len(said)) + said + under
                 continue
-            except (asyncio.TimeoutError, TimeoutError):
+            except (asyncio.TimeoutError, TimeoutError, asyncio.CancelledError):
+                # Nobody waits for this save any more (it did not come back,
+                # or the turn was cancelled while it was in its thread): it
+                # writes nothing, or removes what it wrote when it finishes.
                 abandon(handle)
                 raise
-            saved.append(handle)
             used.add(id(target))
             plans.append((target, item.old, handle,
                           str(kept_form(text, item.cap, handle, where, tail=item.tail))))
         if not plans:
             return 0
-        # A note never points at a result that is gone.
-        there = await asyncio.wait_for(asyncio.to_thread(alive, root, owner, saved), IO_TIMEOUT_S)
+        # A note never points at a result that is gone, or that is not where
+        # its reader will look: the name the turn has NOW (a save that went
+        # under the turn's name just after its chat was linked is under a
+        # name nothing reads any more; it gets no note and is removed).
+        now = _owner(ctx)
+        there = await asyncio.wait_for(
+            asyncio.to_thread(alive, root, now, [h for _name, h in saved]), IO_TIMEOUT_S)
         plans = [plan for plan in plans if plan[2] in there]
         if not plans or not arm():
             return 0
@@ -1028,20 +1070,29 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[..., bool]) 
             target.kept_line = _trimmed_note(form.rsplit("\n", 1)[1])
             told.add(handle)
             if plain and reply is not None:
-                reply.kept.append((root, ctx, owner, handle))
+                reply.kept.append((root, ctx, now, handle))
         return len(plans)
+    except asyncio.CancelledError:
+        hurry = True
+        raise
     except Exception as exc:  # noqa: BLE001 — the round's messages stay the old cut
         # (The kind of failure only: its own words can name a file's path.)
         log.warning("a long result could not be kept (%s); it was cut as before", type(exc).__name__)
+        hurry = isinstance(exc, TimeoutError)  # (a wait that did not come back: the lock is held)
         return 0
     finally:
-        left = [h for h in saved if h not in told]
-        if left and root is not None:
-            # Saved, but no message names it: it is not left on disk.
-            try:
-                await asyncio.to_thread(forget, root, owner, left)
-            except Exception:  # noqa: BLE001
-                pass
+        left = [(root, ctx, name, h) for name, h in saved if h not in told]
+        if left:
+            # Saved (or on its way), but no message names it: it is not left
+            # on disk. Off the loop, in its own task (held in _TASKS); the
+            # round waits for it, bounded, only when nothing says the store's
+            # lock is held. Past the bound it goes on by itself.
+            tidy = _later(lambda: _forget_kept(left))
+            if tidy is not None and not hurry:
+                try:
+                    await asyncio.wait_for(asyncio.shield(tidy), IO_TIMEOUT_S)
+                except Exception:  # noqa: BLE001 — it goes on in its own task
+                    pass
 
 
 async def arm_at_start(platform: Any, owner: str, msgs: list, arm: Callable[..., bool]) -> int:

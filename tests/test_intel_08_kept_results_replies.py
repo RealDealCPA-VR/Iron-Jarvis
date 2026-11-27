@@ -243,7 +243,14 @@ async def test_a_save_that_fails_leaves_the_old_cut_and_no_file_of_any_kind(tmp_
     assert all(READER not in req["tools"] for req in model.calls) and MIDDLE not in sent(model, "r2")
     assert [(r.tool, r.ok) for r in ledger(platform)][:2] == [("read_file", True), (READER, False)]
     assert everything(platform) == [], "not its text, not its record, not a half-written file, not its folder"
-    assert MIDDLE not in caplog.text and "could not be kept" in caplog.text
+    # The log says the KIND of failure and nothing else: the failure's own
+    # words name the kept file (its folder, its handle), and a traceback would
+    # carry them too.
+    kind = "OSError" if how == "making room fails" else "PermissionError"
+    said = [r for r in caplog.records if "could not be kept" in r.getMessage()]
+    assert [r.getMessage() for r in said] == [f"a long result could not be kept ({kind}); it was cut as before"]
+    assert said[0].exc_info is None and not any(isinstance(a, BaseException) for a in said[0].args or ())
+    assert MIDDLE not in caplog.text and "kept-results" not in caplog.text and "kr-" not in caplog.text
 
 
 @pytest.mark.parametrize("lane", ["stream", "post"])
@@ -265,8 +272,11 @@ async def test_a_save_that_does_not_come_back_is_removed_when_it_finishes(tmp_pa
     monkeypatch.setattr(K(), "_write", slow)
     monkeypatch.setattr(K(), "IO_TIMEOUT_S", 0.05)
     try:
-        model, _ = await chat(platform, monkeypatch, lane, ws,
-                              [[call("read_file", "r1", path="long.txt")], "Done."], thread="chat_a")
+        # (The lane itself, not the `chat` helper: that one waits for the
+        # removals too, and this save's removal waits for the held write.)
+        model = wire(platform, monkeypatch, [[call("read_file", "r1", path="long.txt")], "Done."], CHAT_MODEL)
+        await LANES[lane](platform, body(ws, tools=["read_file"], thread_id="chat_a", who=CHAT_MODEL),
+                          harness=None, session_id="chat")
         assert sent(model, "r1") == old_cut(text) and all(READER not in req["tools"] for req in model.calls)
         assert wrote.is_set() and where[0] is False, "the write ran in a worker thread, never on the event loop"
         assert not go.is_set(), "the reply ended while the write was still held"
@@ -274,10 +284,8 @@ async def test_a_save_that_does_not_come_back_is_removed_when_it_finishes(tmp_pa
     finally:
         go.set()
     assert await asyncio.to_thread(done.wait, 20)
-    deadline = time.monotonic() + 20  # a liveness cap, not a speed bar
-    while everything(platform):
-        assert time.monotonic() < deadline, f"the abandoned save left {everything(platform)}"
-        await asyncio.sleep(0.01)
+    await K().removals_done()
+    assert everything(platform) == [], "the save nobody waited for removed what it wrote"
 
 
 # --------------------------------------------------------------------------- #
@@ -853,3 +861,223 @@ async def test_deleting_a_chat_drops_what_its_running_turn_kept_under_the_turns_
         if handle is not None:
             RC._drop_thread_handle(thread_key(tid), handle)
             TURNS.release("r8c-turn", handle)
+
+
+# --------------------------------------------------------------------------- #
+# The last review, through the real lanes: a reply that is cancelled, stopped
+# or left; two replies in one chat; an error path on the event loop
+# --------------------------------------------------------------------------- #
+
+CHAT_MODEL = ("anthropic", "claude-sonnet-4-5")
+
+
+@pytest.mark.parametrize("lane", ["stream", "post", "agent run"])
+async def test_a_reply_cancelled_while_its_save_is_in_its_thread_leaves_nothing(tmp_path, monkeypatch, lane):
+    """An agent run's Stop is a cancel; so is a stream whose page dropped, and
+    shutdown. The save has written the text and is still in its thread."""
+    platform = build_platform(str(tmp_path / "home"))
+    ws = folder(tmp_path, long__txt=document(20_000))
+    real, reached, go = K()._write, threading.Event(), threading.Event()
+
+    def held(path, body):
+        real(path, body)
+        if path.suffix == ".txt":
+            reached.set()
+            go.wait(60)
+
+    monkeypatch.setattr(K(), "_write", held)
+    # (A cancelled reply must not wait for the disk: such a wait would not come back here.)
+    monkeypatch.setattr(K(), "IO_TIMEOUT_S", 600.0)
+    if lane == "agent run":
+        reply = asyncio.create_task(
+            run_agent(platform, ws, [tool_use("read_file", "r1", path="long.txt"), "Done."]))
+    else:
+        reply = asyncio.create_task(chat(
+            platform, monkeypatch, lane, ws, [[call("read_file", "r1", path="long.txt")], "Done."], thread="chat_a"))
+    try:
+        assert await asyncio.to_thread(reached.wait, 20), "the save never started"
+        assert [p.suffix for p in kept_files(platform)] == [".txt"], "the whole text is on disk right now"
+        reply.cancel()
+        done, _ = await asyncio.wait({reply}, timeout=20)  # a liveness cap, not a speed bar
+        assert reply in done, "the cancelled reply waited for the disk"
+        assert not go.is_set()
+    finally:
+        go.set()
+    await K().removals_done()
+    assert everything(platform) == [], "no text, no record, no half-written file, no empty folder"
+
+
+async def test_stop_removes_what_the_stopped_reply_kept(tmp_path, monkeypatch):
+    platform = build_platform(str(tmp_path / "home"))
+    ws = folder(tmp_path, long__txt=document(14_000))
+    stop, seen = {"now": False}, {}
+
+    def second(model):
+        seen["files"] = len(kept_files(platform))
+        stop["now"] = True
+        return [call("read_file", "r2", path="long.txt")]
+
+    async def should_stop():
+        return stop["now"]
+
+    model = wire(platform, monkeypatch, [[call("read_file", "r1", path="long.txt")], second, "Done."], CHAT_MODEL)
+    out = await LANES["stream"](
+        platform, body(ws, tools=["read_file"], thread_id="chat_a", who=CHAT_MODEL),
+        harness=None, session_id="chat", should_stop=should_stop)
+    await K().removals_done()
+    assert seen["files"] == 2 and len(model.calls) == 2, "kept while the reply ran; Stop ended it"
+    assert not out["errors"] and everything(platform) == []
+
+
+async def test_a_stream_whose_page_went_away_removes_what_the_reply_kept(tmp_path, monkeypatch):
+    from iron_jarvis.daemon.chat_stream import stream_chat_turn
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+
+    platform = build_platform(str(tmp_path / "home"))
+    ws = folder(tmp_path, long__txt=document(14_000))
+    model = wire(platform, monkeypatch, [
+        [call("read_file", "r1", path="long.txt")], then_read("r1", "r2"), then_read("r1", "r3", end=True), "Done.",
+    ], CHAT_MODEL)
+    gen = await stream_chat_turn(
+        platform, BUILTIN_PERSONAS, body(ws, tools=["read_file"], thread_id="chat_a", who=CHAT_MODEL),
+        harness=None, session_id="chat", round_budget=30, stay_in_chat=True)
+    during = None
+    async for _chunk in gen:
+        if len(model.calls) >= 2:
+            during = len(kept_files(platform))
+            break
+    await gen.aclose()  # (the client is gone: the stream is closed, not finished)
+    await K().removals_done()
+    assert during == 2 and len(model.calls) < 4, "kept while it ran; it did not run to its end"
+    assert everything(platform) == []
+
+
+async def test_a_reply_the_daemon_carries_on_alone_keeps_reads_and_removes_its_own(tmp_path, monkeypatch):
+    """The page went away and nobody follows the turn: the daemon's own task
+    runs the reply to its end. Its kept result is there while it runs (the
+    reply's scope is set in the task that RUNS it) and goes when it ends."""
+    from iron_jarvis.daemon.chat_stream import stream_chat_turn
+    from iron_jarvis.personas.builtins import BUILTIN_PERSONAS
+    from tests.test_third_plan_g18_reply_home import _logs, _new_chat
+
+    app = create_app(str(tmp_path))
+    platform = app.state.platform
+    ws = folder(tmp_path, long__txt=document(14_000))
+    tid = await _new_chat(app, "r8d-alone")
+    seen = {}
+
+    def second(model):
+        seen["files"] = len(kept_files(platform))
+        seen["tools"] = list(model.calls[-1]["tools"])
+        return then_read("r1", "r2")(model)
+
+    def third(model):
+        seen["read"] = MIDDLE in sent(model, "r2")
+        return "Done."
+
+    wire(platform, monkeypatch, [[call("read_file", "r1", path="long.txt")], second, third], CHAT_MODEL)
+    gen = await stream_chat_turn(
+        platform, BUILTIN_PERSONAS,
+        body(ws, tools=["read_file"], thread_id=tid, turn_id="r8d-alone", who=CHAT_MODEL),
+        harness=None, session_id="chat", round_budget=30, stay_in_chat=True)
+    lg = _logs(app).start("r8d-alone", tid, gen)
+    await asyncio.wait_for(lg.task, 60)  # a liveness cap
+    await K().removals_done()
+    assert seen == {"files": 2, "tools": seen["tools"], "read": True} and READER in seen["tools"]
+    assert lg.status == "done" and everything(platform) == []
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_two_replies_in_one_chat_each_end_with_their_own(tmp_path, monkeypatch, lane):
+    """Reply B starts and ends while reply A is still running, in the same
+    chat (the same folder on disk). B's end removes only what B kept: A's
+    result stays readable until A ends."""
+    platform = build_platform(str(tmp_path / "home"))
+    ws = folder(tmp_path, long__txt=document(14_000), other__txt=document(13_000, middle="OTHER-FILE-zq84"))
+    root = K().root_of(platform.engine)
+    seen: dict = {}
+
+    async def reply_b_runs_and_ends(model):
+        a = HANDLE_RX.findall(sent(model, "r1"))[-1]
+        # Reply B: its own task, start to end (the next two moves are its).
+        await asyncio.create_task(LANES[lane](
+            platform, body(ws, tools=["read_file"], thread_id="chat_a", who=CHAT_MODEL),
+            harness=None, session_id="chat"))
+        b = HANDLE_RX.findall(sent(model, "b1"))[-1]
+        seen["both while b ran"] = a != b
+        await K().removals_done()
+        seen["a after b ended"] = K().get(root, "chat:chat_a", a) is not None
+        seen["b after b ended"] = K().get(root, "chat:chat_a", b) is not None
+        seen["files"] = len(kept_files(platform))
+        return then_read("r1", "r2")(model)
+
+    model, _ = await chat(platform, monkeypatch, lane, ws, [
+        [call("read_file", "r1", path="long.txt")],    # reply A
+        reply_b_runs_and_ends,                          # A's next move: B runs inside it
+        [call("read_file", "b1", path="other.txt")],   # reply B
+        "Done.",                                        # B ends
+        "Done.",                                        # A ends
+    ], thread="chat_a")
+    assert seen == {"both while b ran": True, "a after b ended": True, "b after b ended": False, "files": 2}
+    assert MIDDLE in sent(model, "r2"), "A read its own result on, after B had ended"
+    assert everything(platform) == []
+
+
+def test_an_error_path_that_deletes_its_new_run_never_waits_on_the_event_loop_for_the_store(tmp_path, monkeypatch):
+    """``POST /missions/{id}/retry-failed`` deletes the run it just made when
+    a later step fails, ON the event loop. What the store holds for it is
+    dropped off the loop, bounded: with the store's lock held by another
+    thread's save, the request still answers and the daemon still serves."""
+    from tests.test_wave1_mission_view_v1309 import _app, _board_with, _wait
+
+    app = _app(tmp_path)
+    with TestClient(app) as c:
+        platform = app.state.platform
+        sid = c.post("/missions", json={"objective": "file the forms"}).json()["id"]
+        _wait(c, sid)
+        _board_with(app, sid, {"a.pdf": "done", "b.pdf": "failed"})
+
+        def broken(_board):
+            raise OSError("the worklist went away")
+
+        made, dropped = [], []
+        real_rerun, real_drop = app.state.orchestrator.rerun_session, K().drop_owners
+
+        async def rerun(session_id):
+            session = await real_rerun(session_id)
+            made.append(session.id)
+            return session
+
+        def drop(engine, owners):
+            dropped.append(tuple(owners))
+            return real_drop(engine, owners)
+
+        monkeypatch.setattr(platform.worklist, "reset_failed", broken)
+        monkeypatch.setattr(app.state.orchestrator, "rerun_session", rerun)
+        monkeypatch.setattr(K(), "drop_owners", drop)
+        monkeypatch.setattr(K(), "IO_TIMEOUT_S", 0.05)
+        answer: dict = {}
+        asked = threading.Thread(target=lambda: answer.update(res=c.post(f"/missions/{sid}/retry-failed")))
+        with K()._LOCK:  # (a save in another thread holds the store's lock)
+            asked.start()
+            asked.join(20)  # a liveness cap, not a speed bar
+            waited = asked.is_alive()
+        asked.join(20)
+        assert not waited, "the event loop waited for the store's lock"
+        assert answer["res"].status_code == 500 and len(made) == 1
+        assert dropped == [(made[0],)], "what the store held for the run it made is dropped, off the loop"
+        assert c.get(f"/sessions/{made[0]}").status_code == 404
+
+
+def test_shutdown_waits_for_the_removals_that_were_handed_on(tmp_path, monkeypatch):
+    waited: list = []
+    real = K().removals_done
+
+    async def spy():
+        waited.append(len(K()._TASKS))
+        await real()
+
+    monkeypatch.setattr(K(), "removals_done", spy)
+    with TestClient(create_app(str(tmp_path))):
+        assert waited == []
+    assert len(waited) == 1, "the daemon's shutdown did not wait for the kept-results removals"

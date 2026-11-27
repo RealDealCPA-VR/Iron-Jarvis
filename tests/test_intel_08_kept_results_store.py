@@ -15,10 +15,12 @@ Time is an injected clock (``kept_results._now``); nothing here sleeps.
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import json
 import os
 import tarfile
+import threading
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
@@ -97,6 +99,10 @@ def rows(n_chars: int) -> str:
 
 def files(root: Path) -> list[str]:
     return sorted(p.name for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
+
+
+def folders(root: Path) -> list[str]:
+    return sorted(p.name for p in root.iterdir()) if root.is_dir() else []
 
 
 # --------------------------------------------------------------------------- #
@@ -910,3 +916,314 @@ async def test_a_new_chat_saved_while_its_first_reply_runs_leaves_nothing_when_t
         assert K.holds(root, "chat:thread_new") and K._owner(ctx) == "chat:thread_new"
     await K.removals_done()
     assert files(root) == [] and list(root.iterdir()) == []
+
+
+# --------------------------------------------------------------------------- #
+# The last review: a round that is cancelled, a chat linked mid-save, a write
+# that stalls. Whatever ends the round, nothing it saved is left behind.
+# --------------------------------------------------------------------------- #
+
+
+async def _reached(event: threading.Event) -> None:
+    assert await asyncio.to_thread(event.wait, 20), "the round never got that far"  # a liveness cap
+
+
+def in_flight() -> int:
+    """Removals handed on and still running: each is held (``_TASKS``), so
+    it is not collected mid-way and ``removals_done`` waits for it."""
+    return len([t for t in K._TASKS if not t.done()])
+
+
+@pytest.mark.parametrize("who", ["plain chat", "run"])
+@pytest.mark.parametrize("at", ["before the save writes", "after the save wrote", "the check"])
+async def test_a_round_cancelled_mid_way_leaves_no_file_and_never_waits_for_the_disk(
+    platform, tmp_path, root, clock, monkeypatch, who, at
+):
+    """Stop on an agent run is a cancel; so is a stream whose page went away,
+    and shutdown. Wherever it lands: nothing of the round stays on disk, and
+    the cancelled round is not made to wait for the store."""
+    real_put, real_alive = K.put, K.alive
+    reached, go, save_over = threading.Event(), threading.Event(), threading.Event()
+
+    def held_put(*a, **kw):
+        try:
+            if at == "before the save writes":
+                reached.set()
+                go.wait(60)
+            out = real_put(*a, **kw)
+            if at == "after the save wrote":
+                reached.set()
+                go.wait(60)
+            return out
+        finally:
+            save_over.set()
+
+    def held_alive(*a):
+        if at == "the check":
+            reached.set()
+            go.wait(60)
+        return real_alive(*a)
+
+    monkeypatch.setattr(K, "put", held_put)
+    monkeypatch.setattr(K, "alive", held_alive)
+    # (Any wait for the tidy-up would never come back within the test.)
+    monkeypatch.setattr(K, "IO_TIMEOUT_S", 600.0)
+    ctx = ctx_of(platform, tmp_path, thread="chat_a") if who == "plain chat" else ctx_of(
+        platform, tmp_path, session="sess_1")
+    text = wrap_untrusted(rows(20_000))
+
+    async def reply():
+        with K.reply_scope():
+            msgs = _round(K.hold(ctx, text, 12_000, cut=_cut))
+            return await K.settle(platform, ctx, msgs, lambda dry=False: True)
+
+    task = asyncio.create_task(reply())
+    try:
+        await _reached(reached)
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=20)  # a liveness cap, not a speed bar
+        assert task in done and task.cancelled(), "the cancelled round waited for the disk"
+        assert not go.is_set()
+    finally:
+        go.set()
+    await _reached(save_over)
+    await K.removals_done()
+    assert files(root) == [] and folders(root) == [], "text, record, half a file or an empty folder"
+
+
+@pytest.mark.parametrize("lands", ["before the save writes", "between the save and the check"])
+async def test_a_new_chat_linked_inside_one_round_gets_no_note_nobody_can_read_and_leaves_nothing(
+    platform, tmp_path, root, clock, monkeypatch, lands
+):
+    """A new chat's first reply keeps under its TURN until the page links the
+    turn to the saved chat (the name changes, then the results are moved).
+    When that lands inside one round, the result is under a name its reader
+    will not look under: no note is written for it (the old cut stands), and
+    it is removed under whichever of the two names it is filed."""
+    real_put, real_alive = K.put, K.alive
+
+    def link():
+        egress.link_turn_holds("turn_new", "thread_new")
+        K.rekey(platform.engine, "chat:turn_new", "chat:thread_new")
+
+    def put_after_the_link(*a, **kw):
+        if lands == "before the save writes":
+            link()  # (the move found nothing yet: the save then goes under the turn's name)
+        return real_put(*a, **kw)
+
+    def check_after_the_link(*a):
+        if lands == "between the save and the check":
+            link()  # (the move took the result to the chat's name)
+        return real_alive(*a)
+
+    monkeypatch.setattr(K, "put", put_after_the_link)
+    monkeypatch.setattr(K, "alive", check_after_the_link)
+    ctx = ctx_of(platform, tmp_path, turn="turn_new")
+    text = wrap_untrusted(rows(20_000))
+    with K.reply_scope():
+        msgs = _round(K.hold(ctx, text, 12_000, cut=_cut))
+        assert await K.settle(platform, ctx, msgs, lambda dry=False: True) == 0
+        assert K._owner(ctx) == "chat:thread_new"
+        assert msgs[1].content == _cut(text, 12_000) and K.note_of(msgs[1].content) == ""
+        # Already, while the reply still runs: under neither name.
+        assert files(root) == [] and folders(root) == []
+    await K.removals_done()
+    assert files(root) == []
+
+
+async def test_a_new_chat_linked_while_its_save_is_in_its_thread_leaves_nothing_when_the_reply_ends(
+    platform, tmp_path, root, clock, monkeypatch
+):
+    """The realistic order: the save is in its thread (the store's lock held)
+    when the page links the turn, and the move waits for that lock. Whichever
+    of the two gets the lock next, a note that was written is one the reader
+    answers for, and nothing is left when the reply ends."""
+    real, reached, go = K._write, threading.Event(), threading.Event()
+
+    def held(path, body):
+        real(path, body)
+        if path.suffix == ".json":
+            reached.set()
+            go.wait(60)
+
+    monkeypatch.setattr(K, "_write", held)
+    ctx = ctx_of(platform, tmp_path, turn="turn_new")
+    text = wrap_untrusted(rows(20_000))
+    with K.reply_scope():
+        msgs = _round(K.hold(ctx, text, 12_000, cut=_cut))
+        round_ = asyncio.create_task(K.settle(platform, ctx, msgs, lambda dry=False: True))
+        try:
+            await _reached(reached)
+            egress.link_turn_holds("turn_new", "thread_new")  # the link route: the name first...
+            move = asyncio.create_task(  # ...then the move, off the loop: it waits for the store's lock
+                asyncio.to_thread(K.rekey, platform.engine, "chat:turn_new", "chat:thread_new"))
+        finally:
+            go.set()
+        kept = await round_
+        await move
+        note = K.NOTE_RX.fullmatch(K.note_of(msgs[1].content))
+        if kept:
+            got = await read(platform, ctx, handle=note.group(3), start=1)
+            assert got.ok and "Characters 1 to" in got.output, got.error
+        else:
+            assert note is None and msgs[1].content == _cut(text, 12_000)
+            assert files(root) == []
+    await K.removals_done()
+    assert files(root) == [] and folders(root) == []
+
+
+async def test_a_round_never_waits_past_its_bound_for_a_stalled_write(platform, tmp_path, root, clock, monkeypatch):
+    """Two long results in one round; the second write stalls. The round
+    comes back at its bound with the old cuts (the first result's removal
+    needs the lock the stalled write holds: it is handed on, never waited
+    for), and once the write lets go nothing is left."""
+    real, stalled, go, texts = K._write, threading.Event(), threading.Event(), []
+
+    def held(path, body):
+        real(path, body)
+        if path.suffix == ".json":
+            # The first save is over: the SECOND one's bound is short...
+            monkeypatch.setattr(K, "IO_TIMEOUT_S", 1.0)
+        elif path.suffix == ".txt":
+            texts.append(path)
+            if len(texts) == 2:
+                # ...and from here on any further wait of the round would not
+                # come back within the test.
+                monkeypatch.setattr(K, "IO_TIMEOUT_S", 600.0)
+                stalled.set()
+                go.wait(60)
+
+    monkeypatch.setattr(K, "_write", held)
+    ctx = ctx_of(platform, tmp_path, session="sess_1")
+    one, two = wrap_untrusted(rows(20_000)), wrap_untrusted(rows(21_000))
+    msgs = _round(K.hold(ctx, one, 12_000, cut=_cut), "c1") + _round(K.hold(ctx, two, 12_000, cut=_cut), "c2")
+    round_ = asyncio.create_task(K.settle(platform, ctx, msgs, lambda dry=False: True))
+    try:
+        await _reached(stalled)
+        done, _ = await asyncio.wait({round_}, timeout=20)  # a liveness cap, not a speed bar
+        assert round_ in done, "the round waited for the stalled write"
+        assert not go.is_set() and round_.result() == 0
+        assert [msgs[1].content, msgs[3].content] == [_cut(one, 12_000), _cut(two, 12_000)]
+        assert len(files(root)) == 3, "the first result and half of the second, until the write lets go"
+        assert in_flight() == 1, "the removal was handed on, and is held"
+    finally:
+        go.set()
+    await K.removals_done()
+    assert files(root) == [] and folders(root) == []
+
+
+async def test_a_save_given_up_on_before_it_wrote_writes_nothing_when_it_runs(
+    platform, tmp_path, root, clock, monkeypatch
+):
+    """The round stopped waiting before the save's thread had written
+    anything (a busy pool). The tidy-up finds nothing to remove yet; the save,
+    when it does run, must write nothing."""
+    real_put, go, save_over = K.put, threading.Event(), threading.Event()
+
+    def late(*a, **kw):
+        try:
+            go.wait(60)
+            return real_put(*a, **kw)
+        finally:
+            save_over.set()
+
+    monkeypatch.setattr(K, "put", late)
+    monkeypatch.setattr(K, "IO_TIMEOUT_S", 0.05)
+    ctx = ctx_of(platform, tmp_path, session="sess_1")
+    text = wrap_untrusted(rows(20_000))
+    msgs = _round(K.hold(ctx, text, 12_000, cut=_cut))
+    try:
+        assert await K.settle(platform, ctx, msgs, lambda dry=False: True) == 0
+        assert not go.is_set() and msgs[1].content == _cut(text, 12_000)
+        await K.removals_done()  # (the tidy-up ran: there was nothing yet)
+    finally:
+        go.set()
+    await _reached(save_over)
+    assert files(root) == [] and folders(root) == []
+
+
+async def test_a_tidy_up_that_cannot_finish_in_time_goes_on_by_itself(platform, tmp_path, root, clock, monkeypatch):
+    """The reader is refused at the last moment (so the saved result must
+    go) while another thread holds the store's lock: the daily tidy, another
+    chat's save. The round waits for its tidy-up no longer than its bound;
+    the removal goes on in its own task and is done once the lock is free."""
+    held, go = threading.Event(), threading.Event()
+
+    def hold_the_lock():
+        with K._LOCK:
+            held.set()
+            go.wait(60)
+
+    holder = threading.Thread(target=hold_the_lock)
+
+    def arm(dry=False):
+        if dry:
+            return True
+        holder.start()
+        assert held.wait(20)
+        monkeypatch.setattr(K, "IO_TIMEOUT_S", 0.2)  # (only the tidy-up's wait is left)
+        return False
+
+    ctx = ctx_of(platform, tmp_path, session="sess_1")
+    text = wrap_untrusted(rows(20_000))
+    msgs = _round(K.hold(ctx, text, 12_000, cut=_cut))
+    round_ = asyncio.create_task(K.settle(platform, ctx, msgs, arm))
+    try:
+        done, _ = await asyncio.wait({round_}, timeout=20)  # a liveness cap, not a speed bar
+        assert round_ in done, "the round waited for the store's lock past its bound"
+        assert held.is_set() and not go.is_set() and round_.result() == 0
+        assert msgs[1].content == _cut(text, 12_000)
+        assert len(files(root)) == 2, "still there: its removal is waiting for the lock"
+        assert in_flight() == 1, "the removal goes on in its own task: giving up the wait did not end it"
+    finally:
+        go.set()
+    holder.join(20)
+    await K.removals_done()
+    assert files(root) == [] and folders(root) == []
+
+
+async def test_a_chat_linked_between_two_saves_of_one_round_keeps_both_where_the_reader_looks(
+    platform, tmp_path, root, clock, monkeypatch
+):
+    """Each save goes under the name the turn has WHEN IT IS SAVED: the first
+    under the turn (the link's move then takes it to the chat), the second
+    under the chat. Both get their note, and the reader answers for both."""
+    real_put, saves = K.put, []
+
+    def link_after_the_first(*a, **kw):
+        out = real_put(*a, **kw)
+        saves.append(a[1])
+        if len(saves) == 1:
+            egress.link_turn_holds("turn_new", "thread_new")
+            K.rekey(platform.engine, "chat:turn_new", "chat:thread_new")
+        return out
+
+    monkeypatch.setattr(K, "put", link_after_the_first)
+    ctx = ctx_of(platform, tmp_path, turn="turn_new")
+    one, two = wrap_untrusted(rows(20_000)), wrap_untrusted(rows(21_000))
+    with K.reply_scope():
+        msgs = _round(K.hold(ctx, one, 12_000, cut=_cut), "c1") + _round(K.hold(ctx, two, 12_000, cut=_cut), "c2")
+        assert await K.settle(platform, ctx, msgs, lambda dry=False: True) == 2
+        assert saves == ["chat:turn_new", "chat:thread_new"]
+        for message in (msgs[1], msgs[3]):
+            handle = K.NOTE_RX.fullmatch(K.note_of(message.content)).group(3)
+            got = await read(platform, ctx, handle=handle, start=1)
+            assert got.ok and "Characters 1 to" in got.output, got.error
+        assert folders(root) == [K._owner_dir(root, "chat:thread_new").name]
+    await K.removals_done()
+    assert files(root) == [] and folders(root) == []
+
+
+def test_the_marks_for_dropped_owners_and_given_up_saves_are_bounded(platform, root, clock, monkeypatch):
+    monkeypatch.setattr(K, "_DROPPED", {})
+    monkeypatch.setattr(K, "_ABANDONED", {})
+    more = K._DROPPED_MOST + 90
+    K.drop_owners(platform.engine, [f"sess_{i}" for i in range(more)])
+    assert len(K._DROPPED) == K._DROPPED_MOST == 512
+    with pytest.raises(ValueError):
+        keep(root, f"sess_{more - 1}", MARK)  # (the newest are the ones remembered)
+    assert K.get(root, "sess_0", keep(root, "sess_0", MARK)) is not None  # (the oldest mark made room)
+    for i in range(K._ABANDONED_MOST + 90):
+        K.abandon(f"kr-{i:016x}")
+    assert len(K._ABANDONED) == K._ABANDONED_MOST == 512
+    assert f"kr-{K._ABANDONED_MOST + 89:016x}" in K._ABANDONED and f"kr-{0:016x}" not in K._ABANDONED

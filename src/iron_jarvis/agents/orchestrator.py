@@ -3258,7 +3258,8 @@ class Orchestrator:
             "events_left_out": max(0, total_events - len(events)),
         }
 
-    def delete_session(self, session_id: str, *, trash_stamp: str = "") -> dict[str, Any]:
+    def delete_session(self, session_id: str, *, trash_stamp: str = "",
+                       drop_kept: bool = True) -> dict[str, Any]:
         """Remove a session and its runs/tool rows, MOVING what it kept to the
         app's trash (v1.504.0, north-star plan 4.2, D7). Refuses a session that
         is still actively running (cancel it first).
@@ -3377,9 +3378,12 @@ class Orchestrator:
         # Release 8 of the intelligence plan: the long results kept whole for
         # this run are REMOVED with it, never moved to the trash (they are
         # copies of text the run read, kept only so its model could read on).
-        from ..tools.kept_results import drop_owners as _drop_kept
+        # ``drop_kept=False``: a caller ON the event loop (two error paths in
+        # routes/sessions.py) takes the store's lock off the loop itself.
+        if drop_kept:
+            from ..tools.kept_results import drop_owners as _drop_kept
 
-        _drop_kept(self.p.engine, (session_id,))
+            _drop_kept(self.p.engine, (session_id,))
         # MOVE a plain (non-git) workspace dir to the trash, unless another
         # session (e.g. a continuation) still reuses it. Git worktrees were
         # already moved above. v1.504.0 (north-star plan 4.2): this was an
