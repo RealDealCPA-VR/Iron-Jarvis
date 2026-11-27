@@ -11,6 +11,7 @@ the route's own refusal path or a recorded press).
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from iron_jarvis.daemon.app import create_app
 from iron_jarvis.envelope.outcomes import STUMBLE_RUN
@@ -168,6 +169,7 @@ def test_chat_reaches_it_on_both_lanes(tmp_path, monkeypatch, lane, words, want)
 
 
 def test_the_report_says_the_true_next_step_per_model(tmp_path, monkeypatch):
+    from iron_jarvis.daemon.routes import envelope as E
     from iron_jarvis.envelope import autotrial as T
 
     app = _app(tmp_path)
@@ -175,11 +177,16 @@ def test_the_report_says_the_true_next_step_per_model(tmp_path, monkeypatch):
     trials.note_used("ollama", MODEL)
     report = RM.ModelReportTool(app.state.platform)
     monkeypatch.setattr("sys.platform", "win32")
+    verdict = {"why": ""}
+    monkeypatch.setattr(E, "trial_refusal", lambda d, p, m: verdict["why"])
     out = asyncio.run(report.execute({"model": MODEL}, None))
     assert f"not measured yet; {RM.WILL_BE_TRIED}" in out.output
-    # Waiting for its routing to be known, or left alone: Measure is the way.
-    trials._set("ollama", MODEL, T.PENDING, "not known yet")
-    assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
+    # The trial's own check would refuse it, or leave it waiting (the
+    # re-check's probe: a proxy holding cloud entries): no promise.
+    for why in (E.NEVER_FORWARDED, T.WAIT):
+        verdict["why"] = why
+        assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
+    verdict["why"] = ""
     trials._set("ollama", MODEL, T.LEFT, "cut short 3 times")
     assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
     # Linux and Mac never try a model unasked.
@@ -188,16 +195,100 @@ def test_the_report_says_the_true_next_step_per_model(tmp_path, monkeypatch):
     assert RM.PRESS_MEASURE in asyncio.run(report.execute({"model": MODEL}, None)).output
 
 
-def test_measure_refuses_a_model_that_does_not_stay_on_your_network(tmp_path):
+def test_no_promise_for_a_model_behind_a_proxy_that_holds_cloud_entries(tmp_path, monkeypatch):
+    """The re-check's own case: "fleet" on the owner's proxy, queued, Windows."""
+    app = _app(tmp_path)
+    d = app.state.d
+    d.fleet = SimpleNamespace(table_holds_cloud=lambda p: True, answers_itself=lambda p: True, revision=1)
+    monkeypatch.setattr(app.state.platform.providers, "upstream_place", lambda p, m: "local")
+    d.auto_trials.note_used("ollama", "fleet")
+    monkeypatch.setattr("sys.platform", "win32")
+    assert RM._next_words(d, "ollama", "fleet") == RM.PRESS_MEASURE
+
+
+def test_the_measure_button_stays_for_a_model_not_proven_local(tmp_path, monkeypatch):
+    """The re-check's decision: a public address (or a name a proxy may pass
+    to the cloud) is still measured by the user's own press — with the
+    battery Measure ran before release 9, the tool trials only."""
     from fastapi.testclient import TestClient
 
+    from iron_jarvis.daemon.routes import envelope as E
+    from iron_jarvis.envelope.probes import ProbeReply
+
+    app = create_app(str(tmp_path / "home"))
+    platform = app.state.platform
+    platform.config.custom_base_url = "https://pay-per-use.example.test/v1"
+    platform.providers.configure_local(custom_base_url="https://pay-per-use.example.test/v1", custom_model="big")
+    started: list = []
+
+    async def no_network(*a, **k):  # the background run never reaches a server here
+        started.append(k.get("sized"))
+
+    monkeypatch.setattr(E, "run_trial", no_network)
+
+    async def no_seed(*a, **k):
+        return None
+
+    monkeypatch.setattr(E, "seed_profile", no_seed)
+    r = TestClient(app).post("/envelope/custom/big/probe")
+    assert r.status_code == 200 and r.json()["started"] is True
+    assert E.measure_refusal(app.state.d, "custom", "big") == E.SIZED_ONLY_LOCAL_WORDS
+    got = TestClient(app).get("/envelope/custom/big").json()
+    assert got["sized"] is False
+
+    async def press_and_finish():
+        await app.state.d.start_measure("custom", "big")
+        here = asyncio.current_task()
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not here])
+
+    started.clear()
+    asyncio.run(press_and_finish())
+    assert started == [False]  # the press ran, without the size and speed trials
+
+    # What such a press sends: the tool trials only, never a long made-up text.
+    sent: list = []
+
+    class _Adapter:
+        async def complete(self, *, system, messages, tools, **kw):
+            from iron_jarvis.providers.adapters.base import LLMResponse
+
+            sent.append(" ".join(m.content for m in messages))
+            return LLMResponse(text="ok")
+
+    from iron_jarvis.envelope.profile import CapabilityProfile
+
+    monkeypatch.undo()
+    base = CapabilityProfile(model_id="big", provider="custom")
+    asyncio.run(E.run_trial(app.state.d, base, _Adapter(), "custom", "big", tmp_path, sized=False))
+    assert sent and not any("code word" in t or "lighthouse" in t for t in sent)
+    assert max(len(t) for t in sent) < 8000
+    del ProbeReply
+
+
+def test_chat_measure_says_size_and_speed_are_local_only(tmp_path):
     from iron_jarvis.daemon.routes import envelope as E
 
     app = create_app(str(tmp_path / "home"))
     platform = app.state.platform
     platform.config.custom_base_url = "https://pay-per-use.example.test/v1"
     platform.providers.configure_local(custom_base_url="https://pay-per-use.example.test/v1", custom_model="big")
-    r = TestClient(app).post("/envelope/custom/big/probe")
-    assert r.status_code == 400 and r.json()["detail"] == E.NOT_YOURS_WORDS
+
+    async def press(provider, model):
+        return {"started": True}
+
+    app.state.d.start_measure = press
     out = asyncio.run(RM.ModelMeasureTool(platform).execute({"model": "big"}, None))
-    assert not out.ok and out.error == E.NOT_YOURS_WORDS
+    assert out.ok and E.SIZED_ONLY_LOCAL_WORDS in out.output
+    assert "on your own model server" not in out.output
+
+
+def test_the_cards_words_are_the_daemons_words():
+    import re as _re
+    from pathlib import Path as _P
+
+    from iron_jarvis.daemon.routes import envelope as E
+
+    card = (_P(__file__).resolve().parents[1] / "dashboard/components/connections/EnvelopeCard.tsx").read_text(
+        encoding="utf-8").replace(chr(13) + chr(10), chr(10))
+    m = _re.search(r'SIZED_ONLY_LOCAL_LINE =\s*((?:"[^"]*"\s*\+?\s*)+);', card)
+    assert "".join(_re.findall(r'"([^"]*)"', m.group(1))) == E.SIZED_ONLY_LOCAL_WORDS

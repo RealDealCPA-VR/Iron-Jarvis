@@ -95,7 +95,17 @@ export interface EnvelopeData {
   /** Release 9: the model kept stumbling with tools and is being guided step
    *  by step right now (the daemon's outcome record). */
   guided?: boolean;
+  /** Release 9 re-check: false when the model is NOT proven to stay on this
+   *  PC or network, so Measure checks only its tool use (never size or
+   *  speed). */
+  sized?: boolean;
 }
+
+/** Said under such a model (the daemon's routes/envelope.SIZED_ONLY_LOCAL_WORDS). */
+export const SIZED_ONLY_LOCAL_LINE =
+  "How much a model holds and how fast it writes are measured only for models on this PC or " +
+  "your network. This one's model server is not, or may pass it on to a cloud service, so " +
+  "Measure checks only how it uses tools.";
 
 /** A printed page of plain text, in characters (about 500 words): the same
  *  number the daemon's HOLD probe uses (envelope/probes.PAGE_CHARS). */
@@ -612,6 +622,11 @@ function MeasuredProfileCard({
       {plain.length > 0 && (
         <p data-testid={`${tid}-plain`} className="mt-0.5 text-[11px] text-zinc-300">
           {plain.join(" ")}
+        </p>
+      )}
+      {data.sized === false && (
+        <p data-testid={`${tid}-sized`} className="mt-0.5 text-[11px] text-zinc-500">
+          {SIZED_ONLY_LOCAL_LINE}
         </p>
       )}
 

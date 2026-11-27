@@ -219,13 +219,24 @@ def _seed_kwargs(d, provider: str, base_url: str) -> dict[str, Any]:
     return kw
 
 
-async def run_trial(d, base: CapabilityProfile, adapter: Any, provider: str, model: str, home: Path):
+async def run_trial(
+    d, base: CapabilityProfile, adapter: Any, provider: str, model: str, home: Path,
+    *, sized: bool = True,
+):
     """THE measurement both doors run (Measure and the idle trial, release 9):
     the quick battery, then how fast it writes and how much it holds, against
     the ONE pinned adapter, under :data:`TRIAL_TOTAL_TIMEOUT`. The HOLD probe
     fills the window the app really plans with (``chat_turn.
     _context_window_source``, the one ladder), read off the loop. Made-up
-    text only: every probe's material is its own."""
+    text only: every probe's material is its own.
+
+    ``sized=False`` (release 9 re-check, the coordinator's decision): a model
+    NOT proven to stay on this network that the user measures by their own
+    press gets exactly the battery Measure ran before release 9 — the tool
+    trials only — never HOLD's long texts or SPEED's stories (they may be
+    billed by a service behind it)."""
+    if not sized:
+        return await run_quick_battery(base, probe_transport(adapter), home=home)
     from ..chat_turn import _context_window_source
 
     try:
@@ -252,7 +263,7 @@ _CLOUD_NAME_PREFIXES: tuple[str, ...] = (
 
 #: What the idle trial says when it leaves a model alone (kept in trials.json).
 NEVER_CLOUD = "a cloud model"
-NEVER_FORWARDED = "its model server passes it on to a cloud service"
+NEVER_FORWARDED = "its model server may pass it on to a cloud service"
 NEVER_NO_ADDRESS = "no model server address is saved for it"
 
 
@@ -332,17 +343,21 @@ def trial_fingerprint(d, provider: str) -> str:
         return ""
 
 
-#: Measure's refusal for a model that does not stay on the user's network
-#: (release 9 review), in plain words.
-NOT_YOURS_WORDS = (
-    "Iron Jarvis measures only your own models. This one's model server is not on this PC or "
-    "your network, or it passes this model on to a cloud service, so it is not measured."
+#: Said on the card and in chat for a model NOT proven to stay on this
+#: network (release 9 re-check): only what is known — its server is off this
+#: network, or MAY pass the name on to a cloud service.
+SIZED_ONLY_LOCAL_WORDS = (
+    "How much a model holds and how fast it writes are measured only for models on this PC or "
+    "your network. This one's model server is not, or may pass it on to a cloud service, so "
+    "Measure checks only how it uses tools."
 )
 
 
 def measure_refusal(d, provider: str, model: str) -> str:
-    """Measure's own check (the button and chat): "" or the plain reason.
-    BLOCKING-cheap; never raises (a fault refuses)."""
+    """Is this model PROVEN to stay on this network? "" yes; else
+    :data:`SIZED_ONLY_LOCAL_WORDS`. Measure no longer refuses on it (the
+    button stays): it decides whether the press gets the size and speed
+    trials. BLOCKING-cheap; never raises (a fault reads as not proven)."""
     from ...providers import egress
 
     try:
@@ -352,15 +367,15 @@ def measure_refusal(d, provider: str, model: str) -> str:
         # is local by name, a private address, not passed on to the cloud.
         base = _endpoint_base_url(d, provider) or ""
         if not (egress.is_local_provider(provider) and base and egress.private_host(base)):
-            return NOT_YOURS_WORDS
+            return SIZED_ONLY_LOCAL_WORDS
         if egress.proxy_routes_to_cloud(provider, model, pm):
-            return NOT_YOURS_WORDS
+            return SIZED_ONLY_LOCAL_WORDS
         place = getattr(pm, "upstream_place", None)
         if callable(place) and place(provider, model) == "cloud":
-            return NOT_YOURS_WORDS
+            return SIZED_ONLY_LOCAL_WORDS
         return ""
     except Exception:  # noqa: BLE001 — fail closed
-        return NOT_YOURS_WORDS
+        return SIZED_ONLY_LOCAL_WORDS
 
 
 def _busy_now(d) -> bool:
@@ -400,6 +415,7 @@ def register(app: FastAPI, d) -> None:
         stored: CapabilityProfile | None,
         *,
         auto: bool = False,
+        sized: bool = True,
     ) -> None:
         """The background body: seed if nothing is stored, run the battery
         against the pinned adapter, publish the honest outcome. The battery
@@ -423,7 +439,7 @@ def register(app: FastAPI, d) -> None:
             if base is None:
                 base = CapabilityProfile(model_id=model, provider=provider)
             adapter = d.platform.providers.get(provider, model)
-            session = await run_trial(d, base, adapter, provider, model, home)
+            session = await run_trial(d, base, adapter, provider, model, home, sized=sized)
             source = session.source
         except asyncio.CancelledError:  # daemon shutdown: release, no event
             inflight.discard(key)
@@ -553,6 +569,9 @@ def register(app: FastAPI, d) -> None:
             "profile": profile.to_dict(),
             "effective_window": effective_window,
             "guided": bool(guided),
+            # Release 9 re-check: size and speed are measured only for a
+            # model proven to stay on this network (the card says so).
+            "sized": not await asyncio.to_thread(measure_refusal, d, provider, model),
         }
 
     @app.post("/envelope/{provider}/{model:path}/probe")
@@ -589,9 +608,11 @@ def register(app: FastAPI, d) -> None:
                     "connect the endpoint on the Connections page first"
                 ),
             )
-        refused = await asyncio.to_thread(measure_refusal, d, provider, model)
-        if refused:
-            raise HTTPException(status_code=400, detail=refused)
+        # Release 9 re-check: the button STAYS for every model it measured
+        # before; a model not proven to stay on this network gets the tool
+        # trials only (the pre-release-9 battery), never the size and speed
+        # trials.
+        sized = not await asyncio.to_thread(measure_refusal, d, provider, model)
         key = (provider, model)
         if key in inflight:
             raise HTTPException(
@@ -613,7 +634,7 @@ def register(app: FastAPI, d) -> None:
                 PROBE_STARTED, {"provider": provider, "model": model, "source": source}
             )
             task = asyncio.create_task(
-                _run_probe(key, provider, model, base_url, home, stored)
+                _run_probe(key, provider, model, base_url, home, stored, sized=sized)
             )
             tasks.add(task)
             task.add_done_callback(tasks.discard)

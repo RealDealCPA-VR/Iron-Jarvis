@@ -122,8 +122,11 @@ PRESS_MEASURE = "press Measure on Model servers to measure it, or ask me to"
 
 
 def _next_words(d: Any, provider: str, model: str) -> str:
-    """BLOCKING-cheap. The idle trial tries a model only on Windows, only
-    while it waits in line, and not while its server's routing is unknown."""
+    """BLOCKING-cheap (no network). The idle trial tries a model only on
+    Windows, only while it waits in line, and only when its own check
+    (``routes/envelope.trial_refusal``, asked here as the trial will ask it)
+    lets it go: a promise is never made for a model the trial would refuse
+    or leave waiting."""
     import sys
 
     from ..envelope import autotrial as T
@@ -134,8 +137,11 @@ def _next_words(d: Any, provider: str, model: str) -> str:
     try:
         with trials._lock:  # noqa: SLF001 — one read of its own entry
             entry = trials._models.get(trials._key(provider, model))  # noqa: SLF001
-        if entry is not None and entry.state == T.PENDING and entry.why != "not known yet":
-            return WILL_BE_TRIED
+        if entry is not None and entry.state == T.PENDING:
+            from ..daemon.routes.envelope import trial_refusal
+
+            if trial_refusal(d, provider, model) == "":
+                return WILL_BE_TRIED
     except Exception:  # noqa: BLE001
         pass
     return PRESS_MEASURE
@@ -203,10 +209,11 @@ class ModelMeasureTool(Tool):
     description = (
         "Measure one of the user's OWN models now (the Measure button on Model servers): Iron Jarvis "
         "sends it made-up text only, nothing of the user's, and checks how well it uses tools, how much "
-        "it holds and how fast it writes. It runs in the background for a minute or two on the user's "
-        "own model server and the Model servers page updates when it finishes; it is never finished "
-        "when this returns, so do not say it is. `model` is a model's name; empty = the only one, if "
-        "there is just one. Cloud models are never measured."
+        "it holds and how fast it writes (size and speed only for a model on this PC or the user's "
+        "network; for any other only its tool use). It runs in the background for a minute or two and "
+        "the Model servers page updates when it finishes; it is never finished when this returns, so "
+        "do not say it is. `model` is a model's name; empty = the only one, if there is just one. A "
+        "cloud provider's model (Claude, OpenAI and the like) is never measured."
     )
     input_schema = {
         "type": "object",
@@ -247,13 +254,28 @@ class ModelMeasureTool(Tool):
             await start(provider, model)
         except Exception as exc:  # noqa: BLE001 — said in plain words (400/409)
             return ToolResult(ok=False, error=_refusal_words(model, exc), data={"door": HREF})
+        from ..daemon.routes.envelope import measure_refusal
+
+        # The same reading the press made: size and speed only for a model
+        # proven to stay on this network.
+        sized = not await asyncio.to_thread(measure_refusal, d, provider, model)
+        if sized:
+            what = (
+                f"Started measuring {model} with made-up text only. It runs in the background on your "
+                f"own model server and is not finished yet; {PLACE} shows the result when it is."
+            )
+        else:
+            from ..daemon.routes.envelope import SIZED_ONLY_LOCAL_WORDS
+
+            what = (
+                f"Started checking how {model} uses tools, with made-up text only. It is not finished "
+                f"yet; {PLACE} shows the result when it is. {SIZED_ONLY_LOCAL_WORDS}"
+            )
         return ToolResult(
             ok=True,
             output=(
-                f"Started measuring {model} with made-up text only. It runs in the background on your "
-                f"own model server and is not finished yet; {PLACE} shows the result when it is. "
-                "A new measurement also starts afresh the count Iron Jarvis keeps of its trouble "
-                "with tools."
+                f"{what} A new measurement also starts afresh the count Iron Jarvis keeps of its "
+                "trouble with tools."
             ),
             data={"door": HREF, "provider": provider, "model": model},
         )
@@ -262,14 +284,10 @@ class ModelMeasureTool(Tool):
 def _refusal_words(model: str, exc: Exception) -> str:
     """Measure's refusal in plain words (the route's details carry engine
     words: provider names, "base_url", event names)."""
-    from ..daemon.routes.envelope import NOT_YOURS_WORDS
-
     status = getattr(exc, "status_code", None)
     detail = str(getattr(exc, "detail", "") or "")
     if status == 409:
         return f"{model} is being measured already; {PLACE} shows the result when it finishes."
-    if detail == NOT_YOURS_WORDS:
-        return detail
     if "trusted" in detail:
         return f"Iron Jarvis measures only your own models; {model} is a cloud model."
     if "base_url" in detail:

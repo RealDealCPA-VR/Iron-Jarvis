@@ -27,6 +27,7 @@ vi.mock("@/lib/api", () => {
 vi.mock("@/lib/useEvents", () => ({ useEvents: () => ({ events: [], connected: true }) }));
 
 import {
+  SIZED_ONLY_LOCAL_LINE,
   GUIDED_CARD_LINE,
   MeasuredEndpoints,
   envelopeUrl,
@@ -126,5 +127,29 @@ describe("the Model servers card", () => {
     const line = await waitFor(() => screen.getByTestId("measured-ollama-qwen3:8b-plain"));
     expect(line.textContent?.startsWith(GUIDED_CARD_LINE)).toBe(true);
     expect(line.textContent).not.toContain("Uses tools well.");
+  });
+});
+
+describe("a model not proven to stay on your network", () => {
+  it("says size and speed are measured only on this PC or your network", async () => {
+    hooks.responses[envelopeUrl("custom", "fleet")] = {
+      trusted: false,
+      sized: false,
+      profile: profile({ model_id: "fleet", provider: "custom", measured_fields: ["tool_protocols.native", "tool_protocols.strict_json"] }),
+      effective_window: { value: 16384, source: "endpoint" },
+    };
+    render(<MeasuredEndpoints entries={[{ provider: "custom", model: "fleet", label: "Spark" }]} />);
+    const line = await waitFor(() => screen.getByTestId("measured-custom-fleet-sized"));
+    expect(line.textContent).toBe(SIZED_ONLY_LOCAL_LINE);
+    expect(screen.getByTestId("measured-custom-fleet-plain").textContent).toBe("Uses tools well.");
+  });
+
+  it("says nothing of the kind for a model proven local", async () => {
+    hooks.responses[envelopeUrl("ollama", "qwen3:8b")] = {
+      trusted: false, sized: true, profile: profile(), effective_window: { value: 16384, source: "endpoint" },
+    };
+    render(<MeasuredEndpoints entries={[{ provider: "ollama", model: "qwen3:8b", label: "This PC" }]} />);
+    await waitFor(() => screen.getByTestId("measured-ollama-qwen3:8b-plain"));
+    expect(screen.queryByTestId("measured-ollama-qwen3:8b-sized")).toBeNull();
   });
 });
