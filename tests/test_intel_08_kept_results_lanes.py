@@ -128,10 +128,11 @@ def then_read(first: str, cid: str, *, end: bool = False, handle: "str | None" =
 
 async def chat(platform, monkeypatch, lane: str, ws: Path, moves: list, *, thread: str = "",
                who=("anthropic", "claude-sonnet-4-5"), **kw):
-    """One PLAIN CHAT turn with ``read_file`` picked, on the real lane."""
+    """One PLAIN CHAT turn with ``read_file`` picked (or ``tools``), on the
+    real lane."""
     model = wire(platform, monkeypatch, moves, who)
     out = await LANES[lane](
-        platform, body(ws, tools=["read_file"], thread_id=thread, who=who, **kw),
+        platform, body(ws, tools=list(kw.pop("tools", ["read_file"])), thread_id=thread, who=who, **kw),
         harness=None, session_id="chat",
     )
     return model, out
@@ -370,7 +371,7 @@ async def test_a_task_another_computer_sent_is_cut_as_before(tmp_path):
 def _off(monkeypatch) -> None:
     """The lanes as they were before this release: the cut alone."""
     k = K()
-    monkeypatch.setattr(k, "hold", lambda ctx, content, cap, *, cut, tail=True: cut(content, cap))
+    monkeypatch.setattr(k, "hold", lambda ctx, content, cap, *, cut, tail=True, result=None: cut(content, cap))
 
     async def nothing(*a, **kw):
         return 0
@@ -815,3 +816,35 @@ async def test_a_save_runs_off_the_event_loop_and_a_slow_one_does_not_hold_the_r
         assert not go.is_set(), "the reply ended while the write was still held"
     finally:
         go.set()
+
+
+@pytest.mark.parametrize("lane", ["stream", "post"])
+async def test_an_extensions_long_result_is_kept_in_plain_chat_too(tmp_path, monkeypatch, lane):
+    """Plain chat is where an extension's long answer is met: the same real
+    ``MCPRemoteTool``, switched on for the chat, on both lanes."""
+    from iron_jarvis.mcp.client import FakeTransport, MCPClient
+    from iron_jarvis.mcp.tools import MCPRemoteTool
+
+    platform = build_platform(str(tmp_path / "home"))
+    text = document(14_000)
+    platform.config.mcp_servers.append({"name": "books", "command": "books-mcp"})
+    client = MCPClient(
+        FakeTransport({"tools/call": {"content": [{"type": "text", "text": text}], "isError": False}}),
+        name="books",
+    )
+    tool = MCPRemoteTool(client, "books", "export_ledger", "Export the ledger of the books.", None,
+                         {"readOnlyHint": True})
+    platform.registry.register(tool, mcp=True)
+    model = wire(platform, monkeypatch, [[call(tool.name, "r1")], then_read("r1", "r2"), "Done."])
+    await LANES[lane](
+        platform,
+        body(folder(tmp_path), "export the ledger from books", connectors=["books"], auto_tools=True,
+             thread_id="chat_books"),
+        harness=None, session_id="chat",
+    )
+    shown, part = sent(model, "r1"), sent(model, "r2")
+    assert FIRST in shown and LAST in shown and MIDDLE not in shown and len(shown) <= CT.TOOL_MESSAGE_CHARS
+    assert shown.startswith("[UNTRUSTED CONTENT") and K().NOTE_RX.fullmatch(shown.rsplit("\n", 1)[1])
+    assert MIDDLE in part and part.startswith("[UNTRUSTED CONTENT"), "an extension's words stay outside text"
+    assert READER in tools_when(model, "r1") and READER not in model.calls[0]["tools"]
+    assert K().holds(K().root_of(platform.engine), "chat:chat_books")

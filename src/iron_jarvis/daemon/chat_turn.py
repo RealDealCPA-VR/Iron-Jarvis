@@ -9147,15 +9147,19 @@ def tool_message_text(content: Any, cap: "int | None") -> str:
     return text[:head] + note + (text[-tail:] if tail else "")
 
 
-def kept_tool_message(ctx: Any, content: Any, cap: "int | None") -> str:
+def kept_tool_message(ctx: Any, content: Any, cap: "int | None", result: Any = None) -> str:
     """:func:`tool_message_text`, and a result over the cap is put by for
     :func:`settle_kept_results` (the intelligence plan, release 8:
     ``tools/kept_results`` holds the rules). What comes back is exactly
-    :func:`tool_message_text`'s answer. MIRROR NOTE (lock-step): both lanes
-    build a tool message's text through this."""
+    :func:`tool_message_text`'s answer. ``result``: the call's own result,
+    for the whole text a document reader's own cap cut (``ToolResult.whole``).
+    MIRROR NOTE (lock-step): both lanes build a tool message's text through
+    this."""
     from ..tools import kept_results as _kept
 
-    return _kept.hold(ctx, content, TOOL_MESSAGE_CHARS if cap is None else cap, cut=tool_message_text)
+    return _kept.hold(
+        ctx, content, TOOL_MESSAGE_CHARS if cap is None else cap, cut=tool_message_text, result=result,
+    )
 
 
 async def settle_kept_results(d: Any, msgs: list, ctx: Any, **lists: Any) -> int:
@@ -15940,6 +15944,7 @@ async def run_chat_turn(
                                            content=kept_tool_message(
                                                ctx,
                                                content, getattr(_harness, "tool_message_chars", None) if _harness is not None else None,
+                                               result,
                                            ),
                                            # v1.371.0: a picture the tool handed
                                            # back (page_screenshot). MIRROR NOTE

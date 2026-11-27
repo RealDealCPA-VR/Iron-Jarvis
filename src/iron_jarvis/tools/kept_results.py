@@ -41,6 +41,19 @@ and no cloud model was allowed for the message:
 Local only chat's text). Switching the chat off Local only later does not
 open it.
 
+A TOOL WITH A CAP OF ITS OWN. ``read_document`` and ``extract_pdf`` cut
+their own answer at 16,000 characters, so the end of a long document never
+reached a lane at all. They still answer exactly so, and put the uncut answer
+beside it (``ToolResult.whole``). :func:`hold` takes the result, and
+:func:`settle` puts the whole in the answer's place before it shows the start
+and keeps the rest: when the whole is clean (the injection scan the lane ran
+on the answer is run on the whole, off the event loop; a whole that is
+flagged is never shown and never kept) and something can keep it. Wherever
+nothing can (a caller with no owner, a run another computer's task started, a
+failed save, a reader that may not join), the model gets the tool's own cut
+with the tool's own words, exactly as before: never more of the document than
+before without a kept copy, never silently less.
+
 AT REST. ``<home>/kept-results/<hash of the owner>/<handle>.txt`` (+ a small
 ``.json`` beside it: size, when, Local only, fenced). On this PC only; left
 out of every backup (``maintenance.create_backup``) and in no export; removed
@@ -48,7 +61,9 @@ with its chat or run (:func:`drop_owners`, called by the delete paths), after
 :data:`KEEP_DAYS` days by the daily tidy-up (:func:`sweep`, from
 ``daemon/app._event_prune_loop``), and when a chat holds more than
 :data:`MAX_PER_OWNER` results or :data:`MAX_OWNER_CHARS` characters (the
-oldest goes). The text is what the model was being shown, no rawer: the
+oldest goes), and when the whole store would pass :data:`MAX_STORE_BYTES`
+(the oldest across every chat go first, never one saved within the last
+hour). The text is what the model was being shown, no rawer: the
 result after the lane's untrusted-data fence took out any fence marker.
 Never written to a log line, an event, a usage row or an error message.
 """
@@ -88,6 +103,13 @@ MAX_RESULT_CHARS = 4_000_000
 #: the oldest goes.
 MAX_PER_OWNER = 16
 MAX_OWNER_CHARS = 8_000_000
+#: The most kept text on disk, across every chat, run and coding session.
+#: When a save would pass it the oldest kept results go first, whoever they
+#: belong to; the daily tidy-up holds the same line.
+MAX_STORE_BYTES = 512 * 1024 * 1024
+#: A result saved within this long is never removed to make room (so the one
+#: being saved, and one a reply is still working with, always stay).
+FRESH_S = 3600.0
 #: The most characters one call of the reader returns. Under every lane's
 #: limit for one result with room for the reader's own line and the fence, so
 #: a part read back is never itself cut.
@@ -129,7 +151,8 @@ _TOO_BIG = (
 #: What every call gets that names no kept result of its own chat.
 NOT_FOUND = (
     READER + ": there is no kept result with that handle in this chat. A kept result can be read "
-    "only in the chat, run or coding session it was kept in, for " + str(KEEP_DAYS) + " days."
+    "only in the chat, run or coding session it was kept in, and for at most " + str(KEEP_DAYS)
+    + " days."
 )
 _LOCAL_OFF = (
     READER + ": this result was kept while the chat was Local only, so Iron Jarvis gives it only "
@@ -305,10 +328,43 @@ def _write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+def _make_room(root: Path) -> int:
+    """Hold the whole store under :data:`MAX_STORE_BYTES` (call it under the
+    lock): the oldest kept results go first, across every owner, never one
+    saved within :data:`FRESH_S` (the one being saved is one of those).
+    Returns how many went. The sizes are read from the files, and the ages
+    only when something has to go."""
+    total, sizes = 0, {}
+    for folder in os.scandir(root):
+        if not folder.is_dir():
+            continue
+        for entry in os.scandir(folder.path):
+            if entry.name.endswith(".txt") and _HANDLE_RX.match(entry.name[:-4]):
+                sizes[(folder.name, entry.name[:-4])] = entry.stat().st_size
+                total += sizes[(folder.name, entry.name[:-4])]
+    if total <= MAX_STORE_BYTES:
+        return 0
+    rows = sorted(
+        (kept_at, name, handle)
+        for name in {name for name, _handle in sizes}
+        for kept_at, handle, _meta in _metas(root / name)
+    )
+    fresh, gone = _now() - FRESH_S, 0
+    for kept_at, name, handle in rows:
+        if total <= MAX_STORE_BYTES:
+            break
+        if kept_at > fresh:
+            continue
+        _remove(root / name, handle)
+        total -= sizes.get((name, handle), 0)
+        gone += 1
+    return gone
+
+
 def put(root: Path, owner: str, text: str, *, fenced: bool, local_only: bool) -> str:
     """Keep *text* for *owner*; returns its handle. Over the owner's bounds
-    the oldest results go. Raises on any failure (the caller then cuts as it
-    always did)."""
+    the oldest results go, and over the whole store's the oldest of anyone's.
+    Raises on any failure (the caller then cuts as it always did)."""
     if not owner or len(text) > MAX_RESULT_CHARS:
         raise ValueError("not kept")
     handle = "kr-" + secrets.token_hex(8)
@@ -329,6 +385,7 @@ def put(root: Path, owner: str, text: str, *, fenced: bool, local_only: bool) ->
             rows.pop(0)
             total -= int(meta.get("chars") or 0)
             _remove(folder, oldest)
+        _make_room(root)
     return handle
 
 
@@ -417,7 +474,8 @@ def rekey(engine: Any, old: str, new: str) -> int:
 
 def sweep(home: Any, *, boot: bool = False) -> int:
     """The tidy-up: remove every kept result older than :data:`KEEP_DAYS`
-    days, every half-written file, every folder left empty and, at start-up
+    days, every half-written file, the oldest results while the whole store
+    is over :data:`MAX_STORE_BYTES`, every folder left empty and, at start-up
     (``boot``), the folders no later message can reach. Returns how many
     results were removed. Never raises."""
     removed = 0
@@ -447,7 +505,10 @@ def sweep(home: Any, *, boot: bool = False) -> int:
                             (folder / name).unlink()
                         except OSError:
                             pass
-                if not live:
+            # ...and the whole store is held under its bound.
+            removed += _make_room(root)
+            for folder in list(root.iterdir()):
+                if folder.is_dir() and not _metas(folder):
                     shutil.rmtree(folder, ignore_errors=True)
     except Exception:  # noqa: BLE001 — a tidy-up never stops the daemon
         log.warning("the kept-results tidy-up failed", exc_info=True)
@@ -465,6 +526,10 @@ class _Held:
     text: str
     cap: int
     tail: bool
+    #: A tool that cut its own answer: the answer as it gave it, and the
+    #: whole of it (``ToolResult.whole``). None for every other result.
+    shown: "str | None" = None
+    whole: "str | None" = None
 
 
 #: Results over the limit, waiting for their round's :func:`settle`: keyed by
@@ -484,31 +549,57 @@ def _owner(ctx: Any) -> str:
 
 
 def hold(ctx: Any, content: Any, cap: int, *, cut: Callable[[Any, int], str],
-         tail: bool = True) -> str:
+         tail: bool = True, result: Any = None) -> str:
     """The lane's cut of one tool result (``cut(content, cap)``: its own
     function, so what comes back is what always came back), and a result over
     *cap* is remembered for :func:`settle`. ``tail``: that cut keeps the end
-    too. Writes nothing; never raises past the lane's own cut."""
+    too. ``result``: the call's own result; when its tool cut its own answer
+    and handed the whole beside it (``ToolResult.whole``), the whole is
+    remembered too, whatever the answer's length. Writes nothing; never
+    raises past the lane's own cut."""
     old = cut(content, cap)
     try:
         text = str(content)
-        if len(text) <= cap:
+        whole = getattr(result, "whole", None)
+        shown = getattr(result, "output", None)
+        if not (isinstance(whole, str) and whole and isinstance(shown, str)):
+            whole = shown = None
+        if whole is None and len(text) <= cap:
             return old
         owner = _owner(ctx)
         if not owner:
             return old
-        if len(split_fence(text)[1]) > MAX_RESULT_CHARS:
-            said = _TOO_BIG.format(n=f"{len(split_fence(text)[1]):,}", most=f"{MAX_RESULT_CHARS:,}")
+        size = len(whole) if whole is not None else len(split_fence(text)[1])
+        if size > MAX_RESULT_CHARS:
+            said = _TOO_BIG.format(n=f"{size:,}", most=f"{MAX_RESULT_CHARS:,}")
             return cut(content, cap - len(said)) + said
         key = (str(getattr(ctx, "own_id", "") or ""), owner)
         if key not in _PENDING and len(_PENDING) >= _PENDING_KEYS:
             _PENDING.pop(next(iter(_PENDING)))
         waiting = _PENDING.setdefault(key, [])
         if len(waiting) < _PENDING_EACH:
-            waiting.append(_Held(old=old, text=text, cap=int(cap), tail=bool(tail)))
+            waiting.append(_Held(old=old, text=text, cap=int(cap), tail=bool(tail),
+                                 shown=shown, whole=whole))
     except Exception:  # noqa: BLE001 — the old cut stands
         log.debug("a long result was not put by", exc_info=True)
     return old
+
+
+def _with_whole(content: str, shown: str, whole: str) -> "str | None":
+    """*content* (a lane's fenced tool message) with the tool's WHOLE answer
+    in place of the answer it cut itself, or None when that cannot be done
+    safely: the message is not exactly the fence round that answer (the lane
+    withheld it, or reworded it), or the whole is flagged by the injection
+    scan the lane ran on the answer. BLOCKING on a long text (two scans):
+    call it off the event loop."""
+    from ..computeruse.safety import defang_fence_markers, detect_injection
+
+    before, body, after = split_fence(content)
+    if not before or body != defang_fence_markers(shown):
+        return None
+    if detect_injection(whole)["flagged"]:
+        return None
+    return before + defang_fence_markers(whole) + after
 
 
 def _may_read(platform: Any, overrides: Any = None) -> bool:
@@ -556,18 +647,32 @@ async def settle(platform: Any, ctx: Any, msgs: list, arm: Callable[[], bool]) -
                  and str(getattr(m, "content", "") or "").startswith(item.old)),
                 None,
             )
+            if target is None:
+                continue
+            text = item.text
+            if item.whole is not None:
+                # A document reader cut its own answer: the whole takes the
+                # answer's place (when it is clean), and is then shown and
+                # kept like any other long result.
+                full = await asyncio.wait_for(
+                    asyncio.to_thread(_with_whole, item.text, str(item.shown), item.whole),
+                    IO_TIMEOUT_S,
+                )
+                if full is None:
+                    continue
+                text = full
             # (Every handle is the same length, so whether the note leaves
             # enough to show is known before anything is written.)
-            if target is None or kept_form(item.text, item.cap, _NO_HANDLE, where, tail=item.tail) is None:
+            if kept_form(text, item.cap, _NO_HANDLE, where, tail=item.tail) is None:
                 continue
-            before, body, _after = split_fence(item.text)
+            before, body, _after = split_fence(text)
             handle = await asyncio.wait_for(
                 asyncio.to_thread(put, root, owner, body, fenced=bool(before), local_only=local_only),
                 IO_TIMEOUT_S,
             )
             saved.append(handle)
             used.add(id(target))
-            plans.append((target, item.old, str(kept_form(item.text, item.cap, handle, where, tail=item.tail))))
+            plans.append((target, item.old, str(kept_form(text, item.cap, handle, where, tail=item.tail))))
         if not plans or not arm():
             return 0
         for target, old, form in plans:
@@ -750,7 +855,7 @@ def kept_result_tools(platform: Any = None) -> list[Tool]:
 
 __all__ = [
     "FOLDER", "KEEP_DAYS", "KeptResultReadTool", "MAX_OWNER_CHARS", "MAX_PER_OWNER",
-    "MAX_RESULT_CHARS", "NOTE_RX", "NOT_FOUND", "READER", "READ_CHARS", "arm_chat", "arm_run",
+    "MAX_RESULT_CHARS", "MAX_STORE_BYTES", "NOTE_RX", "NOT_FOUND", "READER", "READ_CHARS", "arm_chat", "arm_run",
     "defang", "drop_owners", "held", "hold", "kept_form", "kept_result_tools",
     "note_of", "rekey", "settle", "split_fence", "sweep",
 ]

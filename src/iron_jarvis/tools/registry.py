@@ -2347,13 +2347,21 @@ class ToolRegistry:
         if self._scope_gen.get(scope, 0) != generation:
             return
         text = result.output or ""
-        if len(text) > _READ_CACHE_MAX_CHARS:
+        # Release 8 of the intelligence plan: a document reader's WHOLE text
+        # (``ToolResult.whole``) is remembered beside its cut answer, so a
+        # read answered from here can still be kept whole and read to the end.
+        # Counted with the answer: a whole too big for the cache means the
+        # read is not remembered (and is made again, whole).
+        whole = getattr(result, "whole", None)
+        size = len(text) + len(whole or "")
+        if size > _READ_CACHE_MAX_CHARS:
             return
         data = dict(result.data) if isinstance(result.data, dict) else {}
         self._drop_read(key)  # a refreshed entry replaces, never double-counts
-        self._read_cache_chars += len(text)
+        self._read_cache_chars += size
         self._read_cache[key] = {
             "output": text,
+            "whole": whole,
             "data": data,
             "tool": tool,
             "step": self._current_step(ctx),
@@ -2373,7 +2381,7 @@ class ToolRegistry:
         """Forget one cached read and its characters (v1.333.0)."""
         entry = self._read_cache.pop(key, None)
         if entry is not None:
-            self._read_cache_chars -= len(entry.get("output") or "")
+            self._read_cache_chars -= len(entry.get("output") or "") + len(entry.get("whole") or "")
 
     def forget_session(self, session_id: str) -> None:
         """Forget every cached read (and scope generation) of a FINISHED
@@ -2425,7 +2433,11 @@ class ToolRegistry:
         data["cached_from"] = source
         if step:
             data["cached_step"] = step
-        return ToolResult(ok=True, output=(entry.get("output") or "") + note, data=data)
+        whole = entry.get("whole")
+        return ToolResult(
+            ok=True, output=(entry.get("output") or "") + note, data=data,
+            whole=(whole + note) if whole else None,
+        )
 
     def attach_repl(self, registry: Any) -> None:
         """Wire the session-namespace registry in (called once by platform)."""

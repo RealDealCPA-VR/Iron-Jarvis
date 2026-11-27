@@ -59,6 +59,25 @@ def _truncate(text: str) -> tuple[str, bool]:
     return text[:_MAX_OUTPUT] + note, True
 
 
+def _answer(text: str, note: str) -> tuple[str, str, bool, "str | None"]:
+    """``(output, lead, truncated, whole)`` for a document reader: its answer
+    as it always was (the first ``_MAX_OUTPUT`` characters and the words that
+    say so, under the note of how the text was got), and, ONLY when that cap
+    cut it, the same answer uncut (``ToolResult.whole``: the intelligence
+    plan, release 8). A lane that can keep a long result shows the start of
+    the whole and keeps the rest (``tools/kept_results``); every other caller
+    reads ``output``, exactly as before."""
+    out, truncated = _truncate(text)
+    whole = text if truncated else None
+    lead = ""
+    if note:
+        lead = f"[{note}]\n" if out.strip() else ""
+        out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
+        if whole is not None:
+            whole = f"[{note}]\n{whole}"
+    return out, lead, truncated, whole
+
+
 def _source_map(path: Path, raw: str, text: str, layout: dict, note: str, lead: str) -> dict:
     """``{"source_map": …}`` for a read's data (v1.549.0, idea 30-a): where
     the file's own text sits in the answer (after ``lead``, at most
@@ -337,11 +356,7 @@ class ReadDocumentTool(Tool):
             # split each line on tabs in its script, and wrote a workbook
             # with every line in one column.
             note = CSV_SHOWN_NOTE
-        out, truncated = _truncate(text)
-        lead = ""
-        if note:
-            lead = f"[{note}]\n" if out.strip() else ""
-            out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
+        out, lead, truncated, whole = _answer(text, note)
         return ToolResult(
             ok=True,
             output=out,
@@ -352,6 +367,7 @@ class ReadDocumentTool(Tool):
                 **({"note": note} if note else {}),
                 **_source_map(path, raw, text, layout, note, lead),
             },
+            whole=whole,
         )
 
 
@@ -615,11 +631,7 @@ class ExtractPdfTool(Tool):
             path, text, self._router_resolver, ctx,
             page_range=args.get("page_range"),
         )
-        out, truncated = _truncate(text)
-        lead = ""
-        if note:
-            lead = f"[{note}]\n" if out.strip() else ""
-            out = f"[{note}]\n{out}" if out.strip() else f"[{note}]"
+        out, lead, truncated, whole = _answer(text, note)
         return ToolResult(
             ok=True,
             output=out,
@@ -630,6 +642,7 @@ class ExtractPdfTool(Tool):
                 **({"note": note} if note else {}),
                 **_source_map(path, raw, text, layout, note, lead),
             },
+            whole=whole,
         )
 
 

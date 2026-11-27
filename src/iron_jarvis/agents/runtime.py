@@ -6191,7 +6191,7 @@ class AgentRuntime:
                 # kept whole once the step's results are in (`settle` below).
                 content = _kept_results.hold(
                     ctx, content, _MAX_TOOL_CONTEXT_CHARS,
-                    cut=_cut_tool_context, tail=False,
+                    cut=_cut_tool_context, tail=False, result=result,
                 )
 
                 # THE BREAKER (contract 2). Bookkeeping runs AFTER the truncation
