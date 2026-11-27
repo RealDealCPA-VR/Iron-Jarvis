@@ -66,10 +66,26 @@ class RecallTool(Tool):
         from .origin import session_tag
 
         try:
+            # LOCAL ONLY: the query is the chat's own words, so in a Local only
+            # turn only the memory bases on this PC are searched. The rule the
+            # reply's own grounding (``chat_turn._gather_grounding``) and
+            # ``ltm_search`` follow since v1.332.0 (``egress.local_ltm``); this
+            # tool searched every base, a remote one included. Files, the
+            # memory graph, lessons and past chats are on this PC and stay.
+            # Inside the ``try``: if the scope cannot be read, nothing is
+            # searched (a refusal, never a wider search).
+            from ..providers import egress as _egress
+
+            fabric = self.fabric
+            if _egress.current_scope().on:
+                import copy as _copy
+
+                fabric = _copy.copy(self.fabric)
+                fabric.ltm = _egress.local_ltm(getattr(self.fabric, "ltm", None))
             # v1.501.0 (north-star 1.2): this turn's own ``session`` memory
             # entries, keyed as ``memory_write`` keys them.
-            hits = self.fabric.recall(query, k=k, project_id=project_id, sources=sources,
-                                      session_id=session_tag(ctx) or None)
+            hits = fabric.recall(query, k=k, project_id=project_id, sources=sources,
+                                 session_id=session_tag(ctx) or None)
         except Exception as exc:  # a recall must never crash the runtime
             return ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 

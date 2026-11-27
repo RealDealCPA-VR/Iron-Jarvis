@@ -3785,8 +3785,20 @@ def register(app: FastAPI, d) -> None:
         # user's own models holds the chat it was saved as Local only.
         from ...providers.egress import hold_local_only, link_turn_holds
 
-        for app_id in link_turn_holds(turn_id, tid):
-            await asyncio.to_thread(hold_local_only, d.platform.engine, tid, app_id)
+        # ``link_turn_holds`` hands the pending holds over ONCE (it takes them
+        # off the waiting list), so they are all written in one step that a
+        # cancelled request cannot interrupt: with one awaited write per app,
+        # a page that went away between two writes left the later apps'
+        # holds applied nowhere, and the chat less Local only than its first
+        # reply had made it.
+        _held_apps = link_turn_holds(turn_id, tid)
+        if _held_apps:
+
+            def _hold_all() -> None:
+                for app_id in _held_apps:
+                    hold_local_only(d.platform.engine, tid, app_id)
+
+            await asyncio.shield(asyncio.to_thread(_hold_all))
         # v1.435.0 (D3): a new chat's first turn that switched Local only on
         # or off from chat (`chat_local_only`) applies it to the chat now named.
         from ...providers.egress import set_thread_local_only, take_pending_local_only
