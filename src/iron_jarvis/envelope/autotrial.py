@@ -65,6 +65,9 @@ WAITING = "waiting"
 ALREADY = "already measured"
 RAN = "ran"
 CUT = "cut"
+#: Release 9 review: the trial ran but no measurement came of it (the server
+#: was asleep, the battery failed): counted like a cut, tried again later.
+FAILED = "failed"
 
 #: The offline suite turns the LIFESPAN loop off (tests/conftest.py): a test
 #: that runs the app's lifespan must never read this PC's real idle time and
@@ -98,6 +101,9 @@ class _Entry:
     state: str = PENDING
     cuts: int = 0
     why: str = ""
+    #: What the last verdict was decided on (``fingerprint``); when it
+    #: changes, a model left alone is looked at again.
+    seen: str = ""
 
 
 @dataclass
@@ -120,6 +126,11 @@ class AutoTrials:
     busy: Callable[[], bool]
     #: ``() -> bool``: Emergency stop is on. BLOCKING.
     stopped: Callable[[], bool]
+    #: ``(provider, model) -> str``: what a verdict is decided on (the
+    #: address, the proxy's routing). BLOCKING-cheap. Release 9 review: when
+    #: it changes, a model LEFT alone (refused, cut short, failed) is looked
+    #: at again, its count starting afresh.
+    fingerprint: Callable[[str, str], str] = lambda provider, model: ""
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep
     idle_after: float = IDLE_AFTER_S
     tick: float = TICK_S
@@ -194,6 +205,7 @@ class AutoTrials:
                     state=state,
                     cuts=cuts if isinstance(cuts, int) and not isinstance(cuts, bool) and cuts >= 0 else 0,
                     why=str(row.get("why") or "")[:200],
+                    seen=str(row.get("seen") or "")[:500],
                 ))
             self._loaded = True
 
@@ -205,7 +217,8 @@ class AutoTrials:
             payload = {
                 "v": 1,
                 "models": {
-                    k: {"state": e.state, "cuts": e.cuts, "why": e.why} for k, e in self._models.items()
+                    k: {"state": e.state, "cuts": e.cuts, "why": e.why, "seen": e.seen}
+                    for k, e in self._models.items()
                 },
             }
             self._dirty = False
@@ -220,13 +233,17 @@ class AutoTrials:
             with self._lock:
                 self._dirty = True
 
-    def _set(self, provider: str, model: str, state: str, why: str = "", cut: bool = False) -> None:
+    def _set(
+        self, provider: str, model: str, state: str, why: str = "", cut: bool = False, seen: str | None = None,
+    ) -> None:
         with self._lock:
             entry = self._models.setdefault(self._key(provider, model), _Entry())
             entry.state = state
             entry.why = why[:200]
             if cut:
                 entry.cuts += 1
+            if seen is not None:
+                entry.seen = seen
             self._dirty = True
             # A model that waits goes to the back of the line.
             key = self._key(provider, model)
@@ -262,7 +279,34 @@ class AutoTrials:
         finally:
             await asyncio.to_thread(self._save)
 
+    def _look_again(self) -> None:
+        """BLOCKING-cheap: a model LEFT alone, or waiting with cuts counted,
+        whose address or proxy routing changed since its verdict is looked
+        at again, its count afresh."""
+        with self._lock:
+            rows = [(k, e.seen) for k, e in self._models.items()
+                    if e.state == LEFT or (e.state == PENDING and e.cuts)]
+        for key, seen in rows:
+            provider, model = key.split("\u0000", 1)
+            try:
+                now = str(self.fingerprint(provider, model) or "")
+            except Exception:  # noqa: BLE001
+                continue
+            if now and now != seen:
+                with self._lock:
+                    entry = self._models.get(key)
+                    if entry is not None:
+                        entry.state, entry.cuts, entry.why, entry.seen = PENDING, 0, "looked at again", now
+                        self._dirty = True
+
+    def _fp(self, provider: str, model: str) -> str:
+        try:
+            return str(self.fingerprint(provider, model) or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
     async def _step(self) -> str:
+        await asyncio.to_thread(self._look_again)
         waiting = self.pending()
         if not waiting:
             return NOTHING
@@ -280,9 +324,22 @@ class AutoTrials:
             self._set(provider, model, PENDING, "not known yet")
             return WAITING
         if why:
-            self._set(provider, model, LEFT, why)
+            self._set(provider, model, LEFT, why, seen=await asyncio.to_thread(self._fp, provider, model))
             return REFUSED
         return await self._try(provider, model)
+
+    async def _count_against(self, provider: str, model: str, why: str) -> None:
+        """A trial cut short or that measured nothing: counted; at
+        :data:`MAX_CUTS` the model is left for Measure (until its address or
+        routing changes)."""
+        with self._lock:
+            entry = self._models.get(self._key(provider, model))
+            cuts = (entry.cuts if entry else 0) + 1
+        seen = await asyncio.to_thread(self._fp, provider, model)
+        if cuts >= MAX_CUTS:
+            self._set(provider, model, LEFT, f"{why} {cuts} times", cut=True, seen=seen)
+        else:
+            self._set(provider, model, PENDING, why, cut=True, seen=seen)
 
     async def _try(self, provider: str, model: str) -> str:
         """Run ONE trial, watching the PC every :data:`WATCH_S`; cancel it the
@@ -290,6 +347,7 @@ class AutoTrials:
         self.running = (provider, model)
         task = asyncio.ensure_future(self.run(provider, model))
         cut = False
+        stopped = False
         try:
             while not task.done():
                 await asyncio.wait({task}, timeout=self.watch)
@@ -298,6 +356,8 @@ class AutoTrials:
                 look = await asyncio.to_thread(self._read)
                 if not look.idle(self.idle_after):
                     cut = True
+                    # Emergency stop is not the model's fault: not a cut.
+                    stopped = look.stopped
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await task
@@ -312,15 +372,17 @@ class AutoTrials:
             raise
         finally:
             self.running = None
+        if cut and stopped:
+            self._set(provider, model, PENDING, "stopped by Emergency stop")
+            return STOPPED
         if cut:
-            with self._lock:
-                entry = self._models.get(self._key(provider, model))
-                cuts = (entry.cuts if entry else 0) + 1
-            if cuts >= MAX_CUTS:
-                self._set(provider, model, LEFT, f"cut short {cuts} times", cut=True)
-            else:
-                self._set(provider, model, PENDING, "cut short", cut=True)
+            await self._count_against(provider, model, "cut short")
             return CUT
+        # Release 9 review: DONE only when a measurement really landed (an
+        # asleep server, a battery that failed: tried again later).
+        if not await asyncio.to_thread(self.measured, provider, model):
+            await self._count_against(provider, model, "measured nothing")
+            return FAILED
         self._set(provider, model, DONE, "tried")
         return RAN
 
@@ -361,5 +423,5 @@ def note_used(provider: str, model: str) -> None:
 
 __all__ = [
     "ALREADY", "AutoTrials", "CUT", "IDLE_AFTER_S", "MAX_CUTS", "NOTHING", "NOT_IDLE", "RAN",
-    "REFUSED", "STOPPED", "WAIT", "WAITING", "install", "note_used",
+    "REFUSED", "STOPPED", "WAIT", "WAITING", "FAILED", "install", "note_used",
 ]

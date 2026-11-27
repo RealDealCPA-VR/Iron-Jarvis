@@ -1422,6 +1422,13 @@ class Notifier:
         """Send *event* to every destination its type reaches (the rest of
         :meth:`on_event`, lifted so a held chat-turn failure goes the same
         way)."""
+        # The intelligence plan, release 9: a model tried by itself while the
+        # PC was idle is said by its Model servers card only — "No notice",
+        # whatever event types a destination was set to receive.
+        if str(etype) == "envelope.probe_completed":
+            _pl = _event_field(event, "payload", {}) or {}
+            if isinstance(_pl, dict) and _pl.get("auto") is True:
+                return {}
         # v1.118.0: fan out to EVERY channel whose per-registration config
         # allows this event type — not just the default. A channel config may
         # carry ``events: [...]`` to narrow what it receives (the Notifications

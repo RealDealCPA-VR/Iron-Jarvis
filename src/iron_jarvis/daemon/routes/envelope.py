@@ -155,6 +155,7 @@ def probe_transport(adapter: Any):
                 for c in resp.tool_calls
             ],
             usage=dict(resp.usage or {}),
+            thinking=str(getattr(resp, "thinking", "") or ""),
         )
 
     return transport
@@ -294,13 +295,72 @@ def trial_refusal(d, provider: str, model: str) -> str:
     place = pm.upstream_place(provider, name)
     if place == "cloud":
         return NEVER_FORWARDED
+    fleet = getattr(d, "fleet", None) or getattr(platform, "fleet", None)
+    # Release 9 review: a LiteLLM proxy's FALLBACKS are invisible in its
+    # /model/info, so a proxy whose table holds ANY cloud entry may pass even
+    # a "local" name on. Never tried unasked (Measure stays the user's press).
+    holds = getattr(fleet, "table_holds_cloud", None)
+    if callable(holds) and holds(provider):
+        return NEVER_FORWARDED
     if place == "local":
         return ""
-    fleet = getattr(d, "fleet", None) or getattr(platform, "fleet", None)
     ask = getattr(fleet, "answers_itself", None)
     if callable(ask) and ask(provider):
         return ""
     return WAIT
+
+
+def trial_fingerprint(d, provider: str) -> str:
+    """What a trial's verdict was decided ON (release 9 review): the
+    endpoint's address, the fleet's routing revision, and the two readings
+    above. When it changes, a model left alone (or refused) is looked at
+    again. BLOCKING-cheap (no network); never raises."""
+    try:
+        platform = d.platform
+        fleet = getattr(d, "fleet", None) or getattr(platform, "fleet", None)
+        url = _endpoint_base_url(d, provider) or ""
+        rev = getattr(fleet, "revision", None)
+        rev = rev() if callable(rev) else rev
+        ask = getattr(fleet, "answers_itself", None)
+        holds = getattr(fleet, "table_holds_cloud", None)
+        return "|".join((
+            url, str(rev),
+            str(bool(ask(provider))) if callable(ask) else "",
+            str(holds(provider)) if callable(holds) else "",
+        ))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+#: Measure's refusal for a model that does not stay on the user's network
+#: (release 9 review), in plain words.
+NOT_YOURS_WORDS = (
+    "Iron Jarvis measures only your own models. This one's model server is not on this PC or "
+    "your network, or it passes this model on to a cloud service, so it is not measured."
+)
+
+
+def measure_refusal(d, provider: str, model: str) -> str:
+    """Measure's own check (the button and chat): "" or the plain reason.
+    BLOCKING-cheap; never raises (a fault refuses)."""
+    from ...providers import egress
+
+    try:
+        pm = d.platform.providers
+        # The same test as ``egress.stays_on_this_network``, on the address
+        # Measure itself will call (``_endpoint_base_url``): a provider that
+        # is local by name, a private address, not passed on to the cloud.
+        base = _endpoint_base_url(d, provider) or ""
+        if not (egress.is_local_provider(provider) and base and egress.private_host(base)):
+            return NOT_YOURS_WORDS
+        if egress.proxy_routes_to_cloud(provider, model, pm):
+            return NOT_YOURS_WORDS
+        place = getattr(pm, "upstream_place", None)
+        if callable(place) and place(provider, model) == "cloud":
+            return NOT_YOURS_WORDS
+        return ""
+    except Exception:  # noqa: BLE001 — fail closed
+        return NOT_YOURS_WORDS
 
 
 def _busy_now(d) -> bool:
@@ -421,13 +481,16 @@ def register(app: FastAPI, d) -> None:
 
     trials = _autotrial.AutoTrials(
         home=Path(d.platform.config.home),
-        is_trusted=d.platform.providers.is_trusted_provider,
+        # Only the user's OWN model servers are noted (a cloud or CLI provider,
+        # and any other name that is not a local server, never).
+        is_trusted=lambda provider: not d.platform.providers.is_own_model_provider(provider),
         measured=_measured,
         refusal=lambda provider, model: trial_refusal(d, provider, model),
         run=_auto_run,
         idle_seconds=input_idle_seconds,
         busy=lambda: _busy_now(d),
         stopped=_stopped,
+        fingerprint=lambda provider, model: trial_fingerprint(d, provider),
     )
     d.auto_trials = trials
     _autotrial.install(trials)
@@ -526,6 +589,9 @@ def register(app: FastAPI, d) -> None:
                     "connect the endpoint on the Connections page first"
                 ),
             )
+        refused = await asyncio.to_thread(measure_refusal, d, provider, model)
+        if refused:
+            raise HTTPException(status_code=400, detail=refused)
         key = (provider, model)
         if key in inflight:
             raise HTTPException(

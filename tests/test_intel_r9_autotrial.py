@@ -35,10 +35,16 @@ class PC:
         return self.idle
 
 
-def _trials(tmp_path: Path, pc: PC, *, ran: list, refusal=lambda p, m: "", measured=lambda p, m: False,
-            run=None) -> T.AutoTrials:
+def _trials(tmp_path: Path, pc: PC, *, ran: list, refusal=lambda p, m: "", measured=None,
+            run=None, fingerprint=None) -> T.AutoTrials:
     async def _run(provider, model):
         ran.append((provider, model))
+
+    if measured is None:
+        # A model is measured once its trial really ran (the stand-in battery
+        # lands a measurement).
+        def measured(p, m):
+            return (p, m) in ran
 
     return T.AutoTrials(
         home=tmp_path,
@@ -49,6 +55,7 @@ def _trials(tmp_path: Path, pc: PC, *, ran: list, refusal=lambda p, m: "", measu
         idle_seconds=pc.idle_seconds,
         busy=lambda: pc.busy,
         stopped=lambda: pc.stopped,
+        fingerprint=fingerprint or (lambda p, m: "same"),
         watch=0.0,
     )
 
@@ -271,6 +278,132 @@ def test_the_sampler_reading_a_plain_server_is_what_answers_itself_reads(tmp_pat
         pytest.skip("no seeded custom node in this build")
     assert reg.answers_itself("custom") is False
     reg.set_routes("custom", NOT_A_PROXY)
-    assert reg.answers_itself("custom") is True
-    reg.set_routes("custom", "unread")  # an unread pass keeps what was known
-    assert reg.answers_itself("custom") is True
+    # Release 9 review: "not LiteLLM" is not "answers itself". The custom slot
+    # was never DETECTED as Ollama or vLLM, so its models wait (Measure stays).
+    assert reg.answers_itself("custom") is False
+
+
+def test_a_trial_that_measured_nothing_is_tried_again_never_done(tmp_path):
+    """Release 9 review: an asleep model server's trial lands nothing; it is
+    counted like a cut and tried again, never marked done for ever."""
+    tried: list = []
+    trials = _trials(tmp_path, PC(), ran=tried, measured=lambda p, m: False)
+    trials.note_used("fleet-spark", "glm:30b")
+    for n in range(1, T.MAX_CUTS):
+        assert step(trials) == T.FAILED
+        assert trials.state_of("fleet-spark", "glm:30b") == T.PENDING
+    assert step(trials) == T.FAILED
+    assert trials.state_of("fleet-spark", "glm:30b") == T.LEFT
+    assert len(tried) == T.MAX_CUTS
+
+
+def test_emergency_stop_mid_trial_is_not_a_cut(tmp_path):
+    pc = PC()
+
+    async def never_ends(provider, model):
+        pc.stopped = True  # Emergency stop pressed while it runs
+        await asyncio.Event().wait()
+
+    trials = _trials(tmp_path, pc, ran=[], run=never_ends)
+    trials.note_used("ollama", "qwen3:8b")
+    assert step(trials) == T.STOPPED
+    assert trials.state_of("ollama", "qwen3:8b") == T.PENDING
+    assert trials._models[trials._key("ollama", "qwen3:8b")].cuts == 0
+
+
+def test_a_model_left_alone_is_looked_at_again_when_its_server_changes(tmp_path):
+    ran: list = []
+    where = {"fp": "192.168.1.20|7|False|True"}
+    verdict = {"why": "its model server passes it on to a cloud service"}
+    trials = _trials(tmp_path, PC(), ran=ran, refusal=lambda p, m: verdict["why"],
+                     fingerprint=lambda p, m: where["fp"])
+    trials.note_used("custom", "qwen3:30b")
+    assert step(trials) == T.REFUSED
+    assert step(trials) == T.NOTHING  # left alone while nothing changed
+    where["fp"], verdict["why"] = "192.168.1.20|8|True|False", ""
+    assert step(trials) == T.RAN and ran == [("custom", "qwen3:30b")]
+
+
+def test_a_proxy_that_can_reach_the_cloud_is_never_tried_unasked():
+    d = _d(custom="http://192.168.1.20:4000", place="local")
+    d.fleet.table_holds_cloud = lambda provider: True
+    assert envelope_routes.trial_refusal(d, "custom", "qwen3:30b") == envelope_routes.NEVER_FORWARDED
+    d.fleet.table_holds_cloud = lambda provider: False
+    assert envelope_routes.trial_refusal(d, "custom", "qwen3:30b") == ""
+
+
+def test_any_server_not_positively_known_waits_whatever_its_names():
+    """The reviewer's probe: a non-LiteLLM proxy at a private address read as
+    "not a proxy" answered "" for every name. Now only a node a probe
+    DETECTED as Ollama or vLLM may answer itself (FleetRegistry.answers_itself);
+    the stand-in fleet below says no, so every name waits."""
+    d = _d(custom="http://192.168.1.20:3000", plain=False)
+    for name in ("meta-llama/llama-3.3-70b-instruct", "moonshotai/kimi-k2", "qwen/qwen3-max",
+                 "z-ai/glm-4.6", "sonnet", "opus", "haiku", "frontier", "fleet"):
+        assert envelope_routes.trial_refusal(d, "custom", name) == T.WAIT, name
+
+
+def _registry(tmp_path, **node):
+    from iron_jarvis.fleet.registry import FleetRegistry
+
+    config = SimpleNamespace(
+        home=str(tmp_path), ollama_base_url="", custom_base_url="", custom_model="",
+        fleet_nodes=[{"id": "box", "label": "Box", "base_url": "http://192.168.1.20:8000",
+                      "routable": True, **node}],
+    )
+    return FleetRegistry(config, persist=lambda *a, **k: None)
+
+
+def test_answers_itself_only_for_a_detected_ollama_or_vllm_speaking_openai(tmp_path):
+    from iron_jarvis.fleet.upstreams import NOT_A_PROXY
+
+    cases = [
+        ({"kind": "vllm", "kind_detected_at": 1.0}, True),
+        ({"kind": "ollama", "kind_detected_at": 1.0}, True),
+        ({"kind": "vllm", "kind_detected_at": 0.0}, False),  # a guess, not detected
+        ({"kind": "openai-compat", "kind_detected_at": 1.0}, False),  # OpenWebUI, one-api...
+        ({"kind": "unknown", "kind_detected_at": 1.0}, False),
+        ({"kind": "vllm", "kind_detected_at": 1.0, "protocol": "anthropic"}, False),
+    ]
+    for node, want in cases:
+        reg = _registry(tmp_path, **node)
+        reg.set_routes("box", NOT_A_PROXY)
+        assert reg.answers_itself("fleet-box") is want, node
+
+
+def test_an_unread_pass_forgets_answers_itself(tmp_path):
+    from iron_jarvis.fleet.upstreams import NOT_A_PROXY, UNREAD
+
+    reg = _registry(tmp_path, kind="vllm", kind_detected_at=1.0)
+    reg.set_routes("box", NOT_A_PROXY)
+    assert reg.answers_itself("fleet-box") is True
+    reg.set_routes("box", UNREAD)  # replaced by a keyed proxy that now says 401
+    assert reg.answers_itself("fleet-box") is False
+
+
+def test_a_table_holding_any_cloud_entry_is_said(tmp_path):
+    from iron_jarvis.fleet.upstreams import RouteTable, Upstream
+
+    reg = _registry(tmp_path, kind="litellm", kind_detected_at=1.0)
+    assert reg.table_holds_cloud("fleet-box") is None
+    reg.set_routes("box", RouteTable(entries=(Upstream("glm", "hosted_vllm/glm", "local"),)))
+    assert reg.table_holds_cloud("fleet-box") is False
+    reg.set_routes("box", RouteTable(entries=(
+        Upstream("glm", "hosted_vllm/glm", "local"), Upstream("frontier", "openrouter/x", "cloud"),
+    )))
+    assert reg.table_holds_cloud("fleet-box") is True
+
+
+def test_a_model_tried_by_itself_sends_no_notice_even_to_a_subscribed_phone():
+    from iron_jarvis.comm.channels import MockChannel
+    from iron_jarvis.comm.notifier import Notifier
+
+    n = Notifier(event_types={"envelope.probe_completed"})
+    phone = MockChannel()
+    n.add_channel("phone", phone)
+    payload = {"provider": "ollama", "model": "qwen3:8b", "source": "probed"}
+    n.on_event({"type": "envelope.probe_completed", "session_id": None, "payload": {**payload, "auto": True}})
+    assert phone.sent == []
+    # The user's own Measure press still reaches what they subscribed to.
+    n.on_event({"type": "envelope.probe_completed", "session_id": None, "payload": payload})
+    assert len(phone.sent) == 1

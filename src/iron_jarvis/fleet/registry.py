@@ -448,15 +448,19 @@ class FleetRegistry:
         had — a proxy that did not answer this once has not changed its
         routing. A change to any verdict moves :attr:`revision`, so the model
         list is rebuilt with the new places."""
-        if result == UNREAD:
-            return
         node = self._top_level().get(node_id)
-        changed = False
         with self._routes_lock:
+            # Release 9 review: "answers itself" is only as fresh as the last
+            # read that SAID so; an unread pass (the server changed, a key it
+            # now wants) forgets it, so a stale verdict never lets a trial go.
             if result == NOT_A_PROXY and node is not None:
                 self._plain[node_id] = normalize_root(node.base_url)
             else:
                 self._plain.pop(node_id, None)
+        if result == UNREAD:
+            return
+        changed = False
+        with self._routes_lock:
             old = self._routes.get(node_id)
             if node is None or not isinstance(result, RouteTable):
                 if old is not None:
@@ -484,22 +488,50 @@ class FleetRegistry:
         root, table = held
         return table if root == normalize_root(node.base_url) else None
 
+    #: The server kinds that are KNOWN to answer with their own models (release 9
+    #: review: positive identification only). Anything else that is not a
+    #: LiteLLM proxy may still be a proxy we cannot read (OpenWebUI, one-api,
+    #: an nginx forward), so it is never called "answers itself".
+    _SELF_ANSWERING_KINDS = frozenset({"ollama", "vllm"})
+
     def answers_itself(self, provider: str) -> bool:
-        """Release 9: did the sampler read, at this node's CURRENT address,
-        that the server is not a model proxy (it answers itself, so no name
-        it serves is passed on)? False when nothing was read, when it is a
-        proxy (its table speaks instead), or when the address changed. Never
-        a network call; never raises."""
+        """Release 9: is this node POSITIVELY a server that answers with its
+        own models? All of: a probe DETECTED its kind as Ollama or vLLM
+        (``kind_detected_at > 0``; a kind guessed from the config slot does
+        not count), it speaks the OpenAI protocol, and the sampler's last
+        read at its CURRENT address said it is not a model proxy. Anything
+        else (openai-compat, unknown, an Anthropic-protocol node, a changed
+        address, an unread pass) is False. Never a network call; never
+        raises."""
         try:
             node_id = self._node_id_for(provider)
             node = self._top_level().get(node_id) if node_id else None
             if node is None or not node.enabled:
+                return False
+            if node.kind not in self._SELF_ANSWERING_KINDS or not (node.kind_detected_at or 0) > 0:
+                return False
+            if (getattr(node, "protocol", "openai") or "openai") != "openai":
                 return False
             with self._routes_lock:
                 held = self._plain.get(node_id)
             return held is not None and held == normalize_root(node.base_url)
         except Exception:  # noqa: BLE001
             return False
+
+    def table_holds_cloud(self, provider: str) -> bool | None:
+        """Release 9 review: does this node's proxy routing table hold ANY
+        cloud entry (or was it cut short)? A LiteLLM fallback to a cloud
+        model is invisible in ``/model/info``, so a proxy that can reach the
+        cloud at all is never trialled unasked. ``None`` = no table read.
+        Never raises (a fault reads as True)."""
+        try:
+            node_id = self._node_id_for(provider)
+            table = self.routes_for(node_id) if node_id else None
+            if table is None:
+                return None
+            return bool(table.truncated) or any(e.place != "local" for e in table.entries)
+        except Exception:  # noqa: BLE001 — fail closed
+            return True
 
     @staticmethod
     def _node_id_for(provider: str) -> str:
