@@ -74,10 +74,10 @@ describe("G55: the receipt says what was left out to fit", () => {
     expect(refitLine(null)).toBeNull();
     // What was attached or remembered for the message was left out to fit.
     expect(refitLine({ dropped: 0, found_left_out: true })).toBe(
-      "Left out what was attached or remembered for this message to fit this model",
+      "Left out what Iron Jarvis added beside this message to fit this model",
     );
     expect(refitLine({ dropped: 2, found_left_out: true })).toBe(
-      "Left out 2 older messages and what was attached or remembered for this message to fit this model",
+      "Left out 2 older messages and what Iron Jarvis added beside this message to fit this model",
     );
     expect(refitTitle({ dropped: 0, found_left_out: true })).toMatch(/Your own words were sent whole/);
     expect(refitLine({ dropped: 3, found_left_out: false } as never)).toBe("Left out 3 older messages to fit this model");

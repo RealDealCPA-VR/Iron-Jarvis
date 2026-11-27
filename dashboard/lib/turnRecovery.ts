@@ -92,7 +92,7 @@ export function refitLine(refit: TurnRefit | null | undefined): string | null {
   if (!r) return null;
   if (r.found_left_out) {
     const older = r.dropped > 0 ? `${r.dropped} older message${r.dropped === 1 ? "" : "s"} and ` : "";
-    return `Left out ${older}what was attached or remembered for this message to fit this model`;
+    return `Left out ${older}what Iron Jarvis added beside this message to fit this model`;
   }
   if (r.dropped === 0) return "Shortened earlier tool results to fit this model";
   return `Left out ${r.dropped} older message${r.dropped === 1 ? "" : "s"} to fit this model`;
@@ -100,7 +100,7 @@ export function refitLine(refit: TurnRefit | null | undefined): string | null {
 
 /** The "why" when what was attached or remembered for the message was left out. */
 export const REFIT_FOUND_TITLE =
-  "This model was too small for everything, so Iron Jarvis left out what was attached or remembered for this message. Your own words were sent whole. The answer did not see what was left out.";
+  "This model was too small for everything, so Iron Jarvis left out what it added beside this message: what was attached, remembered or found, and its notes on its tools. Your own words were sent whole. The answer did not see what was left out.";
 
 /** Hover words for the refit part: why, and what it means for the answer. */
 export const REFIT_TITLE =
