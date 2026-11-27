@@ -2483,8 +2483,8 @@ class WorkflowUpdateTool(_RecordTool):
     RECORD = "workflow"
     description = (
         "Change a saved workflow: rename it (`new_name`), re-describe it, or replace its "
-        "`steps` ({name, agent, task} objects). The user approves on a card; the change has "
-        "an Undo."
+        "`steps` (the step objects workflow_create takes, an If or a For each block "
+        "included). The user approves on a card; the change has an Undo."
     )
     input_schema = {
         "type": "object",

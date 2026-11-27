@@ -66,88 +66,21 @@ def step_problem(steps: Any, platform: Any = None) -> "str | None":
 
     *platform* is where the live tool list is read (:func:`tool_missing`);
     None skips only that one check.
-    """
-    from .engine import _TEMPLATE_RX, ON_FAILURE, STEP_KINDS
 
-    if steps is not None and not isinstance(steps, list):
-        return "steps: a workflow's steps are a list, one entry for each step"
-    step_names = {
-        str(raw.get("name") or "").strip()
-        for raw in (steps or [])
-        if isinstance(raw, dict)
-    }
-    for i, raw in enumerate(steps or []):
-        if not isinstance(raw, dict):
-            continue  # the loader ignores non-dict entries; keep parity
-        # REFERENCES (v1.231.0, AE10): ``{{Ref.data}}`` resolves only a
-        # STEP's recorded data — a run input or the reflex ``Trigger``
-        # never carries ``data`` — so one whose ``Ref`` names no step
-        # (``{{Scna.data}}``) renders "" on every run, forever, and the
-        # run completes green on it. Refused at save time, naming the
-        # step and the reference. A bare ``{{Name}}`` naming no step is
-        # left alone: it is how a run input (``POST /workflows/run
-        # inputs`` / the ``workflow_run`` tool) is referenced, and a def
-        # declares none. (At its turn a bare name that nothing gave stops
-        # the step by name: :func:`missing_values`.)
-        label = str(raw.get("name") or "").strip() or f"#{i + 1}"
-        templated = [str(raw.get("task") or ""), str(raw.get("message") or "")]
-        args = raw.get("args")
-        for v in (args.values() if isinstance(args, dict) else ()):
-            if isinstance(v, str):
-                templated.append(v)
-            elif isinstance(v, list):
-                templated.extend(x for x in v if isinstance(x, str))
-        for text in templated:
-            for m in _TEMPLATE_RX.finditer(text):
-                ref = m.group(1).strip()
-                if not ref.endswith(".data") or ref in step_names:
-                    continue  # a bare ref, or a step literally named X.data
-                base = ref[: -len(".data")].strip()
-                if base not in step_names:
-                    return (
-                        f"steps[{i}] ({label}): {{{{{ref}}}}} refers to "
-                        f"a step named {base!r} that this workflow does not "
-                        "have — .data resolves only a step's recorded data; "
-                        "check the spelling against the step names"
-                    )
-        kind_raw = raw.get("kind")
-        kind = "agent"
-        if kind_raw:  # falsy = absent/empty = the default, never a rewrite
-            kind = str(kind_raw).strip().lower()
-            if kind not in STEP_KINDS:
-                return f"steps[{i}].kind: {kind_raw!r} is not one of " + "|".join(STEP_KINDS)
-        # CONTENT (v1.225.0): a step that cannot possibly run is refused at
-        # save time, naming the step — an agent step with no task ran an
-        # agent on an empty instruction, a tool step with no tool failed
-        # at its turn mid-run, an ask with no question parked the run on
-        # "Continue past “x”?". Each used to be discovered minutes into a
-        # run instead of at the moment of saving.
-        has_task = bool(str(raw.get("task") or "").strip())
-        has_msg = bool(str(raw.get("message") or "").strip())
-        if kind == "agent" and not has_task and not str(raw.get("name") or "").strip():
-            return f"steps[{i}] ({label}): an agent step needs a task"
-        if kind == "tool" and not str(raw.get("tool") or "").strip():
-            return f"steps[{i}] ({label}): a tool step needs a tool name"
-        # v1.449.0 (Wave D item 42): a tool step naming a tool this install
-        # does not have fails at its turn, mid-run — refused at SAVE time
-        # by name, so the editor can say it beside the step. The live
-        # registry is the one list (``GET /templates`` shows the same
-        # ``live_tools``); a registry that cannot be read refuses nothing.
-        if kind == "tool" and platform is not None:
-            tool_name = str(raw.get("tool") or "").strip()
-            if tool_missing(platform, tool_name):
-                return f"steps[{i}] ({label}): no tool named {tool_name!r} — " + NO_TOOL_FIX
-        if kind in ("ask", "notify") and not has_msg and not has_task:
-            return f"steps[{i}] ({label}): an {kind} step needs a message"
-        failure_raw = raw.get("on_failure")
-        if failure_raw:
-            on_failure = str(failure_raw).strip().lower()
-            if on_failure not in ON_FAILURE:
-                return (
-                    f"steps[{i}].on_failure: {failure_raw!r} is not "
-                    "one of " + "|".join(ON_FAILURE)
-                )
-    return None
+    Idea 09 (09-a): the walk itself is ``validate.problems``, which goes into
+    the "If" and "For each" blocks (a step inside one is checked as one
+    outside is, and the block for what only a block can get wrong). This is
+    still the ONE function the doors call; the first sentence is the answer.
+    For a workflow without blocks the words and their order are as before:
+    the references first (``{{Ref.data}}`` naming no step, v1.231.0 AE10),
+    then the kind, then whether the step can run at all (v1.225.0: a task, a
+    tool, a tool this install has (v1.449.0), a message), then
+    ``on_failure``.
+    """
+    from .validate import problems
+
+    found = problems(steps, platform)
+    return found[0] if found else None
 
 
 def _step_texts(step: Any) -> list[str]:
@@ -155,6 +88,19 @@ def _step_texts(step: Any) -> list[str]:
     step's kind: exactly what its runner renders, nothing else (a tool step's
     leftover ``task`` is never read, so a reference in it stops nothing)."""
     kind = str(getattr(step, "kind", "") or "agent")
+    if kind == "if":
+        # Idea 09: an If reads its condition's two sides.
+        from .logic import condition_texts
+
+        return condition_texts(getattr(step, "condition", None))
+    if kind == "for_each":
+        # Idea 09: a For each reads its list, or its folder and pattern.
+        over = getattr(step, "over", None)
+        over = over if isinstance(over, dict) else {}
+        texts = [over["from"]] if isinstance(over.get("from"), str) else []
+        files = over.get("files") if isinstance(over.get("files"), dict) else {}
+        texts.extend(files[k] for k in ("folder", "glob") if isinstance(files.get(k), str))
+        return texts
     if kind == "tool":
         texts: list[str] = []
         for v in (getattr(step, "args", None) or {}).values():
@@ -184,7 +130,7 @@ def missing_values(step: Any, outputs: "dict[str, Any] | None") -> list[str]:
     v1.231.0), a step that finished with no ``data``, and an input given as
     an empty text. Each of those is a recorded answer, not an absent one.
     """
-    from .engine import _TEMPLATE_RX
+    from .engine import _TEMPLATE_RX, MISSING, UnreadableData, field_ref, read_field
 
     outs = outputs if isinstance(outputs, dict) else {}
     found: dict[str, None] = {}
@@ -197,6 +143,20 @@ def missing_values(step: Any, outputs: "dict[str, Any] | None") -> list[str]:
                 outs.get(ref[: -len(".data")].strip()), dict
             ):
                 continue
+            # Idea 09: ``{{Step.data.field}}`` / ``{{item.field}}`` — a field
+            # that is not in the step's data is a value nothing gave. (A
+            # failed step's fields stay "" as its ``.data`` does, and data
+            # that cannot be read is said by :func:`unreadable_values`.)
+            field = field_ref(ref, outs)
+            if field is not None:
+                base_out = field[1]
+                if base_out.get("status") == "failed":
+                    continue
+                try:
+                    if read_field(base_out, field[2]) is not MISSING:
+                        continue
+                except UnreadableData:
+                    continue
             found.setdefault(ref, None)
     return list(found)
 
@@ -204,3 +164,35 @@ def missing_values(step: Any, outputs: "dict[str, Any] | None") -> list[str]:
 def no_value_words(names: "list[str]") -> str:
     """What a step that could not run for want of a value says."""
     return "could not run: no value for " + ", ".join(names)
+
+
+def unreadable_values(step: Any, outputs: "dict[str, Any] | None") -> list[str]:
+    """The ``{{Step.data.field}}`` names in *step* whose step's stored JSON
+    cannot be read (idea 09): it was clipped to the record's bound, so no
+    field can be read from it. In the order written, each once."""
+    from .engine import _TEMPLATE_RX, UnreadableData, field_ref, read_field
+
+    outs = outputs if isinstance(outputs, dict) else {}
+    found: dict[str, None] = {}
+    for text in _step_texts(step):
+        for m in _TEMPLATE_RX.finditer(text or ""):
+            ref = m.group(1).strip()
+            if isinstance(outs.get(ref), dict):
+                continue
+            field = field_ref(ref, outs)
+            if field is None or field[1].get("status") == "failed":
+                continue
+            try:
+                read_field(field[1], field[2])
+            except UnreadableData:
+                found.setdefault(ref, None)
+    return list(found)
+
+
+def unreadable_words(names: "list[str]") -> str:
+    """What a step says when a field it reads is in data too large to read."""
+    return (
+        "could not run: the data was too large to read a field from ("
+        + ", ".join(names)
+        + "). Pass a smaller result, or read the whole value without a field"
+    )

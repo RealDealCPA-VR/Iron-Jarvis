@@ -231,10 +231,49 @@ def tier_refusal_words(step: "Step", decision: Any) -> str:
         "an Agent step, which asks you first."
     )
 
-#: What a step IS (v1.121.0). Unknown values coerce to "agent".
-STEP_KINDS: tuple[str, ...] = ("agent", "tool", "ask", "notify")
+#: What a step IS (v1.121.0). Idea 09 (09-a) adds the two BLOCKS: "if" (two
+#: paths, one taken: ``workflows/logic``) and "for_each" (the same steps for
+#: every item of a list). An unknown kind is REFUSED by name when a workflow
+#: is loaded (:class:`UnknownStepKind`), never turned into an agent step: a
+#: block from a newer version would have run as an agent on an empty task.
+STEP_KINDS: tuple[str, ...] = ("agent", "tool", "ask", "notify", "if", "for_each")
+#: The kinds that hold steps of their own (``validate.BLOCK_KINDS``).
+BLOCK_KINDS: tuple[str, ...] = ("if", "for_each")
 #: What a failed step does to the run. Unknown values coerce to "halt".
 ON_FAILURE: tuple[str, ...] = ("halt", "retry", "skip")
+
+#: Idea 09 bounds (``validate`` refuses a workflow past them at every door
+#: that saves, and :meth:`WorkflowEngine.create_record` before a run).
+#: D-09.1: how many items one For each works through before it stops.
+DEFAULT_MAX_ITEMS = 200
+#: The most step runs one workflow run may take, blocks included.
+MAX_STEP_RUNS = 2000
+#: Light on the PC (north star 7): at most this many items at once.
+MAX_PARALLEL = 4
+#: What a For each keeps of each item's result (its row, and each step of a
+#: finished item): the run record grows with every item, and this bounds it.
+_MAX_ITEM_SUMMARY = 300
+
+#: A run that reached :data:`MAX_STEP_RUNS` (said on the step that stopped).
+STEP_RUNS_WORDS = (
+    f"Stopped: this run reached {MAX_STEP_RUNS:,} steps, the most one run may take. "
+    "Split the work into smaller lists, or lower how many items each For each works through."
+)
+
+
+class UnknownStepKind(ValueError):
+    """A stored step whose ``kind`` this version does not know. Raised by
+    :func:`load_workflow` with a sentence that names the step and the kind."""
+
+
+def unknown_kind_words(name: str, kind: str) -> str:
+    """What a workflow with a step of an unknown kind says, everywhere it is
+    loaded (a run, a schedule's fire, a rule's start)."""
+    who = f"The step “{name}”" if name.strip() else "A step"
+    return (
+        f"{who} is a “{kind}” step, which this version of Iron Jarvis does not know, so "
+        "the workflow was not run. Open it on the Workflows page and choose what the step is."
+    )
 
 
 @dataclass
@@ -259,6 +298,20 @@ class Step:
     #: Empty dict = no expectations = zero behavior change. Checks run
     #: DETERMINISTICALLY after the step completes (see ``_expect_failure``).
     expect: dict = field(default_factory=dict)
+    #: Idea 09 (09-a), BLOCKS only. ``if``: what it checks,
+    #: ``{left, op, right}`` or one level of ``{all|any: [...]}``.
+    condition: dict = field(default_factory=dict)
+    #: ``if``: the Then path; ``for_each``: the steps run for every item.
+    steps: list["Step"] = field(default_factory=list)
+    #: ``if``: the Otherwise path.
+    else_steps: list["Step"] = field(default_factory=list)
+    #: ``for_each``: what it works through, ``{from: "{{Step.data}}"}`` (a
+    #: JSON list) or ``{files: {folder, glob}}`` (listed by ``list_folder``).
+    over: dict = field(default_factory=dict)
+    #: ``for_each``: how many items it works through (D-09.1).
+    max_items: int = DEFAULT_MAX_ITEMS
+    #: ``for_each``: how many items at once, 1 to :data:`MAX_PARALLEL`.
+    parallel: int = 1
 
 
 @dataclass
@@ -301,30 +354,72 @@ def _coerce_expect(raw: Any) -> dict:
     return expect
 
 
-def load_workflow(data: dict) -> WorkflowDef:
-    """Build a :class:`WorkflowDef` from a parsed mapping (e.g. TOML/JSON)."""
+#: How deep the loader follows blocks inside blocks. ``validate`` refuses
+#: past :data:`validate.MAX_NESTING` (3); this only keeps a hand-made row from
+#: recursing without end.
+_LOAD_DEPTH = 8
+
+
+def _whole_or(value: Any, default: int) -> int:
+    """*value* as a whole number, else *default* (the loader is lenient;
+    ``validate`` refuses a value out of range at save and before a run)."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return default
+
+
+def _load_steps(raw_steps: Any, depth: int = 0) -> list[Step]:
+    if depth > _LOAD_DEPTH:
+        raise ValueError("blocks go at most 3 deep (an If or a For each inside another)")
     steps: list[Step] = []
-    for raw in data.get("steps", []) or []:
-        kind = str(raw.get("kind") or "agent").strip().lower()
+    for raw in raw_steps or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "agent").strip().lower() or "agent"
+        if kind not in STEP_KINDS:
+            # Idea 09 (09-a): REFUSED by name, never coerced to an agent step.
+            raise UnknownStepKind(unknown_kind_words(str(raw.get("name") or ""), str(raw.get("kind"))))
         on_failure = str(raw.get("on_failure") or "halt").strip().lower()
         args = raw.get("args")
-        steps.append(
-            Step(
-                name=str(raw.get("name", "")),
-                agent=str(raw.get("agent", "builder")),
-                task=str(raw.get("task", "")),
-                tool=raw.get("tool"),
-                kind=kind if kind in STEP_KINDS else "agent",
-                on_failure=on_failure if on_failure in ON_FAILURE else "halt",
-                group=(str(raw.get("group") or "").strip() or None),
-                args=args if isinstance(args, dict) else {},
-                message=str(raw.get("message", "")),
-                expect=_coerce_expect(raw.get("expect")),
-            )
+        step = Step(
+            name=str(raw.get("name", "")),
+            agent=str(raw.get("agent", "builder")),
+            task=str(raw.get("task", "")),
+            tool=raw.get("tool"),
+            kind=kind,
+            on_failure=on_failure if on_failure in ON_FAILURE else "halt",
+            group=(str(raw.get("group") or "").strip() or None),
+            args=args if isinstance(args, dict) else {},
+            message=str(raw.get("message", "")),
+            expect=_coerce_expect(raw.get("expect")),
         )
+        if kind in BLOCK_KINDS:
+            cond = raw.get("condition")
+            over = raw.get("over")
+            step.condition = cond if isinstance(cond, dict) else {}
+            step.over = over if isinstance(over, dict) else {}
+            step.steps = _load_steps(raw.get("steps"), depth + 1)
+            step.else_steps = _load_steps(raw.get("else_steps"), depth + 1)
+            step.max_items = _whole_or(raw.get("max_items"), DEFAULT_MAX_ITEMS)
+            step.parallel = _whole_or(raw.get("parallel"), 1)
+        steps.append(step)
+    return steps
+
+
+def load_workflow(data: dict) -> WorkflowDef:
+    """Build a :class:`WorkflowDef` from a parsed mapping (e.g. TOML/JSON).
+
+    Raises :class:`UnknownStepKind` (a ``ValueError``) for a step whose kind
+    this version does not know, with the sentence that says so (idea 09)."""
     return WorkflowDef(
         name=str(data.get("name", "")),
-        steps=steps,
+        steps=_load_steps(data.get("steps", []) or []),
         description=str(data.get("description", "")),
         # Optional explicit project pin — absent/empty both mean unpinned.
         project_id=(str(data.get("project_id") or "").strip() or None),
@@ -333,8 +428,10 @@ def load_workflow(data: dict) -> WorkflowDef:
 
 def step_to_dict(s: Step) -> dict:
     """Serialize a step COMPLETELY — the run record persists this so a parked
-    run can be resumed from the database alone after a restart."""
-    return {
+    run can be resumed from the database alone after a restart. A block
+    (idea 09) carries its condition or list, its limits and the steps inside
+    it; every other step is the same ten fields as before."""
+    out = {
         "name": s.name,
         "agent": s.agent,
         "task": s.task,
@@ -346,6 +443,38 @@ def step_to_dict(s: Step) -> dict:
         "message": s.message,
         "expect": s.expect,
     }
+    if s.kind in BLOCK_KINDS:
+        out["condition"] = s.condition
+        out["over"] = s.over
+        out["steps"] = [step_to_dict(x) for x in s.steps]
+        out["else_steps"] = [step_to_dict(x) for x in s.else_steps]
+        out["max_items"] = s.max_items
+        out["parallel"] = s.parallel
+    return out
+
+
+def step_at(workflow: "WorkflowDef", at: Any) -> Step:
+    """The step a parked ask's locator names (idea 09): ``[2]`` is the third
+    step, ``[2, "steps", 0, "else_steps", 1]`` the second step of the
+    Otherwise path of the If that is the first step inside it. Raises
+    ``ValueError`` when the locator names no step."""
+    bad = ValueError("this run's parked step could not be reconstructed")
+    if not isinstance(at, list) or not at or len(at) % 2 != 1:
+        raise bad
+    steps = workflow.steps
+    step: Step | None = None
+    for pos, part in enumerate(at):
+        if pos % 2 == 0:
+            if isinstance(part, bool) or not isinstance(part, int) or not 0 <= part < len(steps):
+                raise bad
+            step = steps[part]
+        else:
+            if step is None or part not in ("steps", "else_steps"):
+                raise bad
+            steps = step.steps if part == "steps" else step.else_steps
+    if step is None:
+        raise bad
+    return step
 
 
 def _read_toml_text(path_or_str: str | Path) -> str:
@@ -400,6 +529,77 @@ def _fenced_outside(value: str) -> str:
     return "\n" + wrap_untrusted(_FENCE_MARKER.sub(r"(\1", value or "")) + "\n" if value else ""
 
 
+def _from_outside(out: dict) -> bool:
+    """An output whose words someone outside wrote: a signal's own words
+    (``{{Trigger}}``), or a For each's item that came from a folder's file
+    names or from such words (idea 09)."""
+    return out.get("kind") == TRIGGER_KIND or bool(out.get("outside"))
+
+
+class UnreadableData(ValueError):
+    """A step's stored JSON could not be read (it was clipped to the record's
+    bound, :data:`_MAX_STEP_DATA`), so no field can be read from it."""
+
+
+#: A field that is not in the data (``read_field``).
+MISSING = object()
+
+
+def field_ref(ref: str, outputs: "dict[str, Any]") -> "tuple[str, dict, list[str]] | None":
+    """``(base name, base output, path)`` for ``{{Step.data.a.b}}`` and, inside
+    a For each, ``{{item.a}}``; None for any other reference (idea 09)."""
+    if ".data." in ref:
+        base, rest = ref.split(".data.", 1)
+        out = outputs.get(base.strip())
+        if isinstance(out, dict):
+            return base.strip(), out, [p.strip() for p in rest.split(".")]
+        return None
+    head, sep, rest = ref.partition(".")
+    if sep and head.strip() == "item":
+        out = outputs.get("item")
+        if isinstance(out, dict):
+            return "item", out, [p.strip() for p in rest.split(".")]
+    return None
+
+
+def read_field(out: dict, path: "list[str]") -> Any:
+    """The value at *path* in *out*'s data, :data:`MISSING` when it is not
+    there. Raises :class:`UnreadableData` when the stored JSON cannot be read
+    (it was clipped)."""
+    data = out.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (TypeError, ValueError):
+            raise UnreadableData(out.get("data", "")[:40]) from None
+    for seg in path:
+        if isinstance(data, dict) and seg in data:
+            data = data[seg]
+        elif isinstance(data, list) and seg.isdigit() and int(seg) < len(data):
+            data = data[int(seg)]
+        else:
+            return MISSING
+    return data
+
+
+def value_text(value: Any) -> str:
+    """A field's value as the text a step is given."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def signal_trust(outputs: dict[str, Any]) -> dict[str, str]:
     """``{"trust": "low", "trust_reason": …}`` when the run was started by an
     outside signal the router marked low (its ``Trigger`` output carries it),
@@ -436,6 +636,16 @@ def render_template(text: str, outputs: dict[str, Any], *, fence_outside: bool =
     step as if it were the step's output let a downstream tool run on a
     quota error presented as content. ``{{name.data}}`` of a failed step
     stays the empty string — a failed tool records no ``data`` (v1.170.0).
+
+    Idea 09 (09-a): ``{{Step.data.field}}`` is ONE field of the step's
+    stored JSON, a dotted path (``{{Read.data.totals.grand}}``; a number
+    picks from a list, counting from 0), and inside a For each ``{{item}}``,
+    ``{{item.name}}`` and ``{{index}}`` are the item it is working on. A
+    field that is not there renders "" here; the engine stops the step first
+    (``checks.missing_values``), and a step whose stored JSON was clipped
+    stops with "the data was too large to read a field from"
+    (``checks.unreadable_values``). An item that came from outside (a file's
+    name, a list from ``{{Trigger}}``) is fenced like ``{{Trigger}}``.
     """
     def _sub(m: re.Match) -> str:
         ref = m.group(1).strip()
@@ -444,9 +654,24 @@ def render_template(text: str, outputs: dict[str, Any], *, fence_outside: bool =
             summary = str(out.get("summary") or "")
             if out.get("status") == "failed":
                 return f"[step {ref} failed: {summary}]"[:_MAX_STEP_SUMMARY]
-            if fence_outside and out.get("kind") == TRIGGER_KIND:
+            if fence_outside and _from_outside(out):
                 return _fenced_outside(summary[:_MAX_STEP_SUMMARY])
             return summary[:_MAX_STEP_SUMMARY]
+        field = field_ref(ref, outputs)
+        if field is not None:
+            _base, base_out, path = field
+            if base_out.get("status") == "failed":
+                return ""
+            try:
+                value = read_field(base_out, path)
+            except UnreadableData:
+                return ""
+            if value is MISSING:
+                return ""
+            text = value_text(value)[:_MAX_STEP_DATA]
+            if fence_outside and _from_outside(base_out):
+                return _fenced_outside(text)
+            return text
         if ref.endswith(".data"):
             base = outputs.get(ref[: -len(".data")].strip())
             if isinstance(base, dict):
@@ -517,11 +742,177 @@ class _AskPark(Exception):
     """Raised inside the step loop when an ``ask`` step fires: the run must
     PARK (durably) instead of finishing. Carries what the record needs."""
 
-    def __init__(self, index: int, step: str, question: str) -> None:
+    def __init__(self, index: int, step: str, question: str, at: "list | None" = None) -> None:
         super().__init__(question)
         self.index = index
         self.step = step
         self.question = question
+        #: Idea 09: an ask INSIDE a block — ``index`` is then the block's
+        #: place in the workflow, ``step`` the ask's path-qualified output
+        #: key, and ``at`` the locator of its definition (:func:`step_at`).
+        self.at = at
+
+
+@dataclass
+class _RunCtx:
+    """What every step of one drive shares (idea 09: the block runner reads
+    it, so a step inside a block runs exactly as a step outside one)."""
+
+    orch: Any
+    run_id: str
+    workflow: "WorkflowDef"
+    outputs: dict
+    session_ids: list
+    workspace_root: str | None
+    tool_workspace: Any
+    person_started: bool
+    completed_chain: Any
+
+
+@dataclass
+class _Frame:
+    """One list of steps being run: the workflow's own (``prefix`` "") or the
+    steps inside a block, whose outputs are kept under ``prefix`` (``Each
+    file/3/``, ``Check/then/``) so the "a finished step is never run again"
+    rule makes a resume walk the same path. ``at`` locates the list in the
+    definition (:func:`step_at`), ``extras`` are the names a For each gives
+    its steps (``item``, ``index``)."""
+
+    prefix: str
+    steps: list
+    at: list
+    top_index: int | None = None
+    top_name: str = ""
+    extras: dict = field(default_factory=dict)
+    parent: "_Frame | None" = None
+
+
+def _scope_view(outputs: dict, frame: "_Frame") -> dict:
+    """The values a step inside *frame* reads its ``{{names}}`` from: the run's
+    own outputs, then, from the outermost block in, each block's item and the
+    steps of its own list by their plain names (the nearest wins)."""
+    chain: list[_Frame] = []
+    f: _Frame | None = frame
+    while f is not None and f.prefix:
+        chain.append(f)
+        f = f.parent
+    view = dict(outputs)
+    for f in reversed(chain):
+        view.update(f.extras)
+        for s in f.steps:
+            out = outputs.get(f.prefix + s.name)
+            if isinstance(out, dict):
+                view[s.name] = out
+    return view
+
+
+def _local_chain(outputs: dict, frame: "_Frame") -> list[tuple[str, str]]:
+    """The finished steps of *frame* and the blocks around it, by plain name
+    (the agent step's "Context from earlier steps" inside a block)."""
+    chain: list[_Frame] = []
+    f: _Frame | None = frame
+    while f is not None and f.prefix:
+        chain.append(f)
+        f = f.parent
+    out: list[tuple[str, str]] = []
+    for f in reversed(chain):
+        for s in f.steps:
+            o = outputs.get(f.prefix + s.name)
+            if isinstance(o, dict) and o.get("status") == "completed":
+                out.append((s.name, str(o.get("summary") or "")))
+    return out
+
+
+def _done(out: Any) -> bool:
+    return isinstance(out, dict) and out.get("status") == "completed"
+
+
+def _leaf_runs(outputs: dict) -> int:
+    """How many step runs a run's record already holds (a resume counts them
+    toward :data:`MAX_STEP_RUNS`)."""
+    n = 0
+    for o in (outputs or {}).values():
+        if (
+            isinstance(o, dict)
+            and o.get("kind") in ("agent", "tool", "ask", "notify")
+            and o.get("status") in ("completed", "failed", "cancelled")
+        ):
+            n += 1
+    return n
+
+
+def _item_text(item: Any) -> str:
+    if isinstance(item, dict) and isinstance(item.get("path"), str):
+        return item["path"]
+    if isinstance(item, str):
+        return item
+    return value_text(item)
+
+
+def _item_label(item: Any, n: int) -> str:
+    if isinstance(item, dict):
+        for key in ("name", "title", "label", "id"):
+            v = item.get(key)
+            if isinstance(v, (str, int, float)) and str(v).strip():
+                return str(v).strip()[:80]
+        return f"Item {n}"
+    text = " ".join(_item_text(item).split())
+    return (text[:77] + "…") if len(text) > 80 else (text or f"Item {n}")
+
+
+def _item_extras(item: Any, n: int, outside: bool) -> dict:
+    """``{{item}}`` (the file's path, the text, or the element as JSON),
+    ``{{item.field}}`` and ``{{index}}`` (counting from 1)."""
+    entry: dict = {
+        "status": "completed",
+        "summary": _item_text(item)[:_MAX_STEP_DATA],
+        "data": item,
+        "kind": "item",
+    }
+    if outside:
+        entry["outside"] = True
+    return {"item": entry, "index": {"status": "completed", "summary": str(n), "kind": "item"}}
+
+
+def settle_open_blocks(outputs: dict, final_status: str) -> bool:
+    """A run that ENDED with a block still open (stopped while it worked, or
+    while it waited on an ask inside it): the block reads "cancelled" (or
+    "skipped"), never "running", and its stored list goes. Returns whether
+    anything changed. Pure."""
+    changed = False
+    for out in list((outputs or {}).values()):
+        if (
+            isinstance(out, dict)
+            and out.get("status") == "running"
+            and out.get("kind") in BLOCK_KINDS
+        ):
+            out["status"] = "cancelled" if final_status == "cancelled" else "skipped"
+            out.pop("list", None)
+            changed = True
+    return changed
+
+
+def rollup_words(done: int, failed: int, not_run: int, total: int) -> str:
+    """A For each's line: "14 of 14 done", "13 of 14 done, 1 failed", "6 of 14
+    done, 1 failed, 7 not run"."""
+    if total == 0:
+        return "Nothing to work through: the list was empty."
+    words = f"{done} of {total} done"
+    if failed:
+        words += f", {failed} failed"
+    if not_run:
+        words += f", {not_run} not run"
+    return words
+
+
+def items_bound_words(name: str, limit: int, found: int, done: int) -> str:
+    """D-09.1: a For each given more items than it may work through stops at
+    the next one and says so."""
+    return (
+        f"Stopped at item {limit + 1:,} of {found:,}: “{name}” works through at most "
+        f"{limit:,} items in one run, and {done:,} of those are done. To go further, "
+        "raise its limit (up to 2,000) or split the list."
+    )
 
 
 class WorkflowEngine:
@@ -541,6 +932,8 @@ class WorkflowEngine:
     def __init__(self, platform, orchestrator=None) -> None:
         self.platform = platform
         self.orchestrator = orchestrator
+        #: Idea 09: step runs taken so far, per run id (:data:`MAX_STEP_RUNS`).
+        self._step_runs: dict[str, int] = {}
 
     @staticmethod
     def _has_runnable_steps(workflow: WorkflowDef) -> bool:
@@ -579,6 +972,17 @@ class WorkflowEngine:
         # FULL step serialization (v1.121.0): a parked run must be resumable
         # from the database alone, so the record carries everything.
         steps_meta = [step_to_dict(s) for s in workflow.steps]
+        # Idea 09 (09-a): a block that would run wrongly (no condition,
+        # nothing to work through, too deep, a limit out of range, an ask in
+        # a For each that works on several items at once) is refused before
+        # the run exists, whichever door started it. Only what a block can
+        # get wrong: an older workflow is refused for nothing new.
+        from .validate import BlockRefused
+        from .validate import problems as _problems
+
+        found = _problems(steps_meta, structure_only=True)
+        if found:
+            raise BlockRefused(f"This workflow cannot run: {found[0]}.")
         record = WorkflowRunRecord(
             workflow_name=workflow.name,
             status="running",
@@ -622,12 +1026,15 @@ class WorkflowEngine:
         batches: list[list[int]] = []
         i = start
         n = len(steps)
+        # Idea 09: a block (If, For each) is ALWAYS solo too (``validate``
+        # refuses a group on one; this keeps an unchecked def honest).
+        solo = ("ask", *BLOCK_KINDS)
         while i < n:
             s = steps[i]
-            if s.group and s.kind != "ask":
+            if s.group and s.kind not in solo:
                 j = i
                 batch = []
-                while j < n and steps[j].group == s.group and steps[j].kind != "ask":
+                while j < n and steps[j].group == s.group and steps[j].kind not in solo:
                     batch.append(j)
                     j += 1
                 batches.append(batch)
@@ -843,6 +1250,18 @@ class WorkflowEngine:
                     chain.append((s.name, str(o.get("summary") or "")))
             return chain
 
+        # Idea 09 (09-a): every step goes through ``_exec_any``; a step of the
+        # workflow's own list runs exactly as before, a block runs the steps
+        # inside it through the same executor (``_run_list``).
+        ctx = _RunCtx(
+            orch=orch, run_id=run_id, workflow=workflow, outputs=outputs,
+            session_ids=session_ids, workspace_root=workspace_root,
+            tool_workspace=tool_workspace, person_started=person_started,
+            completed_chain=_completed_chain,
+        )
+        top = _Frame(prefix="", steps=steps, at=[])
+        self._step_runs[run_id] = _leaf_runs(outputs)
+
         for batch in self._batches(steps, start_index):
             # Cancellation is cooperative: re-read the authoritative status
             # the cancel route wrote before starting each batch.
@@ -868,15 +1287,7 @@ class WorkflowEngine:
                 continue
 
             results = await asyncio.gather(
-                *(
-                    self._exec_step(
-                        orch, run_id, workflow, steps[i], i, len(steps),
-                        outputs, _completed_chain(), workspace_root,
-                        session_ids, tool_workspace,
-                        person_started=person_started,
-                    )
-                    for i in pending
-                ),
+                *(self._exec_any(ctx, top, i) for i in pending),
                 return_exceptions=True,
             )
 
@@ -927,12 +1338,19 @@ class WorkflowEngine:
                     for s in (steps[i] for i in range(batch[0], len(steps))):
                         outputs.setdefault(s.name, {"status": "skipped"})
                     break
-                # PARK (v1.121.0): the run waits durably for the user.
+                # PARK (v1.121.0): the run waits durably for the user. Idea 09:
+                # an ask inside a block adds where its definition is (``at``),
+                # and ``step`` is its path-qualified key.
                 await self._persist(
                     run_id,
                     status="waiting",
                     waiting_json=dumps(
-                        {"index": ask.index, "step": ask.step, "question": ask.question}
+                        {
+                            "index": ask.index,
+                            "step": ask.step,
+                            "question": ask.question,
+                            **({"at": ask.at} if ask.at else {}),
+                        }
                     ),
                 )
                 await self.platform.event_bus.publish(
@@ -979,6 +1397,10 @@ class WorkflowEngine:
         latest = await asyncio.to_thread(self._get_record, run_id)
         if latest is not None and latest.status == "cancelling":
             final_status = "cancelled"
+        # Idea 09: a block the run ended inside (a cancel while it was parked
+        # or working) never reads "running" on a finished run.
+        settle_open_blocks(outputs, final_status)
+        self._step_runs.pop(run_id, None)
         # v1.446.0 (review item 22): it finished, but a step it was told to
         # skip past failed — say so, never "completed".
         _halted, skipped_failures = step_failures((s.name for s in steps), outputs)
@@ -1155,9 +1577,14 @@ class WorkflowEngine:
                 "project_id": record.project_id,
             }
         )
+        # Idea 09 (09-a): an ask inside a block names where its definition is
+        # (``at``); its answer is folded under its path-qualified key and the
+        # run is driven again from the BLOCK, which walks its stored list and
+        # its taken path past every step already finished.
+        at = waiting.get("at") if isinstance(waiting.get("at"), list) else None
         if idx < 0 or idx >= len(wf.steps):
             raise ValueError("this run's parked step could not be reconstructed")
-        step = wf.steps[idx]
+        step = step_at(wf, at) if at else wf.steps[idx]
         name = step_name or step.name
         outputs = record and json.loads(record.outputs_json or "{}") or {}
         folded: dict = {
@@ -1196,6 +1623,7 @@ class WorkflowEngine:
                                 "step": name,
                                 "question": question,
                                 "expect_retries": retries + 1,
+                                **({"at": at} if at else {}),
                             }
                         ),
                     )
@@ -1225,6 +1653,10 @@ class WorkflowEngine:
                 if step.on_failure == "skip":
                     # Visible failure, run continues — the usual skip contract.
                     folded["handled"] = "skipped"
+        if at and folded.get("status") == "failed":
+            # The block reads a folded failure as the ask's result (it never
+            # asks again) and routes it by the ask's own "if this fails".
+            folded["folded"] = True
         outputs[name] = folded
         await self.platform.event_bus.publish(
             EventType.WORKFLOW_STEP_COMPLETED,
@@ -1239,8 +1671,16 @@ class WorkflowEngine:
                 "session_id": "",
                 "status": str(folded.get("status") or ""),
                 "summary": str(folded.get("summary") or "")[:_MAX_STEP_SUMMARY],
+                **({"block": wf.steps[idx].name} if at else {}),
             },
         )
+        if at:
+            await self._persist(
+                record.id, status="running", outputs=outputs, waiting_json=""
+            )
+            return await self.run_record(
+                record, wf, start_index=idx, outputs=outputs, session_ids=session_ids
+            )
         if folded.get("status") == "failed" and not folded.get("handled"):
             # halt (or an exhausted retry): the run fails, the tail never ran.
             for s in wf.steps[idx + 1 :]:
@@ -1383,20 +1823,36 @@ class WorkflowEngine:
         tool_workspace,
         *,
         person_started: bool = False,
+        key: "str | None" = None,
+        view: "dict | None" = None,
+        at: "list | None" = None,
+        park_index: "int | None" = None,
+        block: str = "",
     ) -> dict:
         """Execute ONE step per its kind; returns its output dict. Raises
-        :class:`_AskPark` for ask steps and lets CancelledError propagate."""
+        :class:`_AskPark` for ask steps and lets CancelledError propagate.
+
+        Idea 09 (09-a): a step INSIDE a block passes ``key`` (its output's
+        path-qualified name, ``Each file/3/Read total``), ``view`` (the values
+        it reads its ``{{names}}`` from: ``_scope_view``), ``at`` and
+        ``park_index`` (where an ask parks) and ``block`` (the workflow's step
+        it sits in, on its events). With none of them the step runs exactly as
+        before."""
+        key = key or step.name
+        scope = view if view is not None else outputs
+        in_block = {"block": block} if block else {}
         await self.platform.event_bus.publish(
             EventType.WORKFLOW_STEP_STARTED,
             {
                 "run_id": run_id,
                 "workflow": workflow.name,
-                "step": step.name,
+                "step": key,
                 "index": idx,
                 "total": total,
                 "agent": step.agent if step.kind == "agent" else "",
                 "kind": step.kind,
                 "session_id": "",
+                **in_block,
             },
         )
 
@@ -1407,15 +1863,21 @@ class WorkflowEngine:
         # (``checks.missing_values``); its own ``on_failure`` then decides
         # what the run does, as for any failed step. Never retried: the
         # second try would find the same nothing.
-        from .checks import missing_values, no_value_words
+        from .checks import missing_values, no_value_words, unreadable_values, unreadable_words
 
-        absent = missing_values(step, outputs)
+        absent = missing_values(step, scope)
+        # Idea 09: a field read from a step's stored JSON that was clipped
+        # cannot be read; the step stops and says so, never runs on "".
+        unreadable = [] if absent else unreadable_values(step, scope)
 
-        if step.kind == "ask" and not absent:
+        if step.kind == "ask" and not absent and not unreadable:
             question = render_template(
-                step.message or step.task, outputs
+                step.message or step.task, scope
             ).strip() or f"Continue past “{step.name}”?"
-            raise _AskPark(idx, step.name, question)
+            raise _AskPark(
+                idx if park_index is None else park_index, key, question,
+                at=at if view is not None else None,
+            )
 
         attempts = 2 if step.on_failure == "retry" else 1
         out: dict = {}
@@ -1427,21 +1889,30 @@ class WorkflowEngine:
                 "kind": step.kind,
                 "no_value_for": absent,
             }
+        elif unreadable:
+            attempts = 0
+            out = {
+                "status": "failed",
+                "summary": unreadable_words(unreadable),
+                "kind": step.kind,
+                "no_value_for": unreadable,
+            }
         for attempt in range(attempts):
             if step.kind == "tool":
                 out = await self._run_tool_step(
-                    run_id, step, outputs, workspace_root, tool_workspace
+                    run_id, step, scope, workspace_root, tool_workspace
                 )
             elif step.kind == "notify":
                 # v1.226.0: delivery is a serial Slack/Telegram/SMTP round-trip
                 # (15s timeout per channel) — off the loop, or a slow webhook
                 # parks the whole daemon (/health included) for the duration.
-                out = await asyncio.to_thread(self._run_notify_step, step, outputs)
+                out = await asyncio.to_thread(self._run_notify_step, step, scope)
             else:
                 out = await self._run_agent_step(
                     orch, run_id, workflow, step, outputs, completed,
                     workspace_root, session_ids,
                     person_started=person_started,
+                    view=view,
                 )
             # Verified steps (v1.170.0, contract 8): expectations run INSIDE
             # the attempt loop so a failed expectation routes through
@@ -1472,7 +1943,7 @@ class WorkflowEngine:
         # only after the whole batch settles: a daemon death while a parallel
         # sibling is still running used to drop every finished member, so
         # Resume re-ran them — re-delivering a notify, re-writing files.
-        outputs[step.name] = out
+        outputs[key] = out
         await self._persist(run_id, session_ids=session_ids, outputs=outputs)
 
         await self.platform.event_bus.publish(
@@ -1480,7 +1951,7 @@ class WorkflowEngine:
             {
                 "run_id": run_id,
                 "workflow": workflow.name,
-                "step": step.name,
+                "step": key,
                 "index": idx,
                 "total": total,
                 "agent": step.agent if step.kind == "agent" else "",
@@ -1488,17 +1959,503 @@ class WorkflowEngine:
                 "session_id": str(out.get("session_id") or ""),
                 "status": str(out.get("status") or ""),
                 "summary": str(out.get("summary") or "")[:_MAX_STEP_SUMMARY],
+                **in_block,
             },
         )
+        return out
+
+    # ------------------------------------------------------------------ #
+    # blocks: "If" and "For each" (idea 09, phase 09-a)
+    # ------------------------------------------------------------------ #
+
+    async def _exec_any(self, ctx: _RunCtx, frame: _Frame, i: int) -> dict:
+        """Run step *i* of *frame*'s list, whatever it is: a block through
+        :meth:`_exec_block`, any other step through :meth:`_exec_step`. A
+        step of the workflow's own list (``frame.prefix`` "") is called
+        exactly as before blocks existed."""
+        step = frame.steps[i]
+        key = frame.prefix + step.name
+        prior = ctx.outputs.get(key)
+        if isinstance(prior, dict) and prior.get("folded"):
+            # An ask inside a block whose answer failed its check: the answer
+            # is the step's result; it is never asked again.
+            return prior
+        if step.kind in BLOCK_KINDS:
+            return await self._exec_block(ctx, frame, i)
+        nested = bool(frame.prefix)
+        if nested and self._step_runs.get(ctx.run_id, 0) >= MAX_STEP_RUNS:
+            out = {"status": "failed", "summary": STEP_RUNS_WORDS, "kind": step.kind, "bound": True}
+            ctx.outputs[key] = out
+            await self._persist(ctx.run_id, outputs=ctx.outputs)
+            return out
+        self._step_runs[ctx.run_id] = self._step_runs.get(ctx.run_id, 0) + 1
+        if not nested:
+            return await self._exec_step(
+                ctx.orch, ctx.run_id, ctx.workflow, step, i, len(frame.steps),
+                ctx.outputs, ctx.completed_chain(), ctx.workspace_root,
+                ctx.session_ids, ctx.tool_workspace,
+                person_started=ctx.person_started,
+            )
+        return await self._exec_step(
+            ctx.orch, ctx.run_id, ctx.workflow, step, i, len(frame.steps),
+            ctx.outputs, ctx.completed_chain() + _local_chain(ctx.outputs, frame),
+            ctx.workspace_root, ctx.session_ids, ctx.tool_workspace,
+            person_started=ctx.person_started,
+            key=key, view=_scope_view(ctx.outputs, frame), at=[*frame.at, i],
+            park_index=frame.top_index, block=frame.top_name,
+        )
+
+    async def _cancelling(self, run_id: str) -> bool:
+        current = await asyncio.to_thread(self._get_record, run_id)
+        return current is not None and current.status == "cancelling"
+
+    async def _run_list(self, ctx: _RunCtx, frame: _Frame) -> dict:
+        """Run the steps inside a block, in order (a parallel group runs
+        together, as in the workflow's own list). Returns ``{"status":
+        completed|failed|cancelled, "failed": (name, output) | None,
+        "handled": [(name, output), …]}``. An ask inside PARKS the run: its
+        :class:`_AskPark` goes up to the driver. Cancel is read before each
+        group of steps, as the driver reads it."""
+        steps = frame.steps
+        handled: list[tuple[str, dict]] = []
+        for batch in self._batches(steps, 0):
+            if await self._cancelling(ctx.run_id):
+                for s in steps[batch[0]:]:
+                    ctx.outputs.setdefault(frame.prefix + s.name, {"status": "skipped"})
+                await self._persist(ctx.run_id, outputs=ctx.outputs)
+                return {"status": "cancelled", "failed": None, "handled": handled}
+            pending = [j for j in batch if not _done(ctx.outputs.get(frame.prefix + steps[j].name))]
+            if not pending:
+                continue
+            results = await asyncio.gather(
+                *(self._exec_any(ctx, frame, j) for j in pending), return_exceptions=True
+            )
+            ask: _AskPark | None = None
+            cancelled = False
+            halt: tuple[str, dict] | None = None
+            for j, res in zip(pending, results):
+                k = frame.prefix + steps[j].name
+                if isinstance(res, _AskPark):
+                    ask = res
+                    continue
+                if isinstance(res, asyncio.CancelledError):
+                    cancelled = True
+                    ctx.outputs.setdefault(k, {"status": "cancelled"})
+                    continue
+                if isinstance(res, BaseException):
+                    res = {"status": "failed", "summary": f"{type(res).__name__}: {res}", "kind": steps[j].kind}
+                    ctx.outputs[k] = res
+                st = res.get("status")
+                if st == "cancelled":
+                    cancelled = True
+                elif st == "failed":
+                    if res.get("handled") and not res.get("bound"):
+                        handled.append((steps[j].name, res))
+                    elif halt is None:
+                        halt = (steps[j].name, res)
+            if ask is not None:
+                raise ask
+            if cancelled or halt is not None:
+                for s in steps[batch[-1] + 1:]:
+                    ctx.outputs.setdefault(frame.prefix + s.name, {"status": "skipped"})
+                await self._persist(ctx.run_id, outputs=ctx.outputs)
+                if cancelled:
+                    return {"status": "cancelled", "failed": None, "handled": handled}
+                return {"status": "failed", "failed": halt, "handled": handled}
+        return {"status": "completed", "failed": None, "handled": handled}
+
+    async def _exec_block(self, ctx: _RunCtx, frame: _Frame, i: int) -> dict:
+        """Run one If or For each and record its own output (a rollup: what
+        it decided, or how many items were done). Its "if this fails"
+        decides what a failure of the block itself does to the list it is
+        in: stop it (halt), or go on with the failure visible (skip). A
+        limit it reached always stops the run."""
+        step = frame.steps[i]
+        key = frame.prefix + step.name
+        top_index = frame.top_index if frame.prefix else i
+        top_name = frame.top_name or step.name
+        at = [*frame.at, i]
+        in_block = {"block": frame.top_name} if frame.top_name else {}
+        await self.platform.event_bus.publish(
+            EventType.WORKFLOW_STEP_STARTED,
+            {
+                "run_id": ctx.run_id, "workflow": ctx.workflow.name, "step": key,
+                "index": i, "total": len(frame.steps), "agent": "", "kind": step.kind,
+                "session_id": "", **in_block,
+            },
+        )
+        if step.kind == "for_each":
+            out = await self._exec_for_each(ctx, frame, step, key, at, top_index, top_name)
+        else:
+            out = await self._exec_if(ctx, frame, step, key, at, top_index, top_name)
+        if (
+            out.get("status") == "failed"
+            and not out.get("handled")
+            and not out.get("bound")
+            and step.on_failure == "skip"
+        ):
+            out["handled"] = "skipped"
+        ctx.outputs[key] = out
+        await self._persist(ctx.run_id, session_ids=ctx.session_ids, outputs=ctx.outputs)
+        await self.platform.event_bus.publish(
+            EventType.WORKFLOW_STEP_COMPLETED,
+            {
+                "run_id": ctx.run_id, "workflow": ctx.workflow.name, "step": key,
+                "index": i, "total": len(frame.steps), "agent": "", "kind": step.kind,
+                "session_id": str(out.get("session_id") or ""),
+                "status": str(out.get("status") or ""),
+                "summary": str(out.get("summary") or "")[:_MAX_STEP_SUMMARY],
+                **in_block,
+            },
+        )
+        return out
+
+    async def _exec_if(
+        self, ctx: _RunCtx, frame: _Frame, step: Step, key: str, at: list,
+        top_index: int, top_name: str,
+    ) -> dict:
+        """Check the condition ONCE (no model: ``workflows/logic``), record
+        which path it took, mark the other path's steps skipped, run the
+        taken one. A resume reads the recorded path: it never decides
+        again."""
+        from . import logic
+        from .checks import missing_values, no_value_words, unreadable_values, unreadable_words
+
+        outputs = ctx.outputs
+        prior = outputs.get(key) if isinstance(outputs.get(key), dict) else {}
+        took = prior.get("took") if prior.get("status") == "running" else None
+        words = str(prior.get("summary") or "")
+        if took not in ("then", "else"):
+            view = _scope_view(outputs, frame)
+            absent = missing_values(step, view)
+            if absent:
+                return {"status": "failed", "summary": no_value_words(absent), "kind": "if", "no_value_for": absent}
+            bad = unreadable_values(step, view)
+            if bad:
+                return {"status": "failed", "summary": unreadable_words(bad), "kind": "if", "no_value_for": bad}
+            try:
+                held, said = logic.explain(step.condition, lambda t: render_template(t, view))
+            except logic.ConditionError as exc:
+                return {
+                    "status": "failed",
+                    "summary": f"The If “{step.name}” could not decide: {exc}.",
+                    "kind": "if",
+                }
+            took = "then" if held else "else"
+            words = f"{'Then' if held else 'Otherwise'}: {said}."
+            outputs[key] = {"status": "running", "kind": "if", "took": took, "summary": words}
+            await self._persist(ctx.run_id, outputs=outputs)
+        taken = step.steps if took == "then" else step.else_steps
+        other, other_seg = (step.else_steps, "else") if took == "then" else (step.steps, "then")
+        for s in other:
+            outputs.setdefault(f"{key}/{other_seg}/{s.name}", {"status": "skipped", "kind": s.kind})
+        res: dict = {"status": "completed", "failed": None, "handled": []}
+        if taken:
+            child = _Frame(
+                prefix=f"{key}/{took}/", steps=taken,
+                at=[*at, "steps" if took == "then" else "else_steps"],
+                top_index=top_index, top_name=top_name, parent=frame,
+            )
+            res = await self._run_list(ctx, child)
+        out: dict = {"status": "completed", "kind": "if", "took": took, "summary": words}
+        if res["status"] == "cancelled":
+            out["status"] = "cancelled"
+        elif res["status"] == "failed" and res.get("failed"):
+            name, failed = res["failed"]
+            out.update(
+                status="failed",
+                summary=f"{words} “{name}” failed: {failed.get('summary') or 'it failed'}"[:_MAX_STEP_SUMMARY],
+            )
+            if failed.get("bound"):
+                out["bound"] = True
+            if failed.get("kind") == "agent" and failed.get("session_id"):
+                out["session_id"] = failed["session_id"]
+        elif res.get("handled"):
+            name, failed = res["handled"][0]
+            out.update(
+                status="failed", handled="skipped",
+                summary=f"{words} “{name}” failed and was skipped: {failed.get('summary') or ''}"[:_MAX_STEP_SUMMARY],
+            )
+        return out
+
+    async def _items_for(
+        self, ctx: _RunCtx, step: Step, view: dict
+    ) -> "tuple[list, int, bool, str | None]":
+        """``(items, found, outside, problem)``: the list a For each works
+        through, how many there were in all, whether their words came from
+        outside, or the sentence it stops with. A folder is listed through
+        the registry's own ``list_folder`` (its permission and read rules
+        apply, and the listing is in the ledger), files only, by name."""
+        from .checks import missing_values, no_value_words, unreadable_values, unreadable_words
+
+        over = step.over if isinstance(step.over, dict) else {}
+        limit = max(1, int(step.max_items or DEFAULT_MAX_ITEMS))
+        absent = missing_values(step, view)
+        if absent:
+            return [], 0, False, no_value_words(absent)
+        files = over.get("files")
+        if isinstance(files, dict):
+            folder = render_template(str(files.get("folder") or ""), view).strip()
+            pattern = render_template(str(files.get("glob") or ""), view).strip() or "*"
+            listing = Step(
+                name=step.name, kind="tool", tool="list_folder",
+                args={"path": folder, "pattern": pattern, "limit": 1000},
+            )
+            kept: dict = {}
+            out = await self._run_tool_step(
+                ctx.run_id, listing, {}, ctx.workspace_root, ctx.tool_workspace, keep=kept
+            )
+            result = kept.get("result")
+            if out.get("status") != "completed" or result is None:
+                return [], 0, True, (
+                    f"could not list the folder {folder}: {out.get('summary') or 'it could not be read'}"
+                )
+            data = result.data if isinstance(result.data, dict) else {}
+            entries = [e for e in (data.get("entries") or []) if isinstance(e, dict)]
+            base = Path(str(data.get("path") or folder))
+            items = sorted(
+                (
+                    {"name": str(e.get("name")), "path": str(base / str(e.get("name"))), "size": int(e.get("size") or 0)}
+                    for e in entries
+                    if not e.get("dir") and e.get("name")
+                ),
+                key=lambda it: it["name"].casefold(),
+            )
+            beyond = max(0, int(data.get("total") or 0) - len(entries))
+            return items[:limit], len(items) + beyond, True, None
+        source = over.get("from")
+        if not isinstance(source, str) or not source.strip():
+            return [], 0, False, "there is no list to work through"
+        bad = unreadable_values(step, view)
+        if bad:
+            return [], 0, False, unreadable_words(bad)
+        text = render_template(source, view).strip()
+        if len(text) >= _MAX_STEP_DATA:
+            return [], 0, False, (
+                f"the list was too large to read (more than {_MAX_STEP_DATA:,} characters)"
+            )
+        try:
+            parsed = json.loads(text) if text else None
+        except (TypeError, ValueError):
+            parsed = None
+        if not isinstance(parsed, list):
+            shown = " ".join(text.split())[:80] or "nothing"
+            return [], 0, False, f"{source.strip()} is not a list to work through (it gave {shown})"
+        outside = False
+        for m in _TEMPLATE_RX.finditer(source):
+            ref = m.group(1).strip()
+            base = ref.split(".data", 1)[0].strip() if ".data" in ref else ref
+            base_out = view.get(base)
+            if isinstance(base_out, dict) and _from_outside(base_out):
+                outside = True
+        return parsed[:limit], len(parsed), outside, None
+
+    async def _exec_for_each(
+        self, ctx: _RunCtx, frame: _Frame, step: Step, key: str, at: list,
+        top_index: int, top_name: str,
+    ) -> dict:
+        """Work through a list. The list is written into the block's own
+        output BEFORE the first item runs, so a resume walks the same list
+        even if the folder changed; each item's steps are kept under
+        ``<block>/<n>/`` and a finished item is never run again. A failed
+        item follows the block's "if this fails": stop (halt), or go on with
+        the next item (skip: the run ends "Part failed"). D-09.1: at most
+        ``max_items`` (200) items; the next one stops the run and says so."""
+        outputs = ctx.outputs
+        prior = outputs.get(key) if isinstance(outputs.get(key), dict) else {}
+        if not (prior.get("status") == "running" and isinstance(prior.get("list"), list)):
+            items, found, outside, problem = await self._items_for(
+                ctx, step, _scope_view(outputs, frame)
+            )
+            if problem:
+                return {
+                    "status": "failed",
+                    "summary": f"“{step.name}” could not start: {problem}"[:_MAX_STEP_SUMMARY],
+                    "kind": "for_each", "done": 0, "failed": 0, "skipped": 0, "total": 0, "data": [],
+                }
+            prior = {
+                "status": "running", "kind": "for_each", "summary": rollup_words(0, 0, len(items), len(items)),
+                "list": items, "found": found, "outside": outside,
+                "done": 0, "failed": 0, "skipped": len(items), "total": len(items), "data": [],
+            }
+            outputs[key] = prior
+            await self._persist(ctx.run_id, outputs=outputs)
+        items = list(prior["list"])
+        found = int(prior.get("found") or len(items))
+        outside = bool(prior.get("outside"))
+        rows: dict[int, dict] = {}
+        for r in prior.get("data") or []:
+            if isinstance(r, dict) and isinstance(r.get("n"), int):
+                rows[r["n"]] = r
+        limit = max(1, int(step.max_items or DEFAULT_MAX_ITEMS))
+        parallel = max(1, min(int(step.parallel or 1), MAX_PARALLEL))
+        total = len(items)
+
+        def counts() -> tuple[int, int, int]:
+            done = sum(1 for r in rows.values() if r.get("status") == "done")
+            failed = sum(1 for r in rows.values() if r.get("status") == "failed")
+            return done, failed, total - done - failed
+
+        async def note_progress() -> None:
+            done, failed, not_run = counts()
+            prior.update(
+                done=done, failed=failed, skipped=not_run,
+                summary=rollup_words(done, failed, not_run, total),
+                data=[rows[n] for n in sorted(rows)],
+            )
+            outputs[key] = prior
+            await self._persist(ctx.run_id, outputs=outputs)
+
+        first_failure: list[tuple[int, str, dict]] = []
+
+        async def one(n: int, item: Any) -> dict:
+            prefix = f"{key}/{n}/"
+            child = _Frame(
+                prefix=prefix, steps=step.steps, at=[*at, "steps"],
+                top_index=top_index, top_name=top_name,
+                extras=_item_extras(item, n, outside), parent=frame,
+            )
+            res = await self._run_list(ctx, child)
+            label = _item_label(item, n)
+            if res["status"] == "cancelled":
+                rows[n] = {"n": n, "label": label, "status": "stopped", "summary": "Stopped."}
+            else:
+                bad = res.get("failed") or (res["handled"][0] if res.get("handled") else None)
+                if bad is not None:
+                    name, failed = bad
+                    rows[n] = {
+                        "n": n, "label": label, "status": "failed",
+                        "summary": f"“{name}” failed: {failed.get('summary') or ''}"[:_MAX_ITEM_SUMMARY],
+                    }
+                    first_failure.append((n, name, failed))
+                else:
+                    last = ""
+                    for s in reversed(step.steps):
+                        o = outputs.get(prefix + s.name)
+                        if isinstance(o, dict) and o.get("status") == "completed" and str(o.get("summary") or "").strip():
+                            last = str(o.get("summary") or "")
+                            break
+                    rows[n] = {"n": n, "label": label, "status": "done", "summary": last[:_MAX_ITEM_SUMMARY]}
+                # The item is settled: keep only a short line of each of its
+                # steps (the record grows with every item; this bounds it).
+                for k in [k for k in outputs if k.startswith(prefix)]:
+                    o = outputs[k]
+                    if isinstance(o, dict):
+                        small = {
+                            "status": o.get("status"),
+                            "summary": str(o.get("summary") or "")[:_MAX_ITEM_SUMMARY],
+                        }
+                        for keep in ("kind", "handled", "took", "session_id", "bound", "folded"):
+                            if o.get(keep) not in (None, ""):
+                                small[keep] = o[keep]
+                        outputs[k] = small
+            await note_progress()
+            return res
+
+        pending = [(n, it) for n, it in enumerate(items, 1) if rows.get(n, {}).get("status") not in ("done", "failed")]
+        stop: tuple[int, dict] | None = None
+        cancelled = False
+        if parallel == 1:
+            for n, item in pending:
+                if await self._cancelling(ctx.run_id):
+                    cancelled = True
+                    break
+                res = await one(n, item)
+                if res["status"] == "cancelled":
+                    cancelled = True
+                    break
+                bad = res.get("failed")
+                if bad is not None and (bad[1].get("bound") or step.on_failure != "skip"):
+                    stop = (n, bad[1])
+                    break
+        else:
+            gate = asyncio.Semaphore(parallel)
+            halted = asyncio.Event()
+
+            async def guarded(n: int, item: Any) -> None:
+                nonlocal stop, cancelled
+                async with gate:
+                    if halted.is_set():
+                        return
+                    if await self._cancelling(ctx.run_id):
+                        cancelled = True
+                        halted.set()
+                        return
+                    try:
+                        res = await one(n, item)
+                    except _AskPark:
+                        # ``validate`` refuses an ask here; an unchecked def
+                        # still never parks half a batch of items.
+                        res = {"status": "failed", "failed": (step.name, {
+                            "status": "failed",
+                            "summary": "a For each that works on several items at once cannot ask you",
+                        }), "handled": []}
+                        rows[n] = {"n": n, "label": _item_label(item, n), "status": "failed",
+                                   "summary": res["failed"][1]["summary"]}
+                        await note_progress()
+                    if res["status"] == "cancelled":
+                        cancelled = True
+                        halted.set()
+                        return
+                    bad = res.get("failed")
+                    if bad is not None and (bad[1].get("bound") or step.on_failure != "skip"):
+                        if stop is None:
+                            stop = (n, bad[1])
+                        halted.set()
+
+            await asyncio.gather(*(guarded(n, it) for n, it in pending))
+
+        done, failed, not_run = counts()
+        out: dict = {
+            "status": "completed", "kind": "for_each",
+            "summary": rollup_words(done, failed, not_run, total),
+            "done": done, "failed": failed, "skipped": not_run, "total": total,
+            "data": [rows[n] for n in sorted(rows)],
+        }
+        if outside:
+            out["outside"] = True
+        if cancelled:
+            out["status"] = "cancelled"
+            return out
+        if stop is not None:
+            n, bad = stop
+            name = next((f[1] for f in first_failure if f[0] == n), step.name)
+            out.update(
+                status="failed",
+                summary=(
+                    f"{out['summary']}. Item {n} ({_item_label(items[n - 1], n)}) failed at "
+                    f"“{name}”: {bad.get('summary') or 'it failed'}"
+                )[:_MAX_STEP_SUMMARY],
+            )
+            if bad.get("bound"):
+                out["bound"] = True
+            if bad.get("kind") == "agent" and bad.get("session_id"):
+                out["session_id"] = bad["session_id"]
+            return out
+        if found > limit:
+            out.update(
+                status="failed", bound=True,
+                summary=items_bound_words(step.name, limit, found, done),
+            )
+            return out
+        if failed:
+            first = min(first_failure, key=lambda f: f[0]) if first_failure else None
+            out.update(status="failed", handled="skipped")
+            if first is not None and first[2].get("kind") == "agent" and first[2].get("session_id"):
+                out["session_id"] = first[2]["session_id"]
         return out
 
     async def _run_agent_step(
         self, orch, run_id, workflow, step, outputs, completed,
         workspace_root, session_ids, *, person_started: bool = False,
+        view: "dict | None" = None,
     ) -> dict:
+        # Idea 09: a step inside a block reads its names from ``view`` (its
+        # item, its own list's steps); the RECORD is still ``outputs``.
+        scope = view if view is not None else outputs
         # v1.502.0 (north-star 2.8): a signal's words go in FENCED, and a run
         # an outside signal started runs its agent steps at LOW trust.
-        task_text = render_template(step.task, outputs, fence_outside=True) + self._context_block(completed)
+        task_text = render_template(step.task, scope, fence_outside=True) + self._context_block(completed)
         # The def's explicit pin (None for unpinned workflows) grounds each
         # step in the project — its instructions/knowledge inject at run
         # time — and, when the project has a valid folder, runs the step
@@ -1517,7 +2474,7 @@ class WorkflowEngine:
             # call (and a test double's create_session) is byte-identical.
             **({"started_by_person": True} if person_started else {}),
             # v1.502.0: passed ONLY for a signal the router marked low.
-            **signal_trust(outputs),
+            **signal_trust(scope),
         )
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving
@@ -1631,10 +2588,14 @@ class WorkflowEngine:
         outputs: dict,
         workspace_root: str | None,
         tool_workspace,
+        *,
+        keep: "dict | None" = None,
     ) -> dict:
         """ONE deterministic tool call — no LLM, no session. Same permission
         engine as every other tool invocation (a workflow must not be a
-        permission bypass)."""
+        permission bypass). ``keep`` (idea 09): the call's own result is put
+        in ``keep["result"]`` (a For each reads a folder's whole listing,
+        which the step's clipped ``data`` would cut short)."""
         from ..tools.base import ToolContext
 
         if not step.tool:
@@ -1760,6 +2721,8 @@ class WorkflowEngine:
             }
         finally:
             _untrack_tool_call(run_id, loop, call)
+        if keep is not None:
+            keep["result"] = result
         out = {
             "status": "completed" if result.ok else "failed",
             "summary": (result.output if result.ok else (result.error or "tool error"))[

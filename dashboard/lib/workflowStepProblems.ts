@@ -75,9 +75,17 @@ export interface StepProblem {
 }
 
 /** A save refusal about one step, or null (a refusal about the whole
- *  workflow, or another shape, stays where it was shown before). */
+ *  workflow, or another shape, stays where it was shown before).
+ *
+ *  Idea 09 (09-a): a step INSIDE an If or a For each is named by its path,
+ *  `steps[2].steps[0] (Read total): …` (or `.else_steps[1]`); the refusal is
+ *  then shown on the block at `steps[2]`, and its words name the step inside. */
 export function stepProblemOf(detail: string): StepProblem | null {
-  const m = /^steps\[(\d+)\](?:\.[a-z_]+)?(?: \((?:[^()]|\([^()]*\))*\))?:\s*([\s\S]+)$/.exec((detail ?? "").trim());
+  const m = /^steps\[(\d+)\]((?:\.(?:steps|else_steps)\[\d+\])*)(?:\.[a-z_]+)?(?: \(((?:[^()]|\([^()]*\))*)\))?:\s*([\s\S]+)$/.exec(
+    (detail ?? "").trim(),
+  );
   if (!m) return null;
-  return { index: Number(m[1]), words: m[2].trim() };
+  const words = m[4].trim();
+  if (m[2] && m[3]) return { index: Number(m[1]), words: `In “${m[3]}”: ${words}` };
+  return { index: Number(m[1]), words };
 }

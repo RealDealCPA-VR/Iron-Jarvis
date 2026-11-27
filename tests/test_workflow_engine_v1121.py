@@ -49,15 +49,22 @@ def test_load_workflow_parses_and_coerces_new_fields():
                     "on_failure": "retry",
                     "group": "g1",
                 },
-                {"name": "b", "kind": "bogus", "on_failure": "explode"},
+                {"name": "b", "kind": "", "on_failure": "explode"},
             ],
         }
     )
     assert wf.steps[0].kind == "tool"
     assert wf.steps[0].on_failure == "retry"
     assert wf.steps[0].group == "g1"
-    assert wf.steps[1].kind == "agent"  # unknown kind coerces, never crashes
-    assert wf.steps[1].on_failure == "halt"
+    assert wf.steps[1].kind == "agent"  # an empty kind is the default
+    assert wf.steps[1].on_failure == "halt"  # an unknown failure rule coerces
+    # Idea 09 (09-a): an unknown KIND is refused by name, never run as an
+    # agent step (a block from a newer version would have run as an agent on
+    # an empty task).
+    from iron_jarvis.workflows.engine import UnknownStepKind
+
+    with pytest.raises(UnknownStepKind, match="“b” is a “bogus” step"):
+        load_workflow({"name": "x", "steps": [{"name": "b", "kind": "bogus"}]})
 
 
 def test_render_template_substitutes_prior_outputs():

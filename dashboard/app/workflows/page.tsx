@@ -25,6 +25,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
 import { SavedWorkflows } from "@/components/workflow/SavedWorkflows";
+import { BlockRunDetail } from "@/components/workflow/BlockRunDetail";
+import { blockStatus, isBlockKind } from "@/components/workflow/blocks";
 import {
   CalmSection,
   WF_CHIP,
@@ -1045,7 +1047,9 @@ function RunHistory() {
                             {defs.map((d, di) => {
                               const nm = d.name?.trim() || `step-${di + 1}`;
                               const o = outs[nm];
-                              const st = o?.status ?? "pending";
+                              // Idea 09: a block a finished run ended inside
+                              // reads Stopped, never Working.
+                              const st = blockStatus(o?.status, !isLiveRun(r)) || "pending";
                               const failed = st === "failed";
                               return (
                                 <li
@@ -1085,6 +1089,18 @@ function RunHistory() {
                                     >
                                       {o.summary}
                                     </p>
+                                  )}
+                                  {/* Idea 09 (09-a): a For each's row per
+                                      item, an If's path and its steps. */}
+                                  {isBlockKind(String(d.kind ?? "")) && (
+                                    <BlockRunDetail
+                                      name={nm}
+                                      kind={String(d.kind)}
+                                      steps={d.steps}
+                                      elseSteps={d.else_steps}
+                                      outputs={outs as Record<string, { status?: string; summary?: string }>}
+                                      ended={!isLiveRun(r)}
+                                    />
                                   )}
                                 </li>
                               );

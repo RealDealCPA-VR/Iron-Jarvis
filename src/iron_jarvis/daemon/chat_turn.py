@@ -7230,6 +7230,7 @@ def _validated_escalate_agent(platform, raw) -> "str | None":
 #: crystallizes into a process without the user ever opening a builder.
 _WORKFLOW_DRAFT_TOOL = "workflow_draft"
 _WORKFLOW_DRAFT_AGENTS = {"builder", "planner", "researcher", "reviewer", "supervisor"}
+from ..workflows.validate import BLOCKS_FOR_MODELS as _BLOCKS_FOR_MODELS  # noqa: E402
 _WORKFLOW_DRAFT_SPEC = {
     "name": _WORKFLOW_DRAFT_TOOL,
     "description": (
@@ -7252,7 +7253,10 @@ _WORKFLOW_DRAFT_SPEC = {
                     "2-6 ordered steps. `kind` decides what a step IS: agent "
                     "(the default) runs `agent` on `task`; tool calls `tool` "
                     "with `args`; ask pauses the run to ask the user "
-                    "`message`; notify sends the user `message`."
+                    "`message`; notify sends the user `message`. "
+                    # Idea 09 (09-a): the two blocks, in the one text every
+                    # door that lets a model write a workflow uses.
+                    + _BLOCKS_FOR_MODELS
                 ),
                 "items": {
                     "type": "object",
@@ -7261,8 +7265,37 @@ _WORKFLOW_DRAFT_SPEC = {
                         "kind": {
                             "type": "string",
                             "description": (
-                                "agent | tool | ask | notify (default agent)"
+                                "agent | tool | ask | notify | if | for_each "
+                                "(default agent)"
                             ),
+                        },
+                        "condition": {
+                            "type": "object",
+                            "description": "kind=if only: {left, op, right}",
+                        },
+                        "over": {
+                            "type": "object",
+                            "description": (
+                                "kind=for_each only: {files: {folder, glob}} or "
+                                "{from: \"{{Step.data}}\"}"
+                            ),
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": (
+                                "kind=if: the steps when the condition holds; "
+                                "kind=for_each: the steps for each item"
+                            ),
+                        },
+                        "else_steps": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "kind=if only: the steps otherwise",
+                        },
+                        "max_items": {
+                            "type": "integer",
+                            "description": "kind=for_each only: at most this many items (default 200)",
                         },
                         "agent": {
                             "type": "string",
@@ -7333,9 +7366,13 @@ def _sanitize_draft(args: dict | None) -> dict | None:
     stringified and bounded (a nested payload is serialized JSON, which the
     engine's templating treats as an opaque string), and message is bounded.
     A pre-v1.170.0 agent-only draft sanitizes to the same name/agent/task
-    values as before — the new keys just carry their defaults."""
+    values as before — the new keys just carry their defaults.
+
+    Idea 09 (09-a): an If or a For each keeps its condition or list, its
+    limits and the steps inside it, each list sanitized the same way (at
+    most 12 steps, names deduped within the list, at most 3 blocks deep).
+    Whether a block can run is the save check's to say, in its words."""
     from ..core.jsonish import loads_lenient, loads_object
-    from ..workflows.engine import ON_FAILURE, STEP_KINDS
 
     # v1.225.0 — LENIENT INTAKE. Local models hand the arguments over as a
     # JSON STRING, hand `steps` over as a string, or list the steps as bare
@@ -7345,11 +7382,92 @@ def _sanitize_draft(args: dict | None) -> dict | None:
     if isinstance(args, str):
         args = loads_object(args) or {}
     args = args if isinstance(args, dict) else {}
-    raw_steps = args.get("steps")
+    steps = _sanitize_draft_steps(args.get("steps"), 0)
+    if not steps:
+        return None
+    raw = str(args.get("name") or args.get("title") or "").strip()[:80]
+    name = _re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._") or "drafted-workflow"
+    return {
+        "name": name,
+        "description": str(args.get("description") or "")[:200],
+        "steps": steps,
+    }
+
+
+def _draft_text(value: Any, cap: int) -> str:
+    return str(value if value is not None else "")[:cap]
+
+
+def _sanitize_draft_block(s: dict, kind: str, depth: int) -> dict:
+    """The fields of an If or a For each a draft keeps (idea 09), bounded."""
+    out: dict[str, Any] = {}
+    if kind == "if":
+        cond = s.get("condition")
+        if isinstance(cond, str):
+            from ..core.jsonish import loads_object
+
+            cond = loads_object(cond) or {}
+
+        def leaf(c: Any) -> dict | None:
+            if not isinstance(c, dict):
+                return None
+            got = {"op": _draft_text(c.get("op"), 20).strip().lower()}
+            for side in ("left", "right"):
+                if c.get(side) is not None:
+                    got[side] = _draft_text(c.get(side), 2000)
+            return got
+
+        if isinstance(cond, dict):
+            for joiner in ("all", "any"):
+                if isinstance(cond.get(joiner), list):
+                    parts = [p for p in (leaf(x) for x in cond[joiner][:10]) if p]
+                    out["condition"] = {joiner: parts}
+                    break
+            else:
+                one = leaf(cond)
+                out["condition"] = one if one else {}
+        else:
+            out["condition"] = {}
+    else:
+        over = s.get("over")
+        if isinstance(over, str):
+            over = {"from": over}
+        kept: dict[str, Any] = {}
+        if isinstance(over, dict):
+            if over.get("from") is not None:
+                kept["from"] = _draft_text(over.get("from"), 2000)
+            files = over.get("files")
+            if isinstance(files, dict):
+                kept["files"] = {
+                    "folder": _draft_text(files.get("folder"), 1000),
+                    "glob": _draft_text(files.get("glob"), 200),
+                }
+        out["over"] = kept
+        for key in ("max_items", "parallel"):
+            v = s.get(key)
+            if isinstance(v, int) and not isinstance(v, bool):
+                out[key] = v
+            elif isinstance(v, str) and v.strip().isdigit():
+                out[key] = int(v.strip())
+    out["steps"] = _sanitize_draft_steps(s.get("steps"), depth + 1)
+    if kind == "if":
+        out["else_steps"] = _sanitize_draft_steps(s.get("else_steps"), depth + 1)
+    return out
+
+
+def _sanitize_draft_steps(raw_steps: Any, depth: int) -> list[dict]:
+    """One list of a draft's steps, sanitized (see :func:`_sanitize_draft`)."""
+    from ..core.jsonish import loads_lenient
+    from ..workflows.engine import BLOCK_KINDS, ON_FAILURE, STEP_KINDS
+
+    if depth > 3:
+        return []
     if isinstance(raw_steps, str):
         raw_steps = loads_lenient(raw_steps, want=list) or []
     if isinstance(raw_steps, dict):  # {"1": {...}, "2": {...}} — numbered map
         raw_steps = list(raw_steps.values())
+    if not isinstance(raw_steps, list):
+        return []
     steps: list[dict] = []
     seen_names: set[str] = set()
     for s in (raw_steps or [])[:12]:
@@ -7366,12 +7484,14 @@ def _sanitize_draft(args: dict | None) -> dict | None:
         ).strip()[:4000]
         name = str(s.get("name") or s.get("title") or "").strip()
         message = str(s.get("message") or s.get("question") or "").strip()[:2000]
+        kind = str(s.get("kind") or "agent").strip().lower()
+        if kind in BLOCK_KINDS and not name:
+            name = "If" if kind == "if" else "For each"
         # An ask/notify step legitimately carries ONLY a message — it must
         # survive; a step with none of the three has nothing to run.
         if not task and not name and not message:
             continue
         agent = str(s.get("agent") or "builder").strip().lower()
-        kind = str(s.get("kind") or "agent").strip().lower()
         on_failure = str(s.get("on_failure") or "halt").strip().lower()
         tool = (
             _re.sub(r"[^\w.-]+", "-", str(s.get("tool") or "").strip())
@@ -7404,28 +7524,21 @@ def _sanitize_draft(args: dict | None) -> dict | None:
             uniq = f"{base[:76]}-{i}"
             i += 1
         seen_names.add(uniq)
-        steps.append(
-            {
-                "name": uniq,
-                "agent": agent if agent in _WORKFLOW_DRAFT_AGENTS else "builder",
-                "task": task or name,
-                "tool": tool,
-                "kind": kind if kind in STEP_KINDS else "agent",
-                "on_failure": on_failure if on_failure in ON_FAILURE else "halt",
-                "group": group,
-                "args": step_args,
-                "message": message,
-            }
-        )
-    if not steps:
-        return None
-    raw = str(args.get("name") or args.get("title") or "").strip()[:80]
-    name = _re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip("-._") or "drafted-workflow"
-    return {
-        "name": name,
-        "description": str(args.get("description") or "")[:200],
-        "steps": steps,
-    }
+        step = {
+            "name": uniq,
+            "agent": agent if agent in _WORKFLOW_DRAFT_AGENTS else "builder",
+            "task": task or name,
+            "tool": tool,
+            "kind": kind if kind in STEP_KINDS else "agent",
+            "on_failure": on_failure if on_failure in ON_FAILURE else "halt",
+            "group": group,
+            "args": step_args,
+            "message": message,
+        }
+        if step["kind"] in BLOCK_KINDS:
+            step.update(_sanitize_draft_block(s, step["kind"], depth))
+        steps.append(step)
+    return steps
 
 
 #: The agent-lane tool a model reaches for when it means "save this as a

@@ -20,6 +20,7 @@ import {
 } from "@/lib/types";
 import type { Tone } from "@/components/ui";
 import type { StepExpect } from "@/components/workflow/agents";
+import { describeCondition, describeOver } from "@/components/workflow/blocks";
 
 /** Contract 8 (v1.170.0): deterministic post-step checks. ONE declaration —
  *  components/workflow/agents.ts (P6) owns the shape; re-exported here so the
@@ -285,6 +286,15 @@ export function stepKindHint(d: Partial<WorkflowStep>): string | null {
   if (kind === "tool") return d.tool ? `tool: ${d.tool}` : "tool";
   if (kind === "ask") return "asks you";
   if (kind === "notify") return "notify";
+  // Idea 09 (09-a): the two blocks, by what they check or work through.
+  if (kind === "if") {
+    const said = describeCondition(d.condition);
+    return said ? `If ${said}` : "If";
+  }
+  if (kind === "for_each") {
+    const over = describeOver(d.over);
+    return over ? `For each: ${over}` : "For each";
+  }
   return null;
 }
 

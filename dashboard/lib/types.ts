@@ -283,7 +283,7 @@ export interface WorkflowRun {
  * — the engine coerces absent kind→agent, on_failure→halt. */
 export interface WorkflowStep {
   name: string;
-  kind?: "agent" | "tool" | "ask" | "notify" | string;
+  kind?: "agent" | "tool" | "ask" | "notify" | "if" | "for_each" | string;
   agent?: string;
   task?: string;
   tool?: string | null;
@@ -291,6 +291,18 @@ export interface WorkflowStep {
   message?: string;
   on_failure?: "halt" | "retry" | "skip" | string;
   group?: string | null;
+  /** Idea 09 (09-a), an If: what it checks ({left, op, right}, or all/any). */
+  condition?: Record<string, unknown>;
+  /** A For each: what it works through ({files: {folder, glob}} | {from}). */
+  over?: Record<string, unknown>;
+  /** An If's Then lane, or a For each's steps. */
+  steps?: WorkflowStep[];
+  /** An If's Otherwise lane. */
+  else_steps?: WorkflowStep[];
+  /** A For each: how many items it works through (default 200). */
+  max_items?: number;
+  /** A For each: how many items at once (1 to 4). */
+  parallel?: number;
 }
 
 /** ONE terminal-status set for run polling (v1.170.0) — the canvas, the draft

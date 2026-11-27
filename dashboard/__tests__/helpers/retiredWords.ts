@@ -175,7 +175,21 @@ export const RETIRED_ON_SURFACES: readonly Retired[] = [
   // "verified". Build › Code only: the chat's compaction card says a
   // summary's claims were verified, which is another thing.
   onSurfaces("verified", /\bverified\b/i, "Checked by Iron Jarvis (a coding reply whose tests Jarvis ran)", isBuildCodeSurface),
+  // Idea 09 (09-a, VOCABULARY.md "If, For each, Wait until"): a workflow's
+  // blocks are If and For each, never a "branch" or a "loop". Scoped to the
+  // workflow surfaces: Build › Code's "Work on a new branch" is a git branch.
+  onSurfaces("loop", /\bloops?\b/i, "For each", isWorkflowSurface),
+  onSurfaces("branch", /\bbranch(?:es)?\b/i, "If (its lanes are Then and Otherwise)", isWorkflowSurface),
 ];
+
+/** Idea 09 (09-a): the surfaces that show a workflow's steps. */
+export function isWorkflowSurface(file: string): boolean {
+  return (
+    file.startsWith("components/workflow/") ||
+    file === "app/workflows/page.tsx" ||
+    file === "components/chat/WorkflowDraftCard.tsx"
+  );
+}
 
 /** 22-a: Build › Code's own screens (its components and its lib modules). */
 export function isBuildCodeSurface(file: string): boolean {

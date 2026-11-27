@@ -46,8 +46,78 @@ import {
   KIND_META,
   type StepKind,
 } from "@/components/workflow/agents";
+import {
+  BLOCK_META,
+  DEFAULT_MAX_ITEMS,
+  EACH_COST_LINE,
+  OTHERWISE_WORD,
+  THEN_WORD,
+  describeCondition,
+  describeOver,
+  hasAgentInside,
+  isBlockKind,
+} from "@/components/workflow/blocks";
 
 type StepState = "pending" | "running" | "completed" | "failed" | "skipped";
+
+/** Idea 09 (09-a): an If's or a For each's line on the card, in words. */
+function blockDetail(s: WorkflowStep): string {
+  if (s.kind === "if") {
+    const said = describeCondition(s.condition);
+    return said ? `If ${said}` : "If: what it checks is not set yet";
+  }
+  const over = describeOver(s.over);
+  const max = typeof s.max_items === "number" ? s.max_items : DEFAULT_MAX_ITEMS;
+  return `${over ? `For ${over}` : "For each item"}, at most ${max.toLocaleString()}`;
+}
+
+/** The steps inside a block, indented under it (an If's two lanes named). */
+function DraftBlockSteps({ step }: { step: WorkflowStep }) {
+  const lanes: [string | null, WorkflowStep[]][] =
+    step.kind === "if"
+      ? [
+          [THEN_WORD, step.steps ?? []],
+          [OTHERWISE_WORD, step.else_steps ?? []],
+        ]
+      : [[null, step.steps ?? []]];
+  return (
+    <div data-testid="draft-block-steps" className="mt-1 space-y-1 border-l hairline pl-2.5">
+      {lanes.map(([word, list], li) => (
+        <div key={li}>
+          {word && <p className="text-[11px] font-medium text-zinc-400">{word}</p>}
+          {list.length === 0 ? (
+            <p className="text-[11px] italic text-zinc-600">Nothing.</p>
+          ) : (
+            <ol className="space-y-0.5">
+              {list.map((c, k) => {
+                const ck = String(c.kind ?? "agent");
+                const cb = isBlockKind(ck) ? BLOCK_META[ck] : null;
+                const label = cb
+                  ? cb.label
+                  : ck === "agent"
+                    ? agentLabel(c.agent ?? "") || "Agent"
+                    : (KIND_META[ck as StepKind] ?? KIND_META.agent).label;
+                const what = cb
+                  ? blockDetail(c)
+                  : ck === "ask" || ck === "notify"
+                    ? c.message || c.task || ""
+                    : c.task || (ck === "tool" ? c.tool ?? "" : "");
+                return (
+                  <li key={`${c.name}-${k}`} className="text-[12px] leading-snug">
+                    <span className="text-zinc-300">{c.name}</span>
+                    <span className="text-zinc-500"> · {label}</span>
+                    {what ? <span className="block truncate text-zinc-500" title={what}>{what}</span> : null}
+                    {cb && <DraftBlockSteps step={c} />}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export interface LiveStep {
   state: StepState;
@@ -150,6 +220,13 @@ export function useWorkflowRun(runId: string | null, events: IJEvent[]) {
       if (!ev.id || seenRef.current.has(ev.id)) continue;
       const p = ev.payload as Record<string, unknown>;
       if (p?.run_id !== runId) continue;
+      // Idea 09: a step INSIDE an If or a For each names its block; the card
+      // shows the block's own progress ("6 of 14 done"), not one row per
+      // item's step.
+      if (p?.block && (ev.type === "workflow.step_started" || ev.type === "workflow.step_completed")) {
+        seenRef.current.add(ev.id);
+        continue;
+      }
       if (ev.type === "workflow.step_started") {
         seenRef.current.add(ev.id);
         setSteps((s) => ({ ...s, [String(p.step)]: { state: "running" } }));
@@ -595,8 +672,10 @@ export function WorkflowDraftCard({
           // their message (the question / the notification), a tool step names
           // the tool and previews its args — a draft the user can't read is a
           // draft they can't trust before running it.
-          const detail =
-            kind === "ask" || kind === "notify"
+          const block = isBlockKind(kind) ? BLOCK_META[kind] : null;
+          const detail = block
+            ? blockDetail(s)
+            : kind === "ask" || kind === "notify"
               ? s.message || s.task || ""
               : s.task ||
                 s.message ||
@@ -607,7 +686,11 @@ export function WorkflowDraftCard({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2">
                   <span className="text-[13px] text-zinc-200">{s.name}</span>
-                  {kind === "agent" ? (
+                  {block ? (
+                    <span className={`rounded-full border px-1.5 py-px text-[10px] ${block.chip}`}>
+                      {block.label}
+                    </span>
+                  ) : kind === "agent" ? (
                     <span
                       className={`rounded-full border px-1.5 py-px text-[10px] ${meta.chip}`}
                     >
@@ -634,6 +717,7 @@ export function WorkflowDraftCard({
                 >
                   {detail}
                 </p>
+                {block && <DraftBlockSteps step={s} />}
                 {live?.summary && live.state !== "running" && (
                   <p
                     className="mt-0.5 line-clamp-2 text-[12px] leading-snug text-zinc-400"
@@ -648,6 +732,14 @@ export function WorkflowDraftCard({
         })}
       </ol>
 
+      {/* D-09.1: a For each with an Agent step inside costs one model run
+          per item, and the card says so before anything runs. */}
+      {draftSteps.some((s) => s.kind === "for_each" && hasAgentInside(s.steps)) && (
+        <p data-testid="draft-each-cost" className="px-3.5 pb-2 text-[12px] leading-snug text-tone-warn">
+          {EACH_COST_LINE} A For each works through at most {DEFAULT_MAX_ITEMS} items unless it says
+          otherwise.
+        </p>
+      )}
       <WaitingBox run={run} />
       <OutcomeBanner status={run.runStatus} />
       {(error || run.answerError) && (

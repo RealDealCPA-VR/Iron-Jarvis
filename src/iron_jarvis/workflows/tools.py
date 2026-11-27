@@ -29,6 +29,7 @@ from typing import Any
 
 from ..tools.base import Reversibility, Tool, ToolContext, ToolResult
 from .store import WorkflowStore
+from .validate import BLOCKS_FOR_MODELS
 
 
 class WorkflowCreateTool(Tool):
@@ -38,8 +39,18 @@ class WorkflowCreateTool(Tool):
     description = (
         "Save a reusable workflow that persists (the user sees it in the "
         "dashboard and it can be scheduled/run later). `steps` is an ordered "
-        "list of {name, agent, task} objects — each step runs `agent` on `task`. "
-        "Re-using a `name` updates the existing workflow in place (an existing "
+        "list of step objects; `kind` decides what each IS: agent (the "
+        "default) runs `agent` on `task`, e.g. {name: \"Draft\", agent: "
+        "\"builder\", task: \"Draft the reply to {{Read}}\"}; tool calls `tool` "
+        "with `args` and no model, e.g. {name: \"Read\", kind: \"tool\", tool: "
+        "\"read_document\", args: {path: \"C:/a.pdf\"}}; ask pauses the run and "
+        "asks the user `message`, e.g. {name: \"OK?\", kind: \"ask\", message: "
+        "\"Send it?\"}; notify sends the user `message`. {{Step}} is an earlier "
+        "step's result. "
+        # Idea 09 (09-a): the two blocks, in the ONE text every door that lets
+        # a model write a workflow uses (``validate.BLOCKS_FOR_MODELS``).
+        + BLOCKS_FOR_MODELS
+        + " Re-using a `name` updates the existing workflow in place (an existing "
         "project pin is KEPT unless you pass `project`). When this task is "
         "grounded in a project, the workflow is pinned to that project "
         "automatically so its runs ground there too; pass `project` (a project "
@@ -60,8 +71,33 @@ class WorkflowCreateTool(Tool):
                     "type": "object",
                     "properties": {
                         "name": {"type": "string"},
+                        "kind": {
+                            "type": "string",
+                            "description": "agent | tool | ask | notify | if | for_each (default agent)",
+                        },
                         "agent": {"type": "string"},
                         "task": {"type": "string"},
+                        "tool": {"type": "string", "description": "kind=tool: the tool to call"},
+                        "args": {"type": "object", "description": "kind=tool: its arguments"},
+                        "message": {"type": "string", "description": "kind=ask: the question; kind=notify: the message"},
+                        "on_failure": {"type": "string", "description": "halt | retry | skip (default halt)"},
+                        "condition": {"type": "object", "description": "kind=if: {left, op, right}"},
+                        "over": {
+                            "type": "object",
+                            "description": "kind=for_each: {files: {folder, glob}} or {from: \"{{Step.data}}\"}",
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "kind=if: the steps when it holds; kind=for_each: the steps for each item",
+                        },
+                        "else_steps": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "kind=if: the steps otherwise",
+                        },
+                        "max_items": {"type": "integer", "description": "kind=for_each: at most this many items (default 200)"},
+                        "parallel": {"type": "integer", "description": "kind=for_each: items at once, 1 to 4 (default 1)"},
                     },
                 },
             },

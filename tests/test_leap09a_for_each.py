@@ -1,0 +1,509 @@
+"""Idea 09, phase 09-a: "For each".
+
+The same steps for every item of a list, worked out by the engine itself.
+Proved through real runs of the real engine with the real registry: the
+steps inside the block are real tool steps (test-only READONLY tools that
+record their calls), a folder is listed through the real ``list_folder``,
+and the record is read back from the database.
+
+* 14 items, 14 runs, and the block's own line reads "14 of 14 done";
+* a run stopped after item 6 resumes at item 7, on the SAME list (a file
+  added to the folder in between is not picked up);
+* D-09.1: the 201st item stops the run, with the reason;
+* a failed item stops the block (halt) or is skipped (the run ends "Part
+  failed");
+* at most ``parallel`` items at once;
+* a 200-item run's record stays small;
+* the example sentence of the plan runs over a folder of PDFs with tool
+  steps and one ask, and resumes correctly after a forced stop.
+"""
+
+from __future__ import annotations
+
+# Register the workflow tables BEFORE any platform is built.
+import iron_jarvis.workflows.models  # noqa: F401
+
+import asyncio
+import json
+from pathlib import Path
+
+from sqlmodel import select
+
+from iron_jarvis.core.db import session_scope
+from iron_jarvis.core.models import ToolInvocation
+from iron_jarvis.platform import build_platform
+from iron_jarvis.tools.base import Reversibility, Tool, ToolContext, ToolResult
+from iron_jarvis.workflows.engine import WorkflowEngine, load_workflow
+from iron_jarvis.workflows.models import WorkflowRunRecord, reconcile_interrupted_runs
+
+
+class Recorder(Tool):
+    """Records every call; fails for the names in ``fail``; for the
+    ``hold``-th call it waits until released (a run stopped mid-way)."""
+
+    reversibility = Reversibility.READONLY
+    input_schema = {"type": "object", "properties": {}}
+    description = "test-only"
+
+    def __init__(self, name: str, *, totals: dict | None = None) -> None:
+        self.name = name
+        self.calls: list[dict] = []
+        self.fail: set[str] = set()
+        self.totals = totals or {}
+        self.hold_at: int | None = None
+        self.holding = asyncio.Event()
+        self.release = asyncio.Event()
+        self.live = 0
+        self.most_live = 0
+
+    async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
+        self.calls.append(dict(args))
+        self.live += 1
+        self.most_live = max(self.most_live, self.live)
+        try:
+            if self.hold_at is not None and len(self.calls) == self.hold_at:
+                self.holding.set()
+                await self.release.wait()
+            await asyncio.sleep(0)
+            label = str(args.get("name") or args.get("path") or "")
+            if any(bad in label for bad in self.fail):
+                return ToolResult(ok=False, error=f"could not read {Path(label).name}")
+            total = self.totals.get(Path(label).name, "100.00")
+            return ToolResult(
+                ok=True,
+                output=f"read {Path(label).name}: {total}",
+                data={"total": total, "file": Path(label).name},
+            )
+        finally:
+            self.live -= 1
+
+
+class Lister(Tool):
+    """Hands a workflow a JSON list of names (a step's ``data``)."""
+
+    name = "t_leap09a_list"
+    reversibility = Reversibility.READONLY
+    input_schema = {"type": "object", "properties": {}}
+    description = "test-only"
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+
+    async def execute(self, args: dict, ctx: ToolContext) -> ToolResult:
+        return ToolResult(ok=True, output=f"{len(self.names)} names", data={"names": list(self.names)})
+
+
+def _platform(tmp_path, names=None):
+    platform = build_platform(str(tmp_path / "home"))
+    reader = Recorder("t_leap09a_read")
+    filer = Recorder("t_leap09a_file")
+    platform.registry.register(reader)
+    platform.registry.register(filer)
+    platform.registry.register(Lister(names if names is not None else [f"doc-{i:02d}" for i in range(1, 15)]))
+    return platform, reader, filer
+
+
+def _engine(platform):
+    engine = WorkflowEngine(platform)
+    told: list[str] = []
+    engine._deliver = lambda message, **kw: (told.append(message) or True, "sent")  # type: ignore[method-assign]
+    return engine, told
+
+
+def _each_over_list(**block) -> dict:
+    return {
+        "name": "names",
+        "steps": [
+            {"name": "List", "kind": "tool", "tool": "t_leap09a_list"},
+            {
+                "name": "Each name",
+                "kind": "for_each",
+                "over": {"from": "{{List.data.names}}"},
+                "steps": [
+                    {"name": "Read", "kind": "tool", "tool": "t_leap09a_read", "args": {"name": "{{item}}", "n": "{{index}}"}},
+                ],
+                **block,
+            },
+            {"name": "Tell", "kind": "notify", "message": "Finished: {{Each name}}"},
+        ],
+    }
+
+
+def _outs(rec) -> dict:
+    return json.loads(rec.outputs_json)
+
+
+def _record(platform, run_id) -> WorkflowRunRecord:
+    with session_scope(platform.engine) as db:
+        return db.get(WorkflowRunRecord, run_id)
+
+
+async def test_fourteen_items_fourteen_runs_and_the_line_says_14_of_14_done(tmp_path):
+    platform, reader, _ = _platform(tmp_path)
+    engine, told = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list()))
+    outs = _outs(rec)
+    assert rec.status == "completed", outs
+    assert [c["name"] for c in reader.calls] == [f"doc-{i:02d}" for i in range(1, 15)]
+    assert [c["n"] for c in reader.calls] == [str(i) for i in range(1, 15)]
+    block = outs["Each name"]
+    assert block["status"] == "completed" and block["summary"] == "14 of 14 done"
+    assert (block["done"], block["failed"], block["skipped"], block["total"]) == (14, 0, 0, 14)
+    rows = block["data"]
+    assert [r["n"] for r in rows] == list(range(1, 15))
+    assert all(r["status"] == "done" for r in rows)
+    assert rows[2]["label"] == "doc-03" and rows[2]["summary"].startswith("read doc-03")
+    # Each item's step is kept under its own path.
+    assert outs["Each name/3/Read"]["status"] == "completed"
+    # {{Each name}} renders the block's line.
+    assert told == ["Finished: 14 of 14 done"]
+    # The list is not kept once the block is done.
+    assert "list" not in block
+
+
+async def test_a_run_stopped_after_item_6_resumes_at_item_7_on_the_same_list(tmp_path):
+    names = [f"doc-{i:02d}" for i in range(1, 15)]
+    platform, reader, _ = _platform(tmp_path, names)
+    engine, told = _engine(platform)
+    wf = load_workflow(_each_over_list())
+    rec = await asyncio.to_thread(engine.create_record, wf)
+    reader.hold_at = 7
+    driver = asyncio.ensure_future(engine.run_record(rec, wf))
+    await asyncio.wait_for(reader.holding.wait(), 30)
+    # The PC restarts while item 7 is being read.
+    driver.cancel()
+    try:
+        await driver
+    except asyncio.CancelledError:
+        pass
+    assert reconcile_interrupted_runs(platform.engine) == 1
+    stopped = _record(platform, rec.id)
+    assert stopped.status == "interrupted"
+    block = _outs(stopped)["Each name"]
+    assert block["status"] == "running" and len(block["list"]) == 14
+    assert [r["n"] for r in block["data"]] == [1, 2, 3, 4, 5, 6]
+    # (The step that gave the list finished, so it is not run again; a folder
+    # that changes before a resume is the example test's.)
+    names.append("doc-15")
+    reader.hold_at = None
+    reader.calls.clear()
+    done = await engine.resume_interrupted(stopped)
+    assert done.status == "completed", _outs(done)
+    assert [c["name"] for c in reader.calls] == [f"doc-{i:02d}" for i in range(7, 15)]
+    final = _outs(done)["Each name"]
+    assert final["summary"] == "14 of 14 done"
+    assert [r["n"] for r in final["data"]] == list(range(1, 15))
+    assert told == ["Finished: 14 of 14 done"]
+
+
+async def test_the_201st_item_stops_the_run_with_the_reason(tmp_path):
+    names = [f"n{i}" for i in range(1, 251)]
+    platform, reader, _ = _platform(tmp_path, names)
+    engine, told = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list()))
+    outs = _outs(rec)
+    assert len(reader.calls) == 200
+    block = outs["Each name"]
+    assert block["status"] == "failed" and block.get("bound") is True
+    assert "Stopped at item 201 of 250" in block["summary"]
+    assert "at most 200 items" in block["summary"]
+    assert "200 of those are done" in block["summary"]
+    # A limit always stops the run (it is not a failure an item can skip past).
+    assert rec.status == "failed"
+    assert outs["Tell"]["status"] == "skipped"
+    assert told == []
+
+
+async def test_the_limit_stops_the_run_even_when_failed_items_are_skipped(tmp_path):
+    names = [f"n{i}" for i in range(1, 6)]
+    platform, reader, _ = _platform(tmp_path, names)
+    engine, _ = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list(max_items=3, on_failure="skip")))
+    assert len(reader.calls) == 3
+    assert rec.status == "failed"
+    assert "Stopped at item 4 of 5" in _outs(rec)["Each name"]["summary"]
+
+
+async def test_the_step_run_bound_stops_a_run_inside_a_block(tmp_path, monkeypatch):
+    import iron_jarvis.workflows.engine as engine_mod
+
+    # The bound is 2,000 step runs; a small one shows the rule.
+    monkeypatch.setattr(engine_mod, "MAX_STEP_RUNS", 6)
+    platform, reader, _ = _platform(tmp_path)
+    engine, told = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list(on_failure="skip")))
+    outs = _outs(rec)
+    # "List" was the first run; five items' reads fill the bound.
+    assert len(reader.calls) == 5
+    assert outs["Each name/6/Read"]["summary"] == engine_mod.STEP_RUNS_WORDS
+    assert outs["Each name"]["status"] == "failed" and outs["Each name"].get("bound") is True
+    # A bound is never skipped past, whatever the block's "if this fails".
+    assert rec.status == "failed"
+    assert told == []
+
+
+async def test_a_200_item_runs_record_stays_small(tmp_path):
+    names = [f"c{i:03d}" for i in range(1, 201)]
+    platform, reader, _ = _platform(tmp_path, names)
+    # Each read says a lot (a summary is kept to 1,500 characters while the
+    # item runs) and hands back data.
+    reader.totals = {n: "9" * 1400 for n in names}
+    engine, _ = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list()))
+    assert rec.status == "completed"
+    assert len(reader.calls) == 200
+    size = len(rec.outputs_json)
+    # 200 rows of at most 300 characters plus a short line of each item's
+    # step (the item's data is not kept once it is done): about 130 KB,
+    # where keeping everything would be about 900 KB.
+    assert size < 160_000, size
+    one = _outs(rec)["Each name/200/Read"]
+    assert set(one) <= {"status", "summary", "kind", "handled", "took", "session_id", "bound", "folded"}
+    assert "data" not in one
+
+
+async def test_a_failed_item_stops_the_block_by_default(tmp_path):
+    platform, reader, _ = _platform(tmp_path)
+    reader.fail = {"doc-03"}
+    engine, told = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list()))
+    outs = _outs(rec)
+    assert rec.status == "failed"
+    assert [c["name"] for c in reader.calls] == ["doc-01", "doc-02", "doc-03"]
+    block = outs["Each name"]
+    assert block["status"] == "failed" and not block.get("handled")
+    assert block["summary"].startswith("2 of 14 done, 1 failed, 11 not run. Item 3 (doc-03) failed at “Read”")
+    assert "could not read doc-03" in block["summary"]
+    assert outs["Tell"]["status"] == "skipped"
+
+
+async def test_a_skipped_item_ends_the_run_part_failed(tmp_path):
+    platform, reader, _ = _platform(tmp_path)
+    reader.fail = {"doc-03", "doc-09"}
+    engine, told = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list(on_failure="skip")))
+    outs = _outs(rec)
+    assert len(reader.calls) == 14
+    assert rec.status == "completed_with_failures"
+    block = outs["Each name"]
+    assert block["summary"] == "12 of 14 done, 2 failed"
+    assert block["status"] == "failed" and block["handled"] == "skipped"
+    rows = {r["n"]: r for r in block["data"]}
+    assert rows[3]["status"] == "failed" and "could not read doc-03" in rows[3]["summary"]
+    assert rows[4]["status"] == "done"
+    # The step after the block still ran, and saw the failure.
+    assert outs["Tell"]["status"] == "completed"
+    assert told == ["Finished: [step Each name failed: 12 of 14 done, 2 failed]"]
+
+
+async def test_at_most_parallel_items_at_once(tmp_path):
+    platform, reader, _ = _platform(tmp_path)
+    engine, _ = _engine(platform)
+
+    real = reader.execute
+    gauge = {"live": 0, "most": 0}
+    three_at_once = asyncio.Event()
+
+    async def counted(args, ctx):
+        # Each call waits until three are in flight together (once), so the
+        # test sees the most the block lets run at once, whatever the pace.
+        gauge["live"] += 1
+        gauge["most"] = max(gauge["most"], gauge["live"])
+        if gauge["live"] >= 3:
+            three_at_once.set()
+        try:
+            await asyncio.wait_for(three_at_once.wait(), 10)
+            return await real(args, ctx)
+        finally:
+            gauge["live"] -= 1
+
+    reader.execute = counted  # type: ignore[method-assign]
+    # The gate the block makes is read too: it lets exactly `parallel` in.
+    import iron_jarvis.workflows.engine as engine_mod
+
+    gates: list[int] = []
+    real_semaphore = asyncio.Semaphore
+
+    class Recorded(real_semaphore):  # type: ignore[misc, valid-type]
+        def __init__(self, value: int = 1) -> None:
+            gates.append(value)
+            super().__init__(value)
+
+    engine_mod.asyncio.Semaphore = Recorded  # type: ignore[misc]
+    try:
+        rec = await engine.run(load_workflow(_each_over_list(parallel=3)))
+    finally:
+        engine_mod.asyncio.Semaphore = real_semaphore  # type: ignore[misc]
+    assert rec.status == "completed"
+    assert sorted(c["name"] for c in reader.calls) == [f"doc-{i:02d}" for i in range(1, 15)]
+    assert gauge["most"] == 3
+    assert 3 in gates, gates
+    assert _outs(rec)["Each name"]["summary"] == "14 of 14 done"
+
+
+async def test_an_empty_list_finishes_and_says_so(tmp_path):
+    platform, reader, _ = _platform(tmp_path, names=[])
+    engine, told = _engine(platform)
+    rec = await engine.run(load_workflow(_each_over_list()))
+    assert rec.status == "completed"
+    assert reader.calls == []
+    assert told == ["Finished: Nothing to work through: the list was empty."]
+
+
+async def test_a_value_that_is_not_a_list_stops_the_block_with_words(tmp_path):
+    platform, reader, _ = _platform(tmp_path)
+    engine, _ = _engine(platform)
+    wf = _each_over_list()
+    wf["steps"][1]["over"] = {"from": "{{List}}"}  # the step's words, not its data
+    rec = await engine.run(load_workflow(wf))
+    block = _outs(rec)["Each name"]
+    assert rec.status == "failed"
+    assert block["summary"].startswith("“Each name” could not start: {{List}} is not a list to work through")
+    assert reader.calls == []
+
+
+def _pdfs(folder: Path, totals: dict[str, str]) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in totals:
+        (folder / name).write_bytes(b"%PDF-1.4\n% test file\n")
+    (folder / "notes.txt").write_text("not a pdf", encoding="utf-8")
+    (folder / "old").mkdir()
+
+
+def _example(folder: Path) -> dict:
+    """"For each PDF in Intake, read the total. If it is over 5,000, ask me.
+    Otherwise file it." — as chat writes it."""
+    return {
+        "name": "intake",
+        "steps": [
+            {
+                "name": "Each PDF",
+                "kind": "for_each",
+                "over": {"files": {"folder": str(folder), "glob": "*.pdf"}},
+                "steps": [
+                    {"name": "Read total", "kind": "tool", "tool": "t_leap09a_read", "args": {"path": "{{item}}"}},
+                    {
+                        "name": "Over 5,000?",
+                        "kind": "if",
+                        "condition": {"left": "{{Read total.data.total}}", "op": "over", "right": "5,000"},
+                        "steps": [
+                            {"name": "Ask me", "kind": "ask", "message": "{{item.name}} totals {{Read total.data.total}}. File it?"},
+                        ],
+                        "else_steps": [
+                            {"name": "File it", "kind": "tool", "tool": "t_leap09a_file", "args": {"path": "{{item}}"}},
+                        ],
+                    },
+                ],
+            },
+            {"name": "Tell", "kind": "notify", "message": "Intake: {{Each PDF}}"},
+        ],
+    }
+
+
+async def test_the_example_sentence_runs_over_a_folder_of_pdfs_and_resumes_after_a_forced_stop(tmp_path):
+    folder = tmp_path / "Intake"
+    totals = {f"invoice-{i:02d}.pdf": "1,200.00" for i in range(1, 15)}
+    totals["invoice-05.pdf"] = "7,450.00"
+    _pdfs(folder, totals)
+    platform, reader, filer = _platform(tmp_path)
+    reader.totals = totals
+    engine, told = _engine(platform)
+    wf = load_workflow(_example(folder))
+    rec = await asyncio.to_thread(engine.create_record, wf)
+
+    # 1. It reads invoices 1-4, files them, and parks on invoice 5's question.
+    parked = await engine.run_record(rec, wf)
+    assert parked.status == "waiting", _outs(parked)
+    waiting = json.loads(parked.waiting_json)
+    assert waiting["step"] == "Each PDF/5/Over 5,000?/then/Ask me"
+    assert waiting["question"] == "invoice-05.pdf totals 7,450.00. File it?"
+    assert waiting["index"] == 0 and waiting["at"] == [0, "steps", 1, "steps", 0]
+    assert [Path(c["path"]).name for c in filer.calls] == [f"invoice-{i:02d}.pdf" for i in range(1, 5)]
+    outs = _outs(parked)
+    assert outs["Each PDF/5/Over 5,000?/else/File it"]["status"] == "skipped"
+    assert outs["Each PDF/2/Over 5,000?"]["took"] == "else"
+    # The folder was listed through the real list_folder, in the ledger.
+    with session_scope(platform.engine) as db:
+        listed = list(db.exec(select(ToolInvocation).where(
+            ToolInvocation.session_id == rec.id, ToolInvocation.tool == "list_folder")))
+    assert len(listed) == 1 and listed[0].ok
+
+    # 2. The answer: it carries on with invoice 6 and stops while reading 9.
+    reader.calls.clear()
+    reader.hold_at = 4
+    claim = _record(platform, rec.id)
+    answered = asyncio.ensure_future(engine.resume_after_answer(claim, "yes, file it"))
+    await asyncio.wait_for(reader.holding.wait(), 30)
+    answered.cancel()
+    try:
+        await answered
+    except asyncio.CancelledError:
+        pass
+    assert [Path(c["path"]).name for c in reader.calls] == [f"invoice-{i:02d}.pdf" for i in range(6, 10)]
+    assert reconcile_interrupted_runs(platform.engine) == 1
+    stopped = _record(platform, rec.id)
+    assert stopped.status == "interrupted"
+    assert _outs(stopped)["Each PDF/5/Over 5,000?/then/Ask me"]["summary"] == "User answered: yes, file it"
+
+    # A new PDF lands before the resume: the block keeps the list it had.
+    (folder / "invoice-99.pdf").write_bytes(b"%PDF-1.4\n")
+
+    # 3. Resume: it finishes invoices 9-14, asks nothing again, files nothing twice.
+    reader.calls.clear()
+    reader.hold_at = None
+    done = await engine.resume_interrupted(stopped)
+    assert done.status == "completed", _outs(done)
+    assert [Path(c["path"]).name for c in reader.calls] == [f"invoice-{i:02d}.pdf" for i in range(9, 15)]
+    filed = [Path(c["path"]).name for c in filer.calls]
+    assert sorted(filed) == sorted(n for n in totals if n != "invoice-05.pdf")
+    assert len(filed) == len(set(filed)), "a PDF was filed twice"
+    block = _outs(done)["Each PDF"]
+    assert block["summary"] == "14 of 14 done"
+    # A file's name is chosen by whoever made it: the items are outside words.
+    assert block["outside"] is True
+    # One question went out (invoice 5's), and the end.
+    assert told[-1] == "Intake: 14 of 14 done"
+    assert [t for t in told if "needs you" in t] == [
+        "Workflow “intake” needs you: invoice-05.pdf totals 7,450.00. File it? "
+        "— answer it in chat or on the Workflows page."
+    ]
+
+
+async def test_a_folder_the_user_denied_listing_is_not_read(tmp_path):
+    folder = tmp_path / "Intake"
+    _pdfs(folder, {"a.pdf": "1"})
+    platform, reader, _ = _platform(tmp_path)
+    platform.permissions._base["list_folder"] = "deny"
+    engine, _ = _engine(platform)
+    rec = await engine.run(load_workflow(_example(folder)))
+    block = _outs(rec)["Each PDF"]
+    assert rec.status == "failed"
+    assert "could not list the folder" in block["summary"], block["summary"]
+    assert reader.calls == []
+    with session_scope(platform.engine) as db:
+        listed = list(db.exec(select(ToolInvocation).where(
+            ToolInvocation.session_id == rec.id, ToolInvocation.tool == "list_folder")))
+    assert listed and not any(r.ok for r in listed)
+
+
+async def test_cancel_stops_between_items(tmp_path):
+    platform, reader, _ = _platform(tmp_path)
+    engine, told = _engine(platform)
+    wf = load_workflow(_each_over_list())
+    rec = await asyncio.to_thread(engine.create_record, wf)
+    reader.hold_at = 4
+    driver = asyncio.ensure_future(engine.run_record(rec, wf))
+    await asyncio.wait_for(reader.holding.wait(), 30)
+    with session_scope(platform.engine) as db:
+        row = db.get(WorkflowRunRecord, rec.id)
+        row.status = "cancelling"
+        db.add(row)
+        db.commit()
+    reader.release.set()
+    final = await asyncio.wait_for(driver, 30)
+    assert final.status == "cancelled"
+    assert len(reader.calls) == 4
+    block = _outs(final)["Each name"]
+    assert block["status"] == "cancelled"
+    assert _outs(final)["Tell"]["status"] == "skipped"
+    assert told == []

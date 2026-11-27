@@ -140,7 +140,12 @@ def test_list_folder_uncapped_reports_exact_total(tmp_path):
     async def body():
         res = await ListFolderTool().execute({"path": str(folder)}, _ctx(ws))
         assert res.ok, res.error
+        # Idea 09 (09-a) added the shown entries to the data (a workflow's
+        # For each works through them); the count and the cap are as before.
+        entries = res.data.pop("entries")
         assert res.data == {"path": str(folder), "total": 5, "scan_capped": False}
+        assert sorted(e["name"] for e in entries) == [f"f{i}.txt" for i in range(5)]
+        assert all(e == {"name": e["name"], "dir": False, "size": 1} for e in entries)
         assert "5 entries" in res.output and "+" not in res.output.split("\n")[0]
 
     asyncio.run(body())

@@ -210,6 +210,14 @@ class ListFolderTool(Tool):
         "properties": {
             "path": {"type": "string", "description": "Absolute folder path (or workspace-relative)"},
             "limit": {"type": "number", "description": "Max entries (default 200)"},
+            # Idea 09 (09-a): a workflow's "For each" lists a folder through
+            # this tool, so the folder's read rules apply; the pattern is
+            # matched BEFORE the limit, so a big folder's small PDFs are not
+            # cut off by its big files.
+            "pattern": {
+                "type": "string",
+                "description": "Only names that match this pattern, like *.pdf (case does not matter)",
+            },
         },
         "required": ["path"],
     }
@@ -231,8 +239,10 @@ class ListFolderTool(Tool):
         if not await asyncio.to_thread(folder.is_dir):
             return ToolResult(ok=False, error=f"not a folder: {folder}")
         limit = max(1, min(int(args.get("limit") or 200), 1000))
+        pattern = str(args.get("pattern") or "").strip().casefold()
 
         def _collect() -> tuple[list[tuple[str, bool, int, float]], bool, str | None]:
+            import fnmatch as _fnmatch
             import time as _time
 
             deadline = _time.monotonic() + self._SCAN_DEADLINE_S
@@ -243,6 +253,8 @@ class ListFolderTool(Tool):
                     if len(out) >= self._SCAN_CAP or _time.monotonic() > deadline:
                         capped = True
                         break
+                    if pattern and not _fnmatch.fnmatchcase(p.name.casefold(), pattern):
+                        continue
                     try:
                         st = p.stat()
                         is_dir = p.is_dir()
@@ -279,7 +291,17 @@ class ListFolderTool(Tool):
         return ToolResult(
             ok=True,
             output=body,
-            data={"path": str(folder), "total": len(entries), "scan_capped": capped},
+            data={
+                "path": str(folder),
+                "total": len(entries),
+                "scan_capped": capped,
+                # Idea 09 (09-a): the entries shown, as data, so a For each
+                # works through the same names the text lists.
+                "entries": [
+                    {"name": name, "dir": is_dir, "size": size}
+                    for name, is_dir, size, _mtime in shown
+                ],
+            },
         )
 
 

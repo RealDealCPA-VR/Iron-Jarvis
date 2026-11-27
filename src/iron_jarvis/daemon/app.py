@@ -482,6 +482,14 @@ def _session_view(session, d=None) -> dict[str, Any]:
     }
 
 
+def _blocks_for_models() -> str:
+    """Idea 09 (09-a): what the workflow builder's model is told about the
+    "If" and "For each" blocks — ``workflows/validate.BLOCKS_FOR_MODELS``."""
+    from ..workflows.validate import BLOCKS_FOR_MODELS
+
+    return BLOCKS_FOR_MODELS
+
+
 def _extract_workflow_json(text: str) -> dict[str, Any]:
     """Pull the workflow JSON object out of a model reply.
 
@@ -4191,7 +4199,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
             '"steps": [{"name": "Step name", "agent": "builder", "task": '
             '"a clear instruction for this step", "tool": null}]}. '
             "agent MUST be one of: builder, planner, researcher, reviewer, "
-            "supervisor. Keep tasks concrete and self-contained. Prefer 2-6 steps."
+            "supervisor. Keep tasks concrete and self-contained. Prefer 2-6 steps. "
+            # Idea 09 (09-a): a step may also be a tool call, a question, a
+            # notice, or one of the two blocks (the ONE text every door that
+            # lets a model write a workflow uses).
+            "A step's `kind` may be agent (the default), tool (`tool` + `args`, "
+            "no model), ask (`message`: the run waits for the user) or notify "
+            "(`message`). " + _blocks_for_models()
         )
         user = f"Create a workflow for this request:\n\n{description}"
         if current:

@@ -68,6 +68,26 @@ import {
 import { StepNode } from "./StepNode";
 import { TriggerNode } from "./TriggerNode";
 import { NodeInspector } from "./NodeInspector";
+import { EachNode, type BlockNodeData } from "./EachNode";
+import { IfNode } from "./IfNode";
+import { BlockInspector } from "./BlockInspector";
+import { BlockRunDetail } from "./BlockRunDetail";
+import {
+  BLOCK_NODE_TYPE,
+  STEP_W,
+  blockStatus,
+  childrenOf,
+  hasAgentInside,
+  innerEdges,
+  isBlockKind,
+  isBlockNode,
+  isInnerEdge,
+  itemRows,
+  layoutBlocks,
+  tookWords,
+  withDescendants,
+  type ItemRow,
+} from "./blocks";
 import { stepProblemOf } from "@/lib/workflowStepProblems";
 import { TriggerInspector } from "./TriggerInspector";
 import { useCanvasColors } from "./useCanvasColorMode";
@@ -90,8 +110,10 @@ import {
   type WorkflowDef,
 } from "./agents";
 
-/* nodeTypes / edge defaults must be stable references (defined at module scope). */
-const nodeTypes = { trigger: TriggerNode, step: StepNode };
+/* nodeTypes / edge defaults must be stable references (defined at module scope).
+   Idea 09 (09-a): "each" and "if" are the two blocks, container nodes whose
+   steps are child nodes (components/workflow/blocks.ts). */
+const nodeTypes = { trigger: TriggerNode, step: StepNode, each: EachNode, if: IfNode };
 
 /* The wires take the theme's own main colour (v1.317.0; they were always
    cyan). v1.313.0 found #22d3ee at 1.8:1 on the light canvas — the light
@@ -162,10 +184,80 @@ export type CanvasStep = WorkflowStep & {
   expect?: StepExpect | null;
 };
 
+/** One saved step as canvas nodes: the step itself, and for an If or a For
+ *  each (idea 09) the steps inside it as child nodes (`parentId`, their list
+ *  in `branch`, their place in it in `order`), positioned later by
+ *  blocks.layoutBlocks. */
+function stepNodes(
+  s: CanvasStep,
+  id: string,
+  order: number,
+  parentId?: string,
+  branch?: string,
+): Node[] {
+  const kind = String(s.kind ?? "agent");
+  // A step inside a block stays in its box and in its place in the list:
+  // dragging steps in, out and around is phase 09-b.
+  const inside = parentId ? { parentId, extent: "parent" as const, draggable: false } : {};
+  const placed = parentId ? { order, branch } : {};
+  if (isBlockKind(kind)) {
+    const node: Node = {
+      id,
+      type: BLOCK_NODE_TYPE[kind],
+      position: { x: 0, y: 0 },
+      data: {
+        name: s.name?.trim() || (kind === "if" ? "If" : "For each"),
+        kind,
+        agent: String(s.agent || "builder"),
+        task: s.task ?? "",
+        on_failure: s.on_failure ?? "halt",
+        condition: s.condition && typeof s.condition === "object" ? s.condition : {},
+        over: s.over && typeof s.over === "object" ? s.over : {},
+        ...(s.max_items != null ? { max_items: s.max_items } : {}),
+        ...(s.parallel != null ? { parallel: s.parallel } : {}),
+        ...placed,
+      },
+      ...inside,
+    };
+    const out: Node[] = [node];
+    const lists: [string, CanvasStep[]][] =
+      kind === "if"
+        ? [["then", s.steps ?? []], ["else", s.else_steps ?? []]]
+        : [["body", s.steps ?? []]];
+    for (const [lane, list] of lists) {
+      (Array.isArray(list) ? list : []).forEach((c, k) =>
+        out.push(...stepNodes(c, `${id}.${lane[0]}${k + 1}`, k, id, lane)),
+      );
+    }
+    return out;
+  }
+  // Preserve the saved agent verbatim (built-in OR dynamic) — never coerce an
+  // unknown agent to "builder"; the inspector renders it as-is.
+  const agent = String(s.agent || "builder");
+  const node = mkStep(id, s.name?.trim() || `Step ${order + 1}`, agent, s.task ?? "", 0, 0, s.tool ?? null);
+  // v1.121.0 fields ride node data verbatim — the editor must never
+  // silently strip a kind/gate/group off a def it re-saves.
+  node.data = {
+    ...node.data,
+    kind: s.kind ?? "agent",
+    on_failure: s.on_failure ?? "halt",
+    group: s.group ?? null,
+    args: s.args && typeof s.args === "object" ? s.args : {},
+    message: s.message ?? "",
+    // v1.170.0: `expect` rides through load → edit → save untouched (null
+    // when absent so the serializer knows to omit the key entirely).
+    expect: s.expect && typeof s.expect === "object" ? s.expect : null,
+    ...placed,
+  };
+  return [Object.assign(node, inside)];
+}
+
 /** Turn a saved `[{name,agent,task}]` list into a Trigger → step₁ → … chain
- *  laid out left-to-right, mirroring the seed graph's geometry. */
+ *  laid out left-to-right, mirroring the seed graph's geometry. An If or a
+ *  For each (idea 09) is a box with its steps inside; the next step starts
+ *  after the box. */
 export function buildGraph(steps: CanvasStep[]): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = [
+  let nodes: Node[] = [
     {
       id: "trigger",
       type: "trigger",
@@ -178,36 +270,22 @@ export function buildGraph(steps: CanvasStep[]): { nodes: Node[]; edges: Edge[] 
   let prev = "trigger";
   steps.forEach((s, i) => {
     const id = `s${i + 1}`;
-    // Preserve the saved agent verbatim (built-in OR dynamic) — never coerce an
-    // unknown agent to "builder"; the inspector renders it as-is.
-    const agent = String(s.agent || "builder");
-    const node = mkStep(
-      id,
-      s.name?.trim() || `Step ${i + 1}`,
-      agent,
-      s.task ?? "",
-      STEP_X0 + i * STEP_DX,
-      STEP_Y,
-      s.tool ?? null,
-    );
-    // v1.121.0 fields ride node data verbatim — the editor must never
-    // silently strip a kind/gate/group off a def it re-saves.
-    node.data = {
-      ...node.data,
-      kind: s.kind ?? "agent",
-      on_failure: s.on_failure ?? "halt",
-      group: s.group ?? null,
-      args: s.args && typeof s.args === "object" ? s.args : {},
-      message: s.message ?? "",
-      // v1.170.0: `expect` rides through load → edit → save untouched (null
-      // when absent so the serializer knows to omit the key entirely).
-      expect: s.expect && typeof s.expect === "object" ? s.expect : null,
-    };
-    nodes.push(node);
+    nodes.push(...stepNodes(s, id, i));
     edges.push(mkEdge(prev, id));
     prev = id;
   });
-  return { nodes, edges };
+  nodes = layoutBlocks(nodes);
+  // Left to right: a plain step every STEP_DX (as before); a box takes its
+  // own width plus the same gap.
+  let x = STEP_X0;
+  nodes = nodes.map((n) => {
+    if (n.parentId || n.id === "trigger") return n;
+    const placed = { ...n, position: { x, y: STEP_Y } };
+    const w = isBlockNode(n) ? Number((n.data as BlockNodeData).w ?? STEP_W) : STEP_W;
+    x += w + (STEP_DX - STEP_W);
+    return placed;
+  });
+  return { nodes, edges: [...edges, ...innerEdges(nodes)] };
 }
 
 /** Parse a `steps_json` string into a CanvasStep[] (tolerant of bad data). */
@@ -258,8 +336,16 @@ function topoOrder(nodes: Node[], edges: Edge[]): Node[] {
   return out;
 }
 
-const orderedSteps = (nodes: Node[], edges: Edge[]) =>
-  topoOrder(nodes, edges).filter((n) => n.type === "step");
+/** The workflow's own steps in run order (a block counts as one; the steps
+ *  inside a block are ordered by the block, never by the wires). */
+const orderedSteps = (nodes: Node[], edges: Edge[]) => {
+  const top = nodes.filter((n) => !n.parentId);
+  const ids = new Set(top.map((n) => n.id));
+  return topoOrder(
+    top,
+    edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
+  ).filter((n) => n.type === "step" || isBlockNode(n));
+};
 
 /* ---- ONE serializer (v1.170.0) ------------------------------------------- */
 
@@ -274,7 +360,42 @@ const orderedSteps = (nodes: Node[], edges: Edge[]) =>
  *  tool step"), with no UI path to remove it. Defs that never used expect
  *  serialize byte-identically to before. */
 export function stepsFromGraph(nodes: Node[], edges: Edge[]): CanvasStep[] {
-  return orderedSteps(nodes, edges).map((n, i) => {
+  return orderedSteps(nodes, edges).map((n, i) => serializeNode(n, nodes, i));
+}
+
+/** One node as a saved step. An If or a For each (idea 09) carries its
+ *  condition or list, its limits, and the steps inside it (by `branch` and
+ *  `order`, never by where the boxes sit). */
+function serializeNode(n: Node, nodes: Node[], i: number): CanvasStep {
+  if (isBlockNode(n)) {
+    const d = n.data as BlockNodeData & { agent?: string; task?: string };
+    const kind = n.type === "if" ? "if" : "for_each";
+    const kids = (lane: string) =>
+      childrenOf(nodes, n.id, lane).map((c, k) => serializeNode(c, nodes, k));
+    const step: CanvasStep = {
+      name: d.name?.trim() || (kind === "if" ? "If" : "For each"),
+      agent: d.agent ?? "builder",
+      task: (d.task ?? "").trim(),
+      tool: null,
+      kind,
+      on_failure: d.on_failure ?? "halt",
+      group: null,
+      args: {},
+      message: "",
+    };
+    if (kind === "if") {
+      step.condition = (d.condition ?? {}) as CanvasStep["condition"];
+      step.steps = kids("then");
+      step.else_steps = kids("else");
+    } else {
+      step.over = (d.over ?? {}) as CanvasStep["over"];
+      step.steps = kids("body");
+      if (d.max_items != null) step.max_items = d.max_items;
+      if (d.parallel != null) step.parallel = d.parallel;
+    }
+    return step;
+  }
+  {
     const d = n.data as StepNodeData;
     const kind = d.kind ?? "agent";
     const step: CanvasStep = {
@@ -301,25 +422,95 @@ export function stepsFromGraph(nodes: Node[], edges: Edge[]): CanvasStep[] {
       }
     }
     return step;
-  });
+  }
+}
+
+/** Idea 09 (09-a): a new Agent step inside a block, in `branch` ("body" for
+ *  a For each, "then" / "else" for an If), right after `after` (a step
+ *  already in that list) or at the end. The box grows to fit. Pure. */
+export function addStepInside(
+  nodes: Node[],
+  blockId: string,
+  branch: string,
+  id: string,
+  after?: string,
+): Node[] {
+  const kids = childrenOf(nodes, blockId, branch);
+  const at = after ? kids.findIndex((k) => k.id === after) + 1 : kids.length;
+  const count = nodes.filter((n) => n.type === "step").length;
+  const node = mkStep(id, `Step ${count + 1}`, "builder", "", 0, 0);
+  node.parentId = blockId;
+  node.extent = "parent";
+  node.draggable = false;
+  node.data = {
+    ...node.data,
+    kind: "agent",
+    on_failure: "halt",
+    group: null,
+    args: {},
+    message: "",
+    expect: null,
+    branch,
+    // Between the step it follows and the next; layoutBlocks renumbers.
+    order: (at > 0 ? at : 0) - 0.5,
+  };
+  return layoutBlocks([...nodes, node]);
+}
+
+/** The `{{names}}` a step at `nodeId` may read, for the If's value box:
+ *  the workflow's earlier steps (and their data), and inside a For each its
+ *  item. Earlier = before the block it sits in, or before it in its list. */
+export function namesBefore(nodes: Node[], edges: Edge[], nodeId: string): string[] {
+  const out: string[] = [];
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const chain: Node[] = [];
+  let cur = byId.get(nodeId);
+  while (cur) {
+    chain.push(cur);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  const top = chain[chain.length - 1];
+  for (const n of orderedSteps(nodes, edges)) {
+    if (n.id === top?.id) break;
+    const nm = String((n.data as { name?: string }).name ?? "").trim();
+    if (nm) out.push(`{{${nm}}}`, `{{${nm}.data}}`);
+  }
+  for (let k = chain.length - 1; k > 0; k -= 1) {
+    const block = chain[k];
+    const inner = chain[k - 1];
+    if (block.type === "each") out.push("{{item}}", "{{item.name}}", "{{index}}");
+    const lane = String((inner.data as { branch?: string }).branch ?? "body");
+    for (const sib of childrenOf(nodes, block.id, lane)) {
+      if (sib.id === inner.id) break;
+      const nm = String((sib.data as { name?: string }).name ?? "").trim();
+      if (nm) out.push(`{{${nm}}}`, `{{${nm}.data}}`);
+    }
+  }
+  return Array.from(new Set(out));
 }
 
 /* ---- DAG honesty (v1.170.0) ---------------------------------------------- */
 
 /** Why a new edge must be refused, or null when it may be drawn. The engine
- *  runs ONE linear chain (parallelism = adjacent steps sharing a group), so a
- *  second outgoing edge draws a branch that will never run as drawn. Re-drawing
- *  an existing edge is a no-op (addEdge dedupes) and is not refused. */
-export function connectionRefusal(edges: Edge[], c: Connection): string | null {
+ *  runs ONE linear chain (parallelism = adjacent steps sharing a group; two
+ *  paths = an If, idea 09), so a second outgoing edge draws a fork that will
+ *  never run as drawn. Re-drawing an existing edge is a no-op (addEdge
+ *  dedupes) and is not refused. A step INSIDE an If or a For each is not
+ *  wired by hand: its box runs its steps in the order shown (`nodes`, when
+ *  given, says which nodes those are). */
+export function connectionRefusal(edges: Edge[], c: Connection, nodes?: Node[]): string | null {
   if (!c.source || !c.target) return null;
   if (c.source === c.target) return "A step can't feed itself.";
+  if (nodes?.some((n) => (n.id === c.source || n.id === c.target) && n.parentId)) {
+    return "Steps inside an If or a For each run in the order shown in their box, so they are not linked by hand.";
+  }
   const other = edges.some(
-    (e) => e.source === c.source && e.target !== c.target,
+    (e) => e.source === c.source && e.target !== c.target && !isInnerEdge(e),
   );
   if (other) {
     return (
-      "One outgoing link per step. The engine runs a single chain. " +
-      "Branches run via Parallel group instead: set the same group on adjacent steps."
+      "One outgoing link per step: steps run one after another. " +
+      "To choose between two paths, use an If. To run steps at the same time, give adjacent steps the same Parallel group."
     );
   }
   return null;
@@ -433,6 +624,8 @@ function applyLayout(
 ): Node[] {
   if (!layout) return nodes;
   return nodes.map((n) => {
+    // A step inside a block sits where its box puts it (blocks.layoutBlocks).
+    if (n.parentId) return n;
     const p = layout[n.id];
     return p && typeof p.x === "number" && typeof p.y === "number"
       ? { ...n, position: { x: p.x, y: p.y } }
@@ -459,6 +652,10 @@ interface RunStepView {
   status: string;
   summary?: string;
   session_id?: string | null;
+  /** Idea 09: an If or a For each, with what it did (rows, the path taken). */
+  kind?: string;
+  rows?: ItemRow[];
+  took?: string;
 }
 
 /** Parse an `outputs_json` object string into a stepName → output map. */
@@ -519,12 +716,32 @@ export function runStepViews(run: WorkflowRun): RunStepView[] {
   const outputs = parseOutputs((run as { outputs_json?: string }).outputs_json);
   const waiting = parseWaiting(run);
   const active = !WORKFLOW_RUN_TERMINAL.has(String(run.status ?? ""));
+  // Idea 09: an ask INSIDE a block parks the run with a path-qualified step
+  // ("Each file/3/Ask"); its block (by index) is the step waiting on you.
+  const namedParked = waiting
+    ? steps.some((s, i) => (s.name?.trim() || `step-${i + 1}`) === waiting.step)
+    : false;
   let liveAssigned = false;
   return steps.map((s, i) => {
     const nm = s.name?.trim() || `step-${i + 1}`;
     const out = outputs[nm];
+    const kind = String(s.kind ?? "agent");
+    const block = isBlockKind(kind)
+      ? { kind, rows: itemRows(out), took: tookWords(out) }
+      : {};
     let status: string;
-    if (out?.status) status = out.status;
+    if (
+      waiting &&
+      !liveAssigned &&
+      isBlockKind(kind) &&
+      !namedParked &&
+      waiting.step.includes("/") &&
+      i === waiting.index &&
+      (!out?.status || out.status === "running")
+    ) {
+      status = "waiting";
+      liveAssigned = true;
+    } else if (out?.status) status = blockStatus(out.status, !active);
     else if (waiting) {
       // Exactly ONE parked step: matched by name, else by index, else the
       // first output-less step (corrupt waiting_json). The rest are pending.
@@ -547,6 +764,7 @@ export function runStepViews(run: WorkflowRun): RunStepView[] {
       status,
       summary: out?.summary,
       session_id: out?.session_id,
+      ...block,
     };
   });
 }
@@ -591,6 +809,13 @@ export function RunProgress({
   const status = String(run.status ?? "running");
   const active = !WORKFLOW_RUN_TERMINAL.has(status);
   const waiting = parseWaiting(run);
+  // Idea 09: what each block did is read from the run's own record.
+  const allOutputs = parseOutputs((run as { outputs_json?: string }).outputs_json);
+  const blockDefs = new Map(
+    parseSteps((run as { steps_json?: string }).steps_json)
+      .filter((d) => isBlockKind(String(d.kind ?? "")))
+      .map((d) => [d.name?.trim() ?? "", d] as const),
+  );
   const [open, setOpen] = useState<string | null>(null);
   const hasResults = steps.some((s) => s.summary || s.status === "failed");
 
@@ -679,6 +904,12 @@ export function RunProgress({
             <span className="max-w-[140px] truncate">{s.name}</span>
             {s.status === "waiting" && (
               <span className="shrink-0 opacity-80">· waiting on you</span>
+            )}
+            {/* Idea 09: a For each says how far it got ("6 of 14 done"). */}
+            {s.kind === "for_each" && s.summary && s.status !== "waiting" && (
+              <span data-testid="each-progress" className="max-w-[160px] shrink-0 truncate opacity-80">
+                · {s.summary}
+              </span>
             )}
           </span>
         ))}
@@ -776,6 +1007,18 @@ export function RunProgress({
                     >
                       {s.summary || (failed ? "Step failed." : "No summary.")}
                     </p>
+                  )}
+                  {isOpen && s.kind && (
+                    <div className="pb-2.5 pl-6 pr-1">
+                      <BlockRunDetail
+                        name={s.name}
+                        kind={s.kind}
+                        steps={blockDefs.get(s.name)?.steps}
+                        elseSteps={blockDefs.get(s.name)?.else_steps}
+                        outputs={allOutputs}
+                        ended={!active}
+                      />
+                    </div>
                   )}
                 </div>
               );
@@ -893,7 +1136,10 @@ function Canvas() {
       const indexById = new Map(order.map((id, i) => [id, i + 1]));
       let changed = false;
       const next = nds.map((n) => {
-        if (n.type !== "step") return n;
+        if (n.type !== "step" && !isBlockNode(n)) return n;
+        // Idea 09: a step inside a block is numbered within its own list
+        // (blocks.layoutBlocks keeps that number).
+        if (n.parentId) return n;
         const idx = indexById.get(n.id);
         if ((n.data as StepNodeData).index === idx) return n;
         changed = true;
@@ -933,7 +1179,7 @@ function Canvas() {
     (c: Connection) => {
       // DAG honesty (v1.170.0): the engine runs ONE chain — refuse drawing a
       // branch it would never run, and say how branching actually works.
-      const refusal = connectionRefusal(edges, c);
+      const refusal = connectionRefusal(edges, c, nodes);
       if (refusal) {
         showEdgeNotice(refusal);
         return;
@@ -941,29 +1187,62 @@ function Canvas() {
       setEdges((eds) => addEdge({ ...c, animated: true }, eds));
       setIsExample(false);
     },
-    [edges, setEdges, showEdgeNotice],
+    [edges, nodes, setEdges, showEdgeNotice],
   );
 
   const onNodeClick = useCallback(
     // The trigger is selectable too (v1.122.0) — it opens the "when should
-    // this run?" panel instead of the step inspector.
+    // this run?" panel instead of the step inspector. Idea 09: an If or a
+    // For each opens its own panel.
     (_: unknown, node: Node) =>
-      setSelectedId(node.type === "step" || node.id === "trigger" ? node.id : null),
+      setSelectedId(
+        node.type === "step" || isBlockNode(node) || node.id === "trigger" ? node.id : null,
+      ),
     [],
   );
   const onPaneClick = useCallback(() => setSelectedId(null), []);
 
+  /* Idea 09 (09-a): Add step with an If or a For each selected puts the new
+     step inside it (an If: under Then, or the lane asked for); with a step
+     inside a block selected, right after it in the same list. */
+  const addInside = useCallback(
+    (blockId: string, branch: string, after?: string) => {
+      const id = `step-${idRef.current++}`;
+      setNodes((nds) => {
+        const next = addStepInside(nds, blockId, branch, id, after);
+        setEdges((eds) => [...eds.filter((e) => !isInnerEdge(e)), ...innerEdges(next)]);
+        return next;
+      });
+      setSelectedId(id);
+      setIsExample(false);
+    },
+    [setNodes, setEdges],
+  );
+
   const addStep = useCallback(() => {
-    const order = topoOrder(nodes, edges);
+    const picked = nodes.find((n) => n.id === selectedId);
+    if (picked && isBlockNode(picked)) {
+      addInside(picked.id, picked.type === "if" ? "then" : "body");
+      return;
+    }
+    if (picked?.parentId) {
+      addInside(picked.parentId, String((picked.data as { branch?: string }).branch ?? "body"), picked.id);
+      return;
+    }
+    const order = topoOrder(
+      nodes.filter((n) => !n.parentId),
+      edges.filter((e) => !isInnerEdge(e)),
+    );
     const last = order[order.length - 1] ?? nodes.find((n) => n.id === "trigger")!;
     const id = `step-${idRef.current++}`;
     const stepCount = nodes.filter((n) => n.type === "step").length;
+    const lastW = isBlockNode(last) ? Number((last.data as BlockNodeData).w ?? STEP_W) : STEP_W;
     const newNode = mkStep(
       id,
       `Step ${stepCount + 1}`,
       "builder",
       "",
-      last.position.x + 280,
+      last.position.x + lastW + (STEP_DX - STEP_W),
       last.type === "trigger" ? last.position.y - 20 : last.position.y,
     );
     setNodes((nds) => [...nds, newNode]);
@@ -971,7 +1250,7 @@ function Canvas() {
     setSelectedId(id);
     setIsExample(false);
     setTimeout(() => fitView({ padding: 0.22, duration: 420 }), 60);
-  }, [nodes, edges, setNodes, setEdges, fitView]);
+  }, [nodes, edges, selectedId, addInside, setNodes, setEdges, fitView]);
 
   const updateData = useCallback(
     (id: string, patch: Partial<StepNodeData>) => {
@@ -986,23 +1265,37 @@ function Canvas() {
   const deleteNode = useCallback(
     (id: string) => {
       if (id === "trigger") return;
+      const target = nodes.find((n) => n.id === id);
+      if (target?.parentId) {
+        // Idea 09: a step inside a block leaves its list; the box closes up.
+        setNodes((nds) => {
+          const next = layoutBlocks(nds.filter((n) => !withDescendants(nds, id).has(n.id)));
+          setEdges((eds) => [...eds.filter((e) => !isInnerEdge(e)), ...innerEdges(next)]);
+          return next;
+        });
+        setSelectedId((cur) => (cur === id ? null : cur));
+        setIsExample(false);
+        return;
+      }
+      // An If or a For each goes with the steps inside it.
+      const gone = withDescendants(nodes, id);
       const preds = edges.filter((e) => e.target === id).map((e) => e.source);
       const succs = edges.filter((e) => e.source === id).map((e) => e.target);
       const rewires: Edge[] = [];
       for (const p of preds)
         for (const s of succs) if (p !== s) rewires.push(mkEdge(p, s));
       setEdges((eds) => {
-        let next = eds.filter((e) => e.source !== id && e.target !== id);
+        let next = eds.filter((e) => !gone.has(e.source) && !gone.has(e.target));
         for (const r of rewires)
           if (!next.some((e) => e.source === r.source && e.target === r.target))
             next = [...next, r];
         return next;
       });
-      setNodes((nds) => nds.filter((n) => n.id !== id));
-      setSelectedId((cur) => (cur === id ? null : cur));
+      setNodes((nds) => nds.filter((n) => !gone.has(n.id)));
+      setSelectedId((cur) => (cur && gone.has(cur) ? null : cur));
       setIsExample(false);
     },
-    [edges, setEdges, setNodes],
+    [nodes, edges, setEdges, setNodes],
   );
 
   const onNodesDelete = useCallback(
@@ -1344,7 +1637,13 @@ function Canvas() {
 
   const selected = nodes.find((n) => n.id === selectedId && n.type === "step");
   const selData = selected?.data as StepNodeData | undefined;
-  const stepCount = nodes.filter((n) => n.type === "step").length;
+  // Idea 09: a selected If or For each opens its own panel.
+  const selectedBlock = nodes.find((n) => n.id === selectedId && isBlockNode(n));
+  const blockSteps = selectedBlock
+    ? (serializeNode(selectedBlock, nodes, 0).steps ?? [])
+    : [];
+  // The workflow's own steps (a block counts as one), as the toolbar says.
+  const stepCount = nodes.filter((n) => !n.parentId && (n.type === "step" || isBlockNode(n))).length;
   // The name box differs from the loaded def → Save becomes a rename-in-place
   // (PATCH), with fork-a-copy still available explicitly.
   const renamePending = !!loadedName && !!name.trim() && name.trim() !== loadedName;
@@ -1356,7 +1655,7 @@ function Canvas() {
 
   const miniColor = useCallback(
     (node: Node) => {
-      if (node.type === "trigger") return wireInk;
+      if (node.type === "trigger" || isBlockNode(node)) return wireInk;
       return agentMeta(String((node.data as StepNodeData).agent)).hex;
     },
     [wireInk],
@@ -1638,6 +1937,18 @@ function Canvas() {
             problem={stepProblem && stepProblem.nodeId === selected!.id ? stepProblem.words : null}
             onDelete={() => deleteNode(selected!.id)}
             onClose={() => setSelectedId(null)}
+          />
+        )}
+        {selectedBlock && (
+          <BlockInspector
+            data={selectedBlock.data as BlockNodeData}
+            onChange={(patch) => updateData(selectedBlock.id, patch as Partial<StepNodeData>)}
+            onDelete={() => deleteNode(selectedBlock.id)}
+            onClose={() => setSelectedId(null)}
+            onAddInside={(branch) => addInside(selectedBlock.id, branch)}
+            suggestions={namesBefore(nodes, edges, selectedBlock.id)}
+            hasAgent={selectedBlock.type === "each" && hasAgentInside(blockSteps)}
+            problem={stepProblem && stepProblem.nodeId === selectedBlock.id ? stepProblem.words : null}
           />
         )}
         {selectedId === "trigger" && (

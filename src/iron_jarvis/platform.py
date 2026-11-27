@@ -3065,12 +3065,18 @@ def build_platform(
                 "the workflow this schedule runs has no steps. Add steps to it on the "
                 "Workflows page, or edit the schedule to pick another"
             )
+        # Idea 09 (09-a): a step of a kind this version does not know is
+        # refused by name, on the schedule's row (never run as an agent step).
+        from .workflows.engine import UnknownStepKind
+
+        try:
+            wf = load_workflow(payload)
+        except UnknownStepKind as exc:
+            raise _ScheduleRefused(str(exc)) from None
         # The SHARED orchestrator (attached in v1.119.0), so the cancel route
         # can find and stop a scheduled run's step sessions — a throwaway
         # orchestrator made cancels silently ineffective.
-        return WorkflowEngine(platform, platform.orchestrator).run(
-            load_workflow(payload)
-        )
+        return WorkflowEngine(platform, platform.orchestrator).run(wf)
 
     # Goal contracts (v1.208.0): the engine ``routes/goals.py`` and the
     # ``kind="goal"`` dispatch above run iterations through. Constructed with

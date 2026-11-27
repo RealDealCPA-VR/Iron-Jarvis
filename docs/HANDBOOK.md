@@ -129,6 +129,64 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## "If" and "For each" in a workflow (v1.589.0)
+
+A workflow can now decide and repeat. Say it the way you would to a
+person, in chat:
+
+> For each PDF in Intake, read the total. If it is over 5,000, ask me.
+> Otherwise file it.
+
+Iron Jarvis makes that ONE workflow and shows it as a card you can save,
+run once, or open in the editor. Two new building blocks do the work:
+
+- **For each** runs the steps inside it once for every file in a folder
+  (you can say which names, like `*.pdf`), or for every item of a list an
+  earlier step found. Inside it, the step can use the file it is on.
+- **If** checks a value from an earlier step (is over, is under, is,
+  contains, is empty, matches a pattern like `invoice-*`) and runs one of
+  its two lanes, **Then** or **Otherwise**.
+
+Iron Jarvis works these out itself, with no AI model, so they are quick
+and give the same answer every time. A number like "5,000.00" is read as
+a number. If a value is not a number where one is needed (say the total
+came back as "pending"), the If stops and says so; it never guesses.
+
+**On the canvas.** Open the workflow on the Workflows page: a For each is
+a box with its steps inside, and an If is a box with its Then lane above
+its Otherwise lane. Select a box to change it: the If's panel has three
+fields (the value, the comparison, what to compare it with), and the For
+each's panel has the folder or list and its limits. With a box selected,
+**Add step** puts the new step inside it. (Dragging steps in and out of a
+box comes in a later version.)
+
+**While it runs, and after.** The run strip and **Run history** say how far
+a For each got, "6 of 14 done", and open to one row per item with what
+happened to it. An If says which lane it took. If a step inside asks you
+something, the run waits for your answer as any question does, then goes
+on with the next item. A run cut short by a restart picks up at the next
+item, on the same list of files it started with.
+
+Good to know:
+
+- A For each works through at most **200 items** in one run unless you set
+  another limit (up to 2,000). At item 201 it stops and says why, rather
+  than running on.
+- An **Agent step inside a For each runs once for every item: one model run
+  per item.** The chat's card says so before you run it.
+- By default a failed item stops the run. Set **If an item fails** to
+  **Skip that item and go on** and the rest are still worked through; the
+  run then ends **Part failed**, with the failed items named.
+- A tool step inside a block needs the same permission as anywhere else,
+  and a tool that asks you each time is still refused in a workflow, item
+  by item.
+- Your existing workflows work as before. The one change: a step of a kind
+  this version does not know is now refused by name ("The step “X” is a
+  “wait_until” step, which this version of Iron Jarvis does not know"),
+  instead of quietly running as an agent step.
+
+There is nothing to set up, no new page and no new notice.
+
 ## It offers to run a task you repeat by itself (v1.594.0)
 
 When the three times you asked Iron Jarvis for the same kind of task in chat

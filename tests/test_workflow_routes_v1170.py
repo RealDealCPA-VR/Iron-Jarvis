@@ -464,14 +464,22 @@ def test_save_accepts_normalizable_and_absent_shape_fields(tmp_path):
 
 def test_store_save_and_load_stay_lenient_for_old_rows(tmp_path):
     """The strictness is the SAVE ROUTE's, not the store's: rows written
-    before v1.170.0 (or by agents through the store) keep loading, with the
-    loader's old coercion to the default kind."""
+    before v1.170.0 (or by agents through the store) keep loading — an absent
+    or empty kind is the default, an unknown failure rule halts. Idea 09
+    (09-a) changed ONE thing: a kind the loader does not know is refused BY
+    NAME (``UnknownStepKind``), never run as an agent step."""
     client = TestClient(create_app(str(tmp_path)))
     store = WorkflowStore(_engine_of(client))
-    store.save("old-row", [{"name": "s", "task": "t", "kind": "toool"}])
+    store.save("old-row", [{"name": "s", "task": "t", "kind": ""}, {"name": "u", "task": "t", "on_failure": "x"}])
     wf = store.load_def("old-row")
     assert wf is not None
-    assert wf.steps[0].kind == "agent"  # coerced, never an error
+    assert [s.kind for s in wf.steps] == ["agent", "agent"]
+    assert wf.steps[1].on_failure == "halt"
+    from iron_jarvis.workflows.engine import UnknownStepKind
+
+    store.save("typo-row", [{"name": "s", "task": "t", "kind": "toool"}])
+    with pytest.raises(UnknownStepKind, match="“s” is a “toool” step"):
+        store.load_def("typo-row")
 
 
 # --- prune_runs + POST /workflows/runs/prune ------------------------------

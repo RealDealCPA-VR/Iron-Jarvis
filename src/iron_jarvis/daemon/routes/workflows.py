@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from fastapi import FastAPI, HTTPException
@@ -110,8 +111,18 @@ def register(app: FastAPI, d) -> None:
             load_workflow_toml,
         )
 
+        from ...workflows.engine import UnknownStepKind
+
+        def _refused(exc: ValueError) -> HTTPException:
+            # Idea 09: a step of a kind this version does not know is refused
+            # by name when the workflow is loaded (never run as an agent step).
+            return HTTPException(status_code=400, detail=str(exc))
+
         if body.toml:
-            wf = load_workflow_toml(body.toml)
+            try:
+                wf = load_workflow_toml(body.toml)
+            except UnknownStepKind as exc:
+                raise _refused(exc)
         elif body.name and body.steps is not None:
             # Project pin: an explicit body.project_id wins ("" = force
             # unpinned); otherwise a run of a SAVED def inherits its pin.
@@ -120,9 +131,12 @@ def register(app: FastAPI, d) -> None:
                 from ...workflows.store import WorkflowStore
 
                 pid = WorkflowStore(d.platform.engine).get_project_id(body.name)
-            wf = load_workflow(
-                {"name": body.name, "steps": body.steps, "project_id": pid}
-            )
+            try:
+                wf = load_workflow(
+                    {"name": body.name, "steps": body.steps, "project_id": pid}
+                )
+            except ValueError as exc:
+                raise _refused(exc)
         elif body.name:
             # v1.170.0 — ``name`` ALONE runs the SAVED def: stored steps + the
             # project pin resolve server-side via load_def (the ONE composition
@@ -130,7 +144,10 @@ def register(app: FastAPI, d) -> None:
             # a curl — picks the pin up for free instead of re-posting steps.
             from ...workflows.store import WorkflowStore
 
-            wf = WorkflowStore(d.platform.engine).load_def(body.name)
+            try:
+                wf = WorkflowStore(d.platform.engine).load_def(body.name)
+            except UnknownStepKind as exc:
+                raise _refused(exc)
             if wf is None:
                 raise HTTPException(
                     status_code=404, detail=f"no saved workflow named '{body.name}'"
@@ -260,6 +277,17 @@ def register(app: FastAPI, d) -> None:
                 rec.status = "cancelled"
                 rec.waiting_json = ""
                 rec.finished_at = rec.finished_at or utcnow()
+                # Idea 09: a run parked on an ask INSIDE a block has that block
+                # open; a stopped run never says its block is still working.
+                # (A parked run has no engine writing its record.)
+                from ...workflows.engine import settle_open_blocks
+
+                try:
+                    outs = json.loads(rec.outputs_json or "{}")
+                except (TypeError, ValueError):
+                    outs = {}
+                if isinstance(outs, dict) and settle_open_blocks(outs, "cancelled"):
+                    rec.outputs_json = json.dumps(outs, ensure_ascii=False, default=str)
             else:
                 rec.status = "cancelling"
             current = rec.current_session_id
