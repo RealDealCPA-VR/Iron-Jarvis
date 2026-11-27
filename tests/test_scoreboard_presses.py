@@ -52,6 +52,11 @@ The review's fifth round:
   nothing, a ledger longer than one read decides nothing before the rows read,
   and every ledger read is an index range on ``created_at``, never a walk of
   the whole table.
+
+The review's sixth round:
+* a backfilled reply of a folder session (made before this release: its
+  row's time is the first start, not the reply's end) is never kept by a
+  later commit of its file; a reply of this release beside it is.
 """
 
 from __future__ import annotations
@@ -512,6 +517,47 @@ async def test_chats_coding_record_reads_the_users_own_commit_like_the_menu(app,
     got = RS.report(app.state.platform, None, str(repo), "", phone=False, withhold=False)
     assert "kept 1 of 1 (too few to judge)" in got.output, got.output
     assert rows_of(app, sid) == {f"{sid}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+
+
+#: A Chat › Code finish record, as an older app saved it on a reply line.
+FIN = {"tests": "passed", "command": "pytest", "removed": 0, "kept": 0, "points": 0, "unmet": 0, "after": ""}
+
+
+async def test_a_backfilled_reply_is_never_kept_by_a_later_commit_of_its_file(app, repo):
+    """A reply from BEFORE this release is backfilled at the first start, and
+    its row's time is that start, not when the reply ended. Its change may
+    have been thrown away by hand long ago, so the user's own commit cannot be
+    judged against it: it stays not decided. A reply of this release in the
+    same session, ended before the same commit, is kept by it."""
+    engine = app.state.platform.engine
+    status, made = await asgi(app, "POST", "/build/sessions", {"folder": str(repo), "branch": False})
+    assert status == 201, made
+    sid = made["id"]
+    # The old reply changed a.py (its line keeps a finish record and names the
+    # file); the user threw that change away by hand: a.py is not in the tree.
+    assert HS.append_lines(engine, sid, [
+        {"role": "user", "content": "make old", "turnId": "old1"},
+        {"role": "assistant", "turnId": "old1", "content": "Done.", "documents": [str(repo / "a.py")],
+         "finish": FIN, "route": {"provider": "anthropic", "model": "claude-x"}},
+    ])["ok"]
+    assert not (repo / "a.py").exists()
+    assert SB.backfill(engine) == 1
+    assert rows_of(app, sid) == {f"{sid}:old1": ("", "")}
+    # After the upgrade a reply of this release changes b.py.
+    assert HS.append_lines(engine, sid, [
+        {"role": "user", "content": "make new", "turnId": "t1"},
+        {"role": "assistant", "turnId": "t1", "content": "Done.", "documents": [str(repo / "b.py")]},
+    ])["ok"]
+    assert SB.note(engine, session_id=sid, ref=f"{sid}:t1", folder=str(repo), surface=SB.SURFACE_CODE,
+                   tool=SB.TOOL_JARVIS, provider="anthropic", model="claude-x")
+    # The user writes a NEW a.py by hand and commits it with b.py.
+    (repo / "a.py").write_text("brand new, by hand\n", encoding="utf-8")
+    (repo / "b.py").write_text("b = 1\n", encoding="utf-8")
+    commit_at(repo, int(time.time()) + 5, "my own files")
+    status, rec = await asgi(app, "GET", f"/build/scoreboard?folder={repo}")
+    assert status == 200, rec
+    assert rows_of(app, sid) == {f"{sid}:old1": ("", ""), f"{sid}:t1": (SB.KEPT, SB.HOW_COMMITTED)}
+    assert SB.keep_own_commits(engine, str(repo)) == 0
 
 
 def ledger_call(app, session_id: str, when: int, *, command: str = "git add -A && git commit -m wip",

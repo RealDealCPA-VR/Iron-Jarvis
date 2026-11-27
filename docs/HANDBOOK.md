@@ -2190,7 +2190,9 @@ and in Build › Code, when you start a session and inside one.
 - **From the first day.** The record was filled once from the work already
   on your PC: merged and discarded sessions, kept attempts, and the replies'
   checks. Work committed before this version is not known as kept, so it
-  shows as not decided.
+  shows as not decided. In a session that works in your folder directly, a
+  reply from before this version stays not decided even after a later
+  commit: Iron Jarvis does not know when it ended.
 - **From chat.** Ask *which model does best in this folder?* and Jarvis
   answers from the same record, with the counts for each tool and model.
   Folders a chat may not be told about are left out, as everywhere else.

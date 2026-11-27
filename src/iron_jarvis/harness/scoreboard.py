@@ -751,10 +751,13 @@ def keep_own_commits(engine: Any, folder: str) -> int:
     running (that commit may be the model's, not the user's press:
     :func:`_folder_model_commit_at`), a night
     task's reply (Iron Jarvis's own night commit), a session on its own branch
-    (its own presses decide), a folder that is not a git repository. All of
-    those stay not decided. Read when the model menu opens
-    (``GET /build/scoreboard``) and by chat's ``coding_record``, before the
-    counts. BLOCKING (git reads); never raises."""
+    (its own presses decide), a folder that is not a git repository, a
+    reply from before this release (a ``backfill`` row: its time is the first
+    start, not the reply's end, so no commit can be judged against it) or a
+    rehearsal's (``replay``). All of those stay not decided. Read when the
+    model menu opens (``GET /build/scoreboard``) and by chat's
+    ``coding_record``, before the counts. BLOCKING (git reads); never
+    raises."""
     key = folder_key(folder)
     if engine is None or not key:
         return 0
@@ -764,7 +767,7 @@ def keep_own_commits(engine: Any, folder: str) -> int:
                 select(CodingOutcome.ref, CodingOutcome.session_id, CodingOutcome.created_at)
                 .where(CodingOutcome.folder_key == key, CodingOutcome.surface == SURFACE_CODE,
                        CodingOutcome.unit == UNIT_REPLY, CodingOutcome.verdict == "",
-                       CodingOutcome.source != SOURCE_REPLAY)
+                       CodingOutcome.source == SOURCE_WORK)
                 .order_by(col(CodingOutcome.created_at).desc()).limit(OWN_COMMIT_ROWS_MAX)
             ).all()
         if not got:
