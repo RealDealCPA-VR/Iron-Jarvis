@@ -218,8 +218,9 @@ import { excelNowForSend } from "@/lib/excelNow";
 import { PreferenceSuggestion } from "@/components/chat/PreferenceSuggestion";
 // Next leaps 15-a: "From memory" — what the reply was given from memory.
 import { MemoryUsed, MemoryUsedHidden } from "@/components/chat/MemoryUsed";
-import { CheckedLine } from "@/components/chat/CheckedLine";
+import { CheckedWithDoubleCheck } from "@/components/chat/DoubleCheck";
 import { checkedForSave, decodeChecked } from "@/lib/checked";
+import { decodeDoubleCheck, doubleCheckForSave } from "@/lib/doubleCheck";
 import {
   decodeMemoryUsed,
   decodePopupMode,
@@ -808,6 +809,11 @@ interface ChatMessage {
    *  daemon sent it, so a reopened chat still shows it; absent on a reply
    *  that made no file. */
   checked?: unknown;
+  /** The intelligence plan, 5b: the daemon's `double_check` (lib/doubleCheck):
+   *  the once-only offer of a second model's double-check, or the one started
+   *  after this reply (its line is read again while it runs). Absent on a
+   *  reply that made no file, and when there is nothing to offer. */
+  doubleCheck?: unknown;
   /** Calm UI redesign S3/S4: "Setting changed … [Undo]" and secure credential
    *  cards from this turn. A card's state (undone, saved) is stored here, so a
    *  reopened chat shows what happened, never the ask again. */
@@ -3926,7 +3932,7 @@ const MessageRow = memo(function MessageRow({
           quiet line under a reply that made or changed a file, in the
           daemon's own words from its record of checks; pressing it lists
           the checks. Nothing under a reply that made no file. */}
-      <CheckedLine mark={checkedMark} />
+      <CheckedWithDoubleCheck mark={checkedMark} doubleCheck={m.doubleCheck} />
       {/* PREFERENCE SUGGESTION (v1.305.0): a repeated correction, offered as
           a standing preference in the receipt's own quiet voice — directly
           under it, with Keep · Edit · Not this. Decoded again here because a
@@ -10089,6 +10095,12 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         // files this reply made (the done frame's `checked`, whitelisted).
         // MIRROR NOTE: the POST lane's receiptPost below decodes the same key.
         const checkedStream = decodeChecked((streamRes as unknown as { checked?: unknown }).checked);
+        // 5b: the once-only offer, or the second model's double-check that
+        // started after this reply (the done frame's `double_check`). MIRROR
+        // NOTE: the POST lane's receiptPost below decodes the same key.
+        const doubleCheckStream = checkedStream
+          ? decodeDoubleCheck((streamRes as unknown as { doubleCheck?: unknown }).doubleCheck)
+          : null;
         // Adapted (v1.202.0) — the envelope's disclosure rides the message
         // like route/doors. MIRROR NOTE: keep in step with the POST lane's
         // receiptPost below — this exact merge line is where done-frame
@@ -10142,6 +10154,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           ...(memoryMore ? { usedMore: memoryMore } : {}),
           // Release 5 of the intelligence plan: what was checked. MIRROR NOTE.
           ...(checkedStream ? { checked: checkedForSave(checkedStream) } : {}),
+          ...(doubleCheckStream ? { doubleCheck: doubleCheckForSave(doubleCheckStream) } : {}),
           // v1.323.0: the reply's own details (kept last: the trust pin reads
           // the head of this object).
           ...(thinkingText ? { thinking: thinkingText } : {}),
@@ -10458,6 +10471,8 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // lane's `checked` (present only for a reply that made a file).
       // MIRROR NOTE: keep in step.
       const checkedPost = decodeChecked((res as { checked?: unknown }).checked);
+      // 5b: MIRROR NOTE — the stream lane's `double_check` above.
+      const doubleCheckPost = checkedPost ? decodeDoubleCheck((res as { double_check?: unknown }).double_check) : null;
       const receiptPost = {
         at: new Date().toISOString(), // v1.323.0 — the settle time, both lanes
         ...(thinkingPost ? { thinking: thinkingPost } : {}),
@@ -10493,6 +10508,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         ...(usedMorePost ? { usedMore: usedMorePost } : {}),
         // Release 5 of the intelligence plan: what was checked. MIRROR NOTE.
         ...(checkedPost ? { checked: checkedForSave(checkedPost) } : {}),
+        ...(doubleCheckPost ? { doubleCheck: doubleCheckForSave(doubleCheckPost) } : {}),
         // v1.324.0: the apps' resources this turn read (whitelisted).
         ...(decodeResourceReceipts((res as { resources?: unknown }).resources).length
           ? { appResources: decodeResourceReceipts((res as { resources?: unknown }).resources) }

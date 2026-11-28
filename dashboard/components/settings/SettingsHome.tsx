@@ -89,6 +89,16 @@ const SUB_DEFS: Record<string, SubDef[]> = {
       blurb: "The agents that take pieces of work, each on its own model, and how much of each plan they have used.",
       Comp: named(() => import("@/components/settings/ModelTeam"), "ModelTeam"),
     },
+    {
+      // The intelligence plan, 5b: a second model account double-checks
+      // finished work (its one control on this page, CONTROLLED_IN_SECTION
+      // below): how it stands, and the yes that names the model and account.
+      id: "models-double-check",
+      label: "Second model double-check",
+      blurb: "With more than one model account: one small request per finished task to the model you said yes to.",
+      Comp: named(() => import("@/components/chat/DoubleCheck"), "DoubleCheckRow"),
+      requiresKey: "double_check",
+    },
   ],
   connections: [
     {
@@ -263,6 +273,9 @@ export const CONTROLLED_IN_SECTION: Record<string, string> = {
   // Next leaps 16-a: search by meaning's value is a search model, chosen
   // with its measured cost on its own section (never a text box).
   meaning_search: "memory-meaning",
+  // 5b: the second model's double-check holds a model and an account, said
+  // and chosen on its own section (never a text box).
+  double_check: "models-double-check",
 };
 
 /**

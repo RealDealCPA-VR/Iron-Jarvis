@@ -115,11 +115,19 @@ TESTS = "tests"
 REVIEW = "review"
 STEP_CHECK = "step_check"
 WORKFLOW_STEP = "workflow_step"
+#: 5b: the ONE small request a second model makes over a finished reply or
+#: task, on the account the owner said yes to (:mod:`.second`). ``by`` is
+#: that model's id; its verdict is an opinion, so it is never on the
+#: allowlist below, and its words are never stored.
+DOUBLE_CHECK = "double_check"
 
 #: The checks of what a made file says. The line under a reply is drawn only
 #: when the reply's record holds at least one of these.
 CONTENT_CHECKS = frozenset({FILE_OPENS, SHEET_ERRORS, SHEET_TOTALS, DOC_TEXT, PDF_PAGES})
-CHECKS = CONTENT_CHECKS | {CLAIMS, REQUIRED_FILE, TESTS, REVIEW, STEP_CHECK, WORKFLOW_STEP}
+CHECKS = CONTENT_CHECKS | {CLAIMS, REQUIRED_FILE, TESTS, REVIEW, STEP_CHECK, WORKFLOW_STEP, DOUBLE_CHECK}
+#: The checks a run that is settled again says AFRESH (``write(replace_content=True)``):
+#: what its files hold, and the second model's read of them (5b).
+AFRESH_CHECKS = CONTENT_CHECKS | {DOUBLE_CHECK}
 #: THE ALLOWLIST. Only a row of one of these checks may be ``failed``
 #: ("Problem"): each holds a fact, never an inference, a reading of prose or
 #: a model's opinion.
@@ -143,6 +151,10 @@ LINE_HEAD = "Checked by Iron Jarvis:"
 LINE_NOT_CHECKED = "Not checked:"
 #: The words before what Iron Jarvis worked out itself and found different.
 LINE_LOOK = "Worth a look:"
+#: 5b: the words before a second model's pass ("Double-checked by Sonnet
+#: 4.5: it found nothing wrong."): the model's own verdict, under its name,
+#: never under "Checked by Iron Jarvis".
+LINE_DOUBLE = "Double-checked"
 
 #: A row older than this is removed.
 KEEP_DAYS = 90
@@ -417,7 +429,7 @@ def write(
     id, which another reply may share.
 
     *replace_content* (a run that is settled again): EVERY check of a made
-    file this owner holds is removed first, in the same transaction, even
+    file this owner holds, and its double-check (:data:`AFRESH_CHECKS`), is removed first, in the same transaction, even
     when *checks* is empty. What the run's files say is said afresh each
     time: a finding about a file that was put right, removed, or is no
     longer one of the run's files does not stay behind.
@@ -456,7 +468,7 @@ def write(
             if replace and own:
                 db.exec(sa_delete(CheckRecord).where(
                     CheckRecord.turn_id == turn, CheckRecord.session_id == sid, *mine,
-                    CheckRecord.check.in_(sorted(CONTENT_CHECKS)),  # type: ignore[attr-defined]
+                    CheckRecord.check.in_(sorted(AFRESH_CHECKS)),  # type: ignore[attr-defined]
                     *([CheckRecord.run_id == rid] if rid else []),
                 ))
             for key in {(c.check, c.file, c.folder, c.step, c.run_id or rid) for c in rows} if own else ():
@@ -644,7 +656,7 @@ _KIND_WORDS = {
 }
 #: What a row that is not about a file is called on the line and in the list.
 _SUBJECTS = {
-    CLAIMS: "the reply", TESTS: "the tests", REVIEW: "the review",
+    CLAIMS: "the reply", TESTS: "the tests", REVIEW: "the review", DOUBLE_CHECK: "the double-check",
 }
 _RESULT_WORDS = {PASSED: "Checked", FAILED: "Problem", LOOK: "Worth a look", NOT_CHECKED: "Not checked"}
 
@@ -755,15 +767,19 @@ def line_for(rows: Iterable[dict[str, Any]]) -> "tuple[str, str]":
                 and str(r.get("folder") or "") == folder and _result(r) == PASSED and r.get("detail")]
         if said:
             passed.append(f"{kind_words(name) if one_file else apart(name, folder)} {', '.join(said)}")
+    # 5b: a second model's pass is ITS verdict, said under its own name.
+    doubled = [f"{LINE_DOUBLE} {who_words(r.get('by'))}: {r.get('detail')}." for r in rows
+               if r.get("check") == DOUBLE_CHECK and _result(r) == PASSED and r.get("detail")]
     problems = [_about(r, one_file, "it did not pass") for r in rows if _result(r) == FAILED]
     looks = [_look_words(r, one_file) for r in rows if _result(r) == LOOK]
-    unchecked = [f"{_subject(r, one_file)} ({r.get('detail') or 'no reason was kept'})"
+    unchecked = [f"{_unchecked_subject(r, one_file)} ({r.get('detail') or 'no reason was kept'})"
                  for r in rows if _result(r) == NOT_CHECKED]
 
     def build(n_files: int, n_problems: int, n_looks: int, n_unchecked: int) -> str:
         parts: list[str] = []
         if passed:
             parts.append(f"{LINE_HEAD} {_and_more(passed, n_files, 'file')}.")
+        parts.extend(doubled)
         if problems:
             said = _and_more(problems, n_problems)
             parts.append(f"Problem in {said}." if passed else f"{LINE_HEAD} a problem in {said}.")
@@ -791,6 +807,14 @@ def line_for(rows: Iterable[dict[str, Any]]) -> "tuple[str, str]":
     return line, ("warn" if problems or looks else "quiet")
 
 
+def _unchecked_subject(row: dict[str, Any], one_file: bool) -> str:
+    """What a "Not checked" row is about. A double-check names the model
+    that was to make it ("the double-check by Sonnet 4.5")."""
+    if row.get("check") == DOUBLE_CHECK:
+        return f"the double-check {who_words(row.get('by'))}"
+    return _subject(row, one_file)
+
+
 def _about(row: dict[str, Any], one_file: bool, default: str) -> str:
     """A problem as the line says it: what it is about, then the finding."""
     return f"{_subject(row, one_file)}: {row.get('detail') or default}"
@@ -803,6 +827,10 @@ def _look_words(row: dict[str, Any], one_file: bool) -> str:
     found no text in it"), stands as it is under the one file, and after the
     file's name among several."""
     detail = str(row.get("detail") or "it is not what was worked out")
+    if row.get("check") == DOUBLE_CHECK and detail.startswith("it "):
+        # 5b: a second model's "not passed", under its own name ("Sonnet 4.5
+        # found something that may be wrong"): never Iron Jarvis's finding.
+        return f"{friendly_model(row.get('by')) or 'a model'} {detail[3:]}"
     if row.get("check") not in CONTENT_CHECKS or not row.get("file"):
         return f"{_subject(row, one_file)}: {detail}"
     name = shown_name(row)
@@ -906,7 +934,7 @@ def has_content(rows: Iterable[dict[str, Any]]) -> bool:
 
 
 __all__ = [
-    "BY_RULE", "CHECKS", "CLAIMS", "CONTENT_CHECKS", "Check", "CheckRecord", "DOC_TEXT", "FAILED", "FILE_OPENS",
+    "AFRESH_CHECKS", "DOUBLE_CHECK", "LINE_DOUBLE", "BY_RULE", "CHECKS", "CLAIMS", "CONTENT_CHECKS", "Check", "CheckRecord", "DOC_TEXT", "FAILED", "FILE_OPENS",
     "KEEP_DAYS", "LINE_HEAD", "LINE_MAX", "LINE_NOT_CHECKED", "MAX_LISTED", "MAX_READ", "MAX_ROWS_PER_WRITE",
     "NOT_CHECKED", "PASSED", "PDF_PAGES", "REQUIRED_FILE", "RESULTS", "REVIEW", "SHEET_ERRORS", "SHEET_TOTALS",
     "FOLDER_MAX", "LINE_LOOK", "LOOK", "PROBLEM_CHECKS", "path_key", "quoted", "seen_text", "shown_name",

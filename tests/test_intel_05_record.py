@@ -182,7 +182,7 @@ def test_problem_is_an_allowlist_of_facts_and_every_other_check_that_did_not_pas
     package can write, whoever built it, is stored, read, shown and listed
     as "Worth a look"."""
     assert R.PROBLEM_CHECKS == {R.FILE_OPENS, R.SHEET_ERRORS, R.TESTS, R.REQUIRED_FILE}
-    assert R.PROBLEM_CHECKS < R.CHECKS and len(R.CHECKS) == 11
+    assert R.PROBLEM_CHECKS < R.CHECKS and len(R.CHECKS) == 12
     for check in sorted(R.CHECKS | {"a_check_nobody_knows"}):
         may = check in R.PROBLEM_CHECKS
         stored = R._clean(Check(check, R.FAILED, "it did not pass", file="a.xlsx", step="2"))
