@@ -971,6 +971,10 @@ def _target_words(journal_kind: str, pre_inline: Any) -> str:
     if k == "secret_restore":
         name = str(meta.get("secret") or "")
         return f"the key {name}" if name else "a key"
+    if k == "skill_restore":
+        # The intelligence plan, release 10: an improved skill, by its name.
+        name = str(meta.get("name") or "")
+        return f"the skill “{name}”" if name else "a skill"
     path = meta.get("path")
     if isinstance(path, str) and path:
         from pathlib import PurePath
@@ -989,6 +993,8 @@ def _where(session_id: str) -> str:
         return "in chat"
     if s == "settings":
         return "on a settings page"
+    if s == "improvements":
+        return "in Improvements"
     if s.startswith("build:"):
         return "in a coding session"
     return "in a task" if s else ""

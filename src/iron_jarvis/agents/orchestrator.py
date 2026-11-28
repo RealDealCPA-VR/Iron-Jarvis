@@ -3391,6 +3391,16 @@ class Orchestrator:
                             db.delete(row)
                 except Exception:  # noqa: BLE001 - best-effort; never block the delete
                     pass
+            # The intelligence plan, release 10: what a repeat took from this
+            # run (a waiting skill draft's record of its task and words) goes
+            # too, in this same transaction (19-a's rule for a deleted chat).
+            try:
+                from ..learning import repeats as _repeats
+
+                with db.begin_nested():
+                    _repeats.drop_run(db, session_id)
+            except Exception:  # noqa: BLE001 — a delete must always complete
+                log.warning("a deleted run's repeat records could not be dropped", exc_info=True)
             db.commit()
         # Release 8 of the intelligence plan: the long results kept whole for
         # this run are REMOVED with it, never moved to the trash (they are

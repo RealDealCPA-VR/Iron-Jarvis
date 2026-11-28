@@ -173,7 +173,7 @@ PROPOSERS: tuple[tuple[str, str], ...] = (
     # Next leaps 19-a: the same kind of task asked for in chat on three
     # different days (``learning/repeats``, no model) becomes one draft,
     # written on the model of the newest of those chats.
-    ("repeat", "a skill draft from the same kind of task asked for in chat on three different days"),
+    ("repeat", "a skill draft from the same kind of task asked for on three different days, in chat or as a task"),
     # Next leaps 19-b: when those three times fell on a rhythm (the same
     # weekday each week), an offer to run the task by itself on it, beside
     # the draft. No model, no schedule, no rehearsal: the owner's Accept
@@ -407,6 +407,19 @@ def _one_line(text: Any, cap: int = 80) -> str:
     return words if len(words) <= cap else words[: cap - 1].rstrip() + "…"
 
 
+def skill_why(cand: Any, task: str = "") -> str:
+    """Why the review wrote the run lane's waiting draft. The intelligence
+    plan, release 10: that lane now waits only with an IMPROVEMENT (a run
+    that used a skill failed or scored low: ``SkillLearningEngine.
+    _record_uses``); a new skill from one run, noted before, is ended."""
+    if str(getattr(cand, "kind", "") or "") == "refine":
+        name = _one_line(getattr(cand, "skill_name", "") or "")
+        return (f"A run that used the skill “{name}” did not go well, and an improvement to it was waiting."
+                if name else "A run that used a skill did not go well, and an improvement to it was waiting.")
+    return (f"A run did something worth keeping as a skill, and its draft was waiting: “{task}”."
+            if task else "A run did something worth keeping as a skill, and its draft was waiting.")
+
+
 def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
     """The :data:`SKILL_DRAFTS` oldest skill drafts still waiting to be
     written that the budget allows tonight (``budget.may_spend``), out of the
@@ -421,13 +434,14 @@ def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
     from ..scheduling.knobs import session_options
     from ..skills.learning_models import SkillCandidateRecord as C
 
-    from ..skills.learning import _not_chat
+    from ..skills.learning import _not_repeat
 
     out: list[dict[str, Any]] = []
     with session_scope(platform.engine) as db:
         # 19-a: a chat candidate is the ``repeat`` row's (its own model).
+        # Release 10: so is a repeat of runs.
         cands = list(db.exec(
-            select(C).where(C.status == "pending", _not_chat(C.source))
+            select(C).where(C.status == "pending", _not_repeat(C.evidence_json))
             .order_by(C.created_at.asc()).limit(SKILL_LOOK)  # type: ignore[attr-defined]
         ))
         for cand in cands:
@@ -444,8 +458,7 @@ def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
                 "key": f"skill:{cand.id}", "proposer": "skill", "target": cand.id,
                 "provider": str(getattr(sess, "provider", "") or ""), "model": str(getattr(sess, "model", "") or ""),
                 "account": account, "local_only": local,
-                "why": (f"A run did something worth keeping as a skill, and its draft was waiting: “{task}”."
-                        if task else "A run did something worth keeping as a skill, and its draft was waiting."),
+                "why": skill_why(cand, task),
             })
     allowed = [
         job for job in out
@@ -455,10 +468,12 @@ def _skill_jobs(platform: Any, night: str = "") -> list[dict[str, Any]]:
     return (allowed or out)[:SKILL_DRAFTS]
 
 
-def repeat_why(n: int) -> str:
-    """Why the review made a draft from repeated chat tasks (the item's own
-    evidence says the days and the tools)."""
-    return f"Written from the {int(n)} times you asked for the same kind of task in chat."
+def repeat_why(n: int, source: str = "chat") -> str:
+    """Why the review made a draft from repeated tasks (the item's own
+    evidence says the days and the tools). Release 10: a repeat of runs is
+    said without "in chat"."""
+    where = " in chat" if str(source or "chat") == "chat" else ""
+    return f"Written from the {int(n)} times you asked for the same kind of task{where}."
 
 
 def _repeat_jobs(platform: Any, end: datetime, night: str = "") -> list[dict[str, Any]]:
@@ -472,13 +487,15 @@ def _repeat_jobs(platform: Any, end: datetime, night: str = "") -> list[dict[str
     if getattr(platform, "skill_learning", None) is None:
         return []
     from ..learning import repeats
-    from ..skills.learning_models import SOURCE_CHAT, SkillCandidateRecord as C
+    from ..skills.learning_models import SkillCandidateRecord as C
 
     repeats.detect(platform, now=end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end)
     out: list[dict[str, Any]] = []
     with session_scope(platform.engine) as db:
+        # Release 10: chats and runs (a repeat carries its evidence).
         cands = list(db.exec(
-            select(C).where(C.status == "pending", C.source == SOURCE_CHAT)
+            select(C).where(C.status == "pending", C.evidence_json.is_not(None),  # type: ignore[union-attr]
+                            C.evidence_json != "")
             .order_by(C.created_at.asc()).limit(SKILL_LOOK)  # type: ignore[attr-defined]
         ))
     for cand in cands:
@@ -494,7 +511,7 @@ def _repeat_jobs(platform: Any, end: datetime, night: str = "") -> list[dict[str
             "account": str(newest.get("account") or ""),
             # Fail closed: a unit that does not say is Local only.
             "local_only": (not units) or any(bool(u.get("local_only", True)) for u in units),
-            "why": repeat_why(len(units)),
+            "why": repeat_why(len(units), str(cand.source or "chat")),
         })
     allowed = [
         job for job in out

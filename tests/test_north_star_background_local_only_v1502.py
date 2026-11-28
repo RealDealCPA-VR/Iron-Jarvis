@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 import pytest
 from sqlmodel import select
@@ -83,11 +83,15 @@ def app(tmp_path, monkeypatch):
     return create_app(str(tmp_path))
 
 
-def _finished_run(platform, *, local_only: bool, task: str) -> str:
+def _finished_run(platform, *, local_only: bool, task: str, weeks_back: int = 0) -> str:
+    from tests.test_next_leaps_19a_repeats import _monday
+
     sess = Session(
         task=task, status=SessionStatus.COMPLETED, summary=f"Reconciled. {SECRET}",
         options_json=json.dumps({"local_only": True}) if local_only else None,
+        provider="claude-cli", model="claude-sonnet-4-6",
     )
+    sess.created_at = _monday(weeks_back).astimezone(timezone.utc).replace(tzinfo=None)
     sid = sess.id
     with session_scope(platform.engine) as db:
         db.add(sess)
@@ -97,6 +101,21 @@ def _finished_run(platform, *, local_only: bool, task: str) -> str:
                                   output=SECRET))
         db.commit()
     return sid
+
+
+def _three(platform, *, local_only: bool, task: str) -> list[str]:
+    """The intelligence plan, release 10: a NEW skill comes only from the
+    same kind of task asked for on three days, found by the night review's
+    detector (and written only for the candidates it names)."""
+    from iron_jarvis.learning import repeats as R
+
+    ids = [_finished_run(platform, local_only=local_only, task=task, weeks_back=w) for w in range(3)]
+    assert R.detect(platform) == 1
+    return ids
+
+
+def _waiting(platform) -> list[str]:
+    return [c.id for c in _candidates(platform) if c.status == "pending"]
 
 
 def _candidates(platform):
@@ -111,12 +130,10 @@ def test_a_local_only_runs_skill_draft_is_never_written_by_a_cloud_model(app, mo
     cloud = _Cloud()
     _cloud_default(platform, monkeypatch, cloud)
     learning = platform.skill_learning
-    sid = _finished_run(platform, local_only=True,
-                        task="reconcile q3 vendor ledger balances against bank statements")
-    learning.observe_session(sid)
-    assert [c.session_id for c in _candidates(platform)] == [sid]
+    ids = _three(platform, local_only=True, task="reconcile q3 vendor ledger balances against bank statements")
+    assert [c.session_id for c in _candidates(platform)] == [ids[0]]
 
-    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete()))
+    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete(), ids=_waiting(platform)))
     assert cloud.prompts == [], "the run's task, summary and tool output went to the cloud"
     assert out["proposals"] == [] and out.get("held_local_only") == 1
     (cand,) = _candidates(platform)
@@ -128,11 +145,8 @@ def test_an_ordinary_runs_skill_draft_is_written_as_before(app, monkeypatch):
     cloud = _Cloud()
     _cloud_default(platform, monkeypatch, cloud)
     learning = platform.skill_learning
-    learning.observe_session(_finished_run(
-        platform, local_only=False,
-        task="reconcile q3 vendor ledger balances against bank statements",
-    ))
-    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete()))
+    _three(platform, local_only=False, task="reconcile q3 vendor ledger balances against bank statements")
+    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete(), ids=_waiting(platform)))
     assert len(cloud.prompts) == 1 and len(out["proposals"]) == 1
 
 
@@ -141,13 +155,9 @@ def test_a_held_local_only_candidate_does_not_starve_the_ones_after_it(app, monk
     cloud = _Cloud()
     _cloud_default(platform, monkeypatch, cloud)
     learning = platform.skill_learning
-    learning.observe_session(_finished_run(
-        platform, local_only=True, task="reconcile q3 vendor ledger balances against bank statements",
-    ))
-    learning.observe_session(_finished_run(
-        platform, local_only=False, task="draft quarterly payroll variance memo for partners",
-    ))
-    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete(), limit=1))
+    _three(platform, local_only=True, task="reconcile q3 vendor ledger balances against bank statements")
+    _three(platform, local_only=False, task="draft quarterly payroll variance memo for partners")
+    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete(), limit=1, ids=_waiting(platform)))
     assert len(cloud.prompts) == 1 and "payroll" in cloud.prompts[0]
     assert "reconcile" not in cloud.prompts[0] and out.get("held_local_only") == 1
 
@@ -174,10 +184,8 @@ def test_a_local_only_runs_draft_written_on_this_pc_waits_for_the_owner(app, mon
     monkeypatch.setattr(platform.config, "default_model", "")
     monkeypatch.setattr(platform.config, "skill_learning_auto_approve", True)
     learning = platform.skill_learning
-    learning.observe_session(_finished_run(
-        platform, local_only=True, task="reconcile q3 vendor ledger balances against bank statements",
-    ))
-    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete()))
+    _three(platform, local_only=True, task="reconcile q3 vendor ledger balances against bank statements")
+    out = asyncio.run(learning.distill_candidates(d._skill_distill_complete(), ids=_waiting(platform)))
     assert len(local.prompts) == 1 and len(out["proposals"]) == 1
     from iron_jarvis.skills.learning_models import SkillProposalRecord
 

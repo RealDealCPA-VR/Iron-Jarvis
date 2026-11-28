@@ -330,6 +330,17 @@ async def perform_undo(d, action_id: str, *, pressed: bool = False) -> dict[str,
             )
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=plain_failure("That change could not be undone.", exc))
+    elif journal_kind == "skill_restore":
+        # The intelligence plan, release 10: an improved skill approved in
+        # Improvements. Its earlier text is put back exactly; refused when
+        # the skill was changed again since. No tool permission is asked: an
+        # Undo puts back what the owner had.
+        from ...skills.learning import put_back
+
+        _words, _ok = await asyncio.to_thread(put_back, platform, desc)
+        if not _ok:
+            raise HTTPException(status_code=409, detail=_words)
+        result_output = _words
     elif journal_kind == "excel_live_restore":
         # v1.466.0: a change made in a workbook open in Excel. Like a record
         # restore, no tool permission is asked: an Undo puts back what the
