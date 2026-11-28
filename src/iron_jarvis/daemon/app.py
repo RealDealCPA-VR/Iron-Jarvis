@@ -2876,6 +2876,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                 await _second_checks.shutdown(timeout_s=5.0)
             except Exception:  # noqa: BLE001 — shutdown never raises
                 pass
+            # A coding reply's finish-check write the reply stopped waiting
+            # for is let finish (bounded): a failed test run is not lost.
+            try:
+                from ..checks import turn as _turn_checks
+
+                await asyncio.wait_for(_turn_checks.late_writes_done(), timeout=5.0)
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             # Idea 33-a: a recording still being heard stops with the daemon
             # (its worker's tree too); the next boot starts it again once.
             try:
