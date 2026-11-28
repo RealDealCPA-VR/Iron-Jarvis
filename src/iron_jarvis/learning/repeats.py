@@ -280,6 +280,14 @@ class Rhythm:
         return f"on the {ordinal(self.day)} of each month at {clock_words(self.hour)}"
 
     @property
+    def often_words(self) -> str:
+        """"every Monday", "around the 1st of each month" (the intelligence
+        plan, release 11: "You do this every Monday.")."""
+        if self.kind == "weekly":
+            return f"every {_DAY_NAMES[self.weekday]}"
+        return f"around the {ordinal(self.day)} of each month"
+
+    @property
     def on_days_words(self) -> str:
         """"on a Monday", "within 2 days of the 1st of the month"."""
         if self.kind == "weekly":
@@ -724,11 +732,8 @@ def _unit_of(request: str, start: float, end: float, timed: tuple[list[float], l
     """One piece of work [start, end) of a chat as a unit (its ledger rows
     by the chat's run rows in the window)."""
     lines = _task_lines(timed, start, end)
-    runs = [r for r in (ledger.runs.get(ref, []) if ledger is not None else [])
-            if start - SLACK_S <= r[0] < end - SLACK_S]
-    rows: list[Any] = []
-    for r in runs:
-        rows += ledger.tools.get(r[4], []) if ledger is not None else []
+    runs = _runs_in(ledger, ref, start, end)
+    rows = rows_of(ledger, ref, start, end)
     tools, kinds_in, kinds_out, paths = _tools_of(rows)
     for line in lines:
         if line.get("role") == "user" and not line.get("steer"):
@@ -747,6 +752,24 @@ def _unit_of(request: str, start: float, end: float, timed: tuple[list[float], l
         local_only=chat_local or any(_line_local(m) for m in lines),
         low_trust=any(_line_low(m) for m in lines), remote=remote, owner=owner,
     ), paths, lines)
+
+
+def _runs_in(ledger: "_Ledger | None", ref: str, start: float, end: float) -> list[tuple[float, float, str, str, str]]:
+    """The chat ``ref``'s turns that began inside the piece of work [start, end)."""
+    return [r for r in (ledger.runs.get(ref, []) if ledger is not None else [])
+            if start - SLACK_S <= r[0] < end - SLACK_S]
+
+
+def rows_of(ledger: "_Ledger | None", ref: str, start: float, end: float) -> list[Any]:
+    """The ledger rows of one piece of work [start, end) of the chat ``ref``:
+    the tool rows of its turns, oldest first (a rehearsal's rows are never
+    here, :func:`_read_ledger`). The intelligence plan, release 11 reads the
+    same rows a unit was made from, to see whether the steps were the same.
+    Pure on the already-read ``ledger``."""
+    rows: list[Any] = []
+    for r in _runs_in(ledger, ref, start, end):
+        rows += ledger.tools.get(r[4], []) if ledger is not None else []
+    return rows
 
 
 def _owner_key(cmap: Any, folder: str, words: str, paths: list[str]) -> str:
@@ -1053,6 +1076,14 @@ def reread(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[dict
     """Each task the evidence names, read AGAIN from its chat and the ledger:
     ``(unit, its lines)``; a task whose chat is gone or no longer holds it is
     left out. None when the chats cannot be read. BLOCKING; never raises."""
+    got = reread_with_rows(engine, evidence)
+    return None if got is None else [(u, lines) for u, lines, _rows in got]
+
+
+def reread_with_rows(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[dict], list[Any]]] | None":
+    """:func:`reread`, each task with its own ledger rows too
+    (:func:`rows_of`): the intelligence plan, release 11 reads the steps.
+    BLOCKING; never raises."""
     try:
         wanted = [u for u in (evidence.get("units") or []) if isinstance(u, dict)]
         tids = list(dict.fromkeys(str(u.get("thread") or "") for u in wanted if u.get("thread")))
@@ -1072,7 +1103,7 @@ def reread(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[dict
         oldest = min(starts) if starts else 0.0
         ledger = _read_ledger(engine, datetime.fromtimestamp(oldest, timezone.utc) - timedelta(seconds=60),
                               tids)
-        out: list[tuple[Unit, list[dict]]] = []
+        out: list[tuple[Unit, list[dict], list[Any]]] = []
         for want in wanted:
             row = rows.get(str(want.get("thread") or ""))
             if row is None:
@@ -1090,7 +1121,7 @@ def reread(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[dict
                 ledger=ledger,
             ):
                 if unit.start == start:
-                    out.append((unit, lines))
+                    out.append((unit, lines, rows_of(ledger, str(tid), unit.start, unit.end)))
                     break
         return out
     except Exception:  # noqa: BLE001 — unreadable: the caller holds the draft
@@ -1323,5 +1354,6 @@ __all__ = [
     "CHECKED_LINE", "Group", "MIN_DAYS", "MIN_UNITS", "RUN", "Rhythm", "THREADS_MAX", "UNKNOWN_OWNER", "Unit",
     "WINDOW_DAYS", "asked_for", "chat_units", "checked_line", "clock_words", "day_of", "days_words", "detect",
     "drop_run", "drop_thread", "eligible", "evidence_of", "group_of", "groups", "load_evidence", "matches",
-    "ordinal", "reread", "reread_runs", "rhythm", "run_units", "times_line", "tools_line", "units",
+    "ordinal", "reread", "reread_runs", "reread_with_rows", "rhythm", "rows_of", "run_units", "times_line",
+    "tools_line", "units",
 ]

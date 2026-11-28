@@ -354,6 +354,8 @@ def offer_item(view: dict[str, Any]) -> dict[str, Any]:
     schedule would use, whether the skill is one yet."""
     from ..learning import repeats
 
+    if view.get("kind") == "steps":
+        return steps_offer_item(view)
     oid = str(view.get("id") or "")
     when = str(view.get("when") or "")
     skill = str(view.get("skill_name") or "")
@@ -388,6 +390,63 @@ def offer_item(view: dict[str, Any]) -> dict[str, Any]:
                 "note": "Runs it once now on the same model, changing nothing: what it would do is listed here.",
             },
             "rehearsal_id": str(view.get("rehearsal_id") or ""),
+        },
+    )
+
+
+#: The intelligence plan, release 11: what a fixed-steps offer says it is.
+STEPS_SAME = "It runs the same way each time, uses no model"
+STEPS_OFFLINE = ", and works offline"
+
+
+def steps_offer_title(often: str) -> str:
+    """"You do this every Monday. Run it by itself?" ("" rhythm: the
+    question alone)."""
+    return f"You do this {often}. Run it by itself?" if often else "Run it by itself?"
+
+
+def steps_offer_why(offline: bool) -> str:
+    """"It runs the same way each time, uses no model, and works offline."
+    The last part only when every step works with no network
+    (``scheduling/fixed_steps.folder_is_local``)."""
+    return STEPS_SAME + (STEPS_OFFLINE if offline else "") + "."
+
+
+def steps_offer_item(view: dict[str, Any]) -> dict[str, Any]:
+    """Release 11: the offer to run a job done the same way each time as
+    FIXED STEPS (``scheduling/offers`` kind ``steps``). Every line is read
+    from the record: the times and tools from the evidence, the one thing
+    that changed as one question ("Which file?"), the steps themselves.
+    Rehearse runs 06-b's rehearsal of these very steps; Accept is ONE press,
+    and only after a rehearsal that changed nothing and needs no answer
+    (``blocked`` until then, in words). Decline is final."""
+    from ..learning import repeats
+
+    oid = str(view.get("id") or "")
+    when = str(view.get("when") or "")
+    evidence = view.get("evidence") if isinstance(view.get("evidence"), dict) else {}
+    lines = [repeats.times_line(evidence), repeats.tools_line(evidence), str(view.get("question") or "")]
+    if not view.get("rehearsal_id"):
+        lines.append(OFFER_NOT_REHEARSED)
+    note = (f"Accepting saves these steps as a workflow and runs it by itself {when}, the same way each time, "
+            "with no model. Anything a step would change is listed by the rehearsal first. Schedules can "
+            "pause or remove it.")
+    path = f"/schedules/offers/{_seg(oid)}"
+    return item(
+        KIND_SCHEDULE_OFFER, oid, title=steps_offer_title(str(view.get("often") or "")),
+        about=str(view.get("skill_name") or ""), why=steps_offer_why(bool(view.get("offline"))),
+        evidence=lines, created_at=view.get("created_at"),
+        detail=detail_text(view.get("steps"), "What it does each time"),
+        accept=action("Accept", f"{path}/accept", note=note, blocked=str(view.get("rehearsal_problem") or "")),
+        decline=action("Decline", f"{path}/decline", note=OFFER_DECLINE_NOTE),
+        extra={
+            "rehearse": {
+                "label": OFFER_REHEARSE, "path": f"{path}/rehearse",
+                "note": "Runs these steps once now, changing nothing: what they would do is listed here.",
+            },
+            "rehearsal_id": str(view.get("rehearsal_id") or ""),
+            # The page lets Accept be pressed once this rehearsal is ready.
+            "after_rehearsal": True,
         },
     )
 

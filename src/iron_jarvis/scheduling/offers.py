@@ -45,8 +45,26 @@ THE RULES (each pinned in ``tests/test_next_leaps_19b_offer.py``):
   the rules ``POST /schedules`` applies.
 
 ``kind`` is ``task`` (a schedule that asks a model to do the task again each
-time). The intelligence plan's release 11 adds its stronger form beside it
-(fixed steps with no model, when the steps were the same each time).
+time) or, the intelligence plan's release 11, ``steps``: when the record
+shows the times were done in the SAME STEPS (``scheduling/fixed_steps``),
+the offer is to save those steps as a workflow of FIXED STEPS (no model)
+with the one value that changed each time as a named input, and run it on
+the rhythm. Its rules, on top of the ones above:
+
+* ONE OFFER PER JOB: a ``steps`` offer REPLACES the ``task`` offer for that
+  draft (never both); Decline is final for both kinds, and a job whose offer
+  was accepted is not offered again.
+* ONE YES, AFTER THE REHEARSAL: Accept is refused until 06-b's rehearsal of
+  these very steps (Rehearse, ``tools/rehearsal_runs.start_offer``) has
+  finished with nothing refused, nothing that would ask and no question it
+  stopped at (:func:`rehearsal_problem`). Accept is then ONE press.
+* NO MODEL, NO ACCOUNT: the saved steps ask no model, so the schedule names
+  no model and no account, and Local only has nothing to keep home.
+* THE SAVE CHECKS: Accept saves the workflow through the one check every
+  door that saves a workflow applies (``workflows/checks.step_problem``) and
+  the leak rule again (``fixed_steps.leak_problem``), and the schedule
+  through ``scheduling/checks.check_payload`` (its inputs rule too).
+* A DECLINED offer keeps none of the steps (they hold file names).
 
 Every function here is BLOCKING (SQLite): async callers hop it off the loop.
 """
@@ -72,6 +90,8 @@ DECLINED = "declined"
 STATUSES = (WAITING, ACCEPTED, DECLINED)
 #: 19-b: a schedule that asks a model to do the task each time.
 KIND_TASK = "task"
+#: Release 11: fixed steps (a workflow of tool steps, no model) on a schedule.
+KIND_STEPS = "steps"
 
 #: Chat skill drafts looked at in one pass, and offers made at most.
 LOOK = 20
@@ -132,6 +152,14 @@ class ScheduleOfferRecord(SQLModel, table=True):
     rehearsal_id: str = ""
     #: The schedule Accept made.
     schedule_name: str = ""
+    #: Release 11 (``kind`` ``steps``): the fixed steps (``fixed_steps.Plan``,
+    #: ``step_to_dict`` shape, paths relative to ``folder``), the inputs'
+    #: rules, whether they work offline, and the workflow Accept saved.
+    #: Additive; "" / False on every 19-b offer.
+    steps_json: str = ""
+    inputs_json: str = ""
+    offline: bool = False
+    workflow_name: str = ""
     status: str = Field(default=WAITING, index=True)
     created_at: datetime = Field(default_factory=utcnow)
     decided_at: datetime | None = None
@@ -239,6 +267,53 @@ def _declined_like(engine: Any, words: str) -> bool:
     return any(similarity(mine, frozenset(w.split())) >= SAME_TASK for w in said if w)
 
 
+def _accepted_like(engine: Any, words: str) -> bool:
+    """The owner already said yes to running a request like this one by
+    itself (release 11: a fixed-steps schedule's payload holds no words, so
+    the offer's own record answers)."""
+    from ..templates import SAME_TASK, similarity, task_tokens
+
+    mine = task_tokens(words)
+    with session_scope(engine) as db:
+        said = [str(w or "") for w in db.exec(
+            select(ScheduleOfferRecord.words).where(ScheduleOfferRecord.status == ACCEPTED)
+        )]
+    return any(similarity(mine, task_tokens(w)) >= SAME_TASK for w in said if w)
+
+
+def _fixed_plan(platform: Any, found: list) -> "tuple[Any, str]":
+    """Release 11: the fixed steps these tasks make (``fixed_steps.plan``),
+    or ``(None, why not)``. Each task's owner is read through the client
+    wall (``workmap/clients/wall``: the folder, the words and the files of
+    its own rows); a map or a folder that cannot be read makes none (fail
+    closed). BLOCKING; never raises."""
+    from ..learning import repeats as R
+    from . import fixed_steps as F
+
+    try:
+        from ..workmap.clients import store as client_store
+        from ..workmap.clients.wall import thread_owners
+
+        engine = platform.engine
+        cmap = client_store.load_map(engine)
+        ids = list(dict.fromkeys(u.ref for u, _lines, _rows in found))
+        folders = thread_owners(engine, cmap, ids)
+        if folders is None:
+            return None, "the chats' folders could not be read"
+        seen = {str(folders.get(u.ref, "") or "") for u, _lines, _rows in found}
+        if len(seen) != 1:
+            return None, "the chats did not all work in one folder"
+        folder = seen.pop()
+        owners = [R._owner_key(cmap, folder, u.words, R._tools_of(rows)[3]) for u, _lines, rows in found]
+        plan = F.plan(platform, [(u.start, rows) for u, _lines, rows in found], folder, owners=owners)
+        return plan, ""
+    except F.NotFixed as exc:
+        return None, str(exc)
+    except Exception:  # noqa: BLE001 - unsure: no fixed steps, 19-b's offer
+        log.debug("schedule offers: the steps could not be read", exc_info=True)
+        return None, "the steps could not be read"
+
+
 def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOfferRecord | None, str]":
     """The offer a chat skill draft ``prop`` would get, and why not when it
     gets none (no row is written here). The draft keeps none of the owner's
@@ -252,12 +327,12 @@ def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOff
     got = R.load_evidence(getattr(prop, "evidence_json", ""))
     if not [u for u in got.get("units") or [] if isinstance(u, dict)]:
         return None, "its record holds no tasks"
-    found = R.reread(engine, got)
+    found = R.reread_with_rows(engine, got)
     if found is None:
         raise RuntimeError("the chats of a skill draft could not be read")
     # A deleted chat's task is not read back; fewer than three days left
     # fall on no rhythm below (``rhythm`` needs three different days).
-    units = sorted((u for u, _lines in found), key=lambda u: -u.start)
+    units = sorted((u for u, _lines, _rows in found), key=lambda u: -u.start)
     if any(u.low_trust or u.remote for u in units):
         return None, "one of its tasks read something from outside"
     rh = R.rhythm([u.start for u in units], tz=tz)
@@ -268,22 +343,38 @@ def offer_for(platform: Any, prop: Any, *, tz: Any = None) -> "tuple[ScheduleOff
     if not words:
         return None, "the request's words were not kept"
     provider, model = newest.provider.strip(), newest.model.strip()
-    if not provider or not model:
-        # Never the vendor's Default in place of the model the chats used.
-        return None, "the model the chats used is not on record"
     # A task in a Local only chat, or one a model on the owner's own PC or
     # network answered, keeps the schedule's runs home (19-a's rule).
     local_only = any(R._home_if_here(platform, u).local_only for u in units)
-    if local_only and not _model_stays_home(platform, provider, model):
-        return None, LOCAL_ONLY_OFF_NETWORK
     if _scheduled_already(engine, words):
         return None, "a schedule already does this"
     if _declined_like(engine, words):
         return None, "you declined to run this by itself before"
+    if _accepted_like(engine, words):
+        return None, "you already said yes to running this by itself"
+    name = str(getattr(prop, "skill_name", "") or "").strip()
+    # Release 11: the same steps each time make FIXED steps (no model, no
+    # account); anything else is 19-b's offer, as before.
+    fixed, why_not = _fixed_plan(platform, found)
+    if fixed is not None:
+        return ScheduleOfferRecord(
+            title=name[:NAME_MAX] or "repeated-task", words=words, cadence=rh.cron,
+            rhythm_json=json.dumps({"kind": rh.kind, "hour": rh.hour, "weekday": rh.weekday, "day": rh.day}),
+            folder=fixed.folder, skill_name=name, proposal_id=str(prop.id),
+            evidence_json=json.dumps(R.evidence_of(R.group_of(units), words=False)),
+            provider=provider, model=model, local_only=local_only, chat_thread_id=newest.ref,
+            kind=KIND_STEPS, steps_json=json.dumps(fixed.steps), inputs_json=json.dumps(fixed.inputs),
+            offline=bool(fixed.offline),
+        ), ""
+    log.debug("schedule offers: no fixed steps for %s: %s", getattr(prop, "id", ""), why_not)
+    if not provider or not model:
+        # Never the vendor's Default in place of the model the chats used.
+        return None, "the model the chats used is not on record"
+    if local_only and not _model_stays_home(platform, provider, model):
+        return None, LOCAL_ONLY_OFF_NETWORK
     folders = _chat_folders(engine, list(dict.fromkeys(u.ref for u in units)))
     seen = {folders.get(u.ref, "") for u in units}
     folder = seen.pop() if len(seen) == 1 else ""
-    name = str(getattr(prop, "skill_name", "") or "").strip()
     return ScheduleOfferRecord(
         title=name[:NAME_MAX] or "repeated-task", words=words, cadence=rh.cron,
         rhythm_json=json.dumps({"kind": rh.kind, "hour": rh.hour, "weekday": rh.weekday, "day": rh.day}),
@@ -496,6 +587,8 @@ def accept(platform: Any, offer_id: str) -> dict[str, Any]:
     sched = getattr(platform, "scheduler", None)
     if sched is None:
         raise OfferRefused("Schedules are not running in this copy of Iron Jarvis.", 409)
+    if row.kind == KIND_STEPS:
+        return accept_steps(platform, row, rh)
     name = schedule_name(platform, row)
     payload = payload_of(platform, row)
     check(platform, row, name, payload)
@@ -519,6 +612,158 @@ def accept(platform: Any, offer_id: str) -> dict[str, Any]:
             db.commit()
     return {"ok": True, "schedule": rec.name, "note": accepted_note(rec.name, rh.words, "skills" in payload,
                                                                     row.skill_name)}
+
+
+# --------------------------------------------------------------------------- #
+# release 11: fixed steps
+# --------------------------------------------------------------------------- #
+NOT_REHEARSED_STEPS = "Rehearse it first, so you see what it does before it runs by itself."
+
+
+def steps_of(row: Any) -> list[dict[str, Any]]:
+    try:
+        got = json.loads(getattr(row, "steps_json", "") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [s for s in got if isinstance(s, dict)] if isinstance(got, list) else []
+
+
+def inputs_of(row: Any) -> dict[str, Any]:
+    try:
+        got = json.loads(getattr(row, "inputs_json", "") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def workflow_def(row: Any) -> Any:
+    """The workflow Accept would save, NOT saved: what Rehearse runs through
+    the workflow engine's own door."""
+    from ..workflows.engine import load_workflow
+
+    return load_workflow({"name": str(row.title or "repeated-task"), "steps": steps_of(row),
+                          "folder": str(row.folder or "")})
+
+
+def rehearsal_problem(platform: Any, row: Any) -> str:
+    """Why Accept may not save these steps yet, or "": their newest
+    rehearsal (06-b, of these very steps) must have finished, with nothing
+    refused, nothing that would ask and no question it stopped at.
+    BLOCKING."""
+    rid = str(getattr(row, "rehearsal_id", "") or "")
+    if not rid or rid.startswith("claim:"):
+        return NOT_REHEARSED_STEPS
+    try:
+        from ..tools.rehearsal_runs import report
+
+        view = report(platform, rid)
+    except Exception:  # noqa: BLE001 - unreadable: not yet
+        return NOT_REHEARSED_STEPS
+    if view.get("status") == "running":
+        return "Its rehearsal is still running. Accept is ready when it has finished."
+    if view.get("status") != "ready":
+        return "Its rehearsal did not finish, so it cannot run by itself yet. Rehearse it again."
+    if view.get("refused") or view.get("stopped_at") or any(
+        str(w.get("would") or "run") != "run" for w in view.get("would") or []
+    ):
+        return ("Its rehearsal found a step that would ask you or be refused, so it cannot run by itself. "
+                "Nothing was made.")
+    return ""
+
+
+def _workflow_name(platform: Any, row: Any) -> str:
+    """A name no saved workflow has: the offer's title, then "-2", "-3", ..."""
+    import re
+
+    from ..workflows.store import WorkflowStore
+
+    store = WorkflowStore(platform.engine)
+    base = re.sub(r"[^A-Za-z0-9 _.-]+", "", str(row.title or "")).strip()[:NAME_MAX] or "repeated-task"
+    if store.get(base) is None:
+        return base
+    for n in range(2, 100):
+        tail = f"-{n}"
+        name = base[: NAME_MAX - len(tail)] + tail
+        if store.get(name) is None:
+            return name
+    return f"{base[: NAME_MAX - 13]}-{new_id('w')[-12:]}"
+
+
+def accept_steps(platform: Any, row: ScheduleOfferRecord, rh: Any) -> dict[str, Any]:
+    """Accept a fixed-steps offer (release 11): ONE press, after a clean
+    rehearsal. The steps are saved as a workflow (the one save check, the
+    leak rule again, its folder), and a schedule runs it on the rhythm with
+    its inputs filled by code at each fire. RAISES :class:`OfferRefused`
+    (the offer stays waiting, nothing kept) when it cannot be. BLOCKING."""
+    import os
+
+    from ..workflows.checks import step_problem
+    from ..workflows.store import WorkflowStore
+    from . import fixed_steps as F
+    from .checks import ScheduleRefused, check_payload
+
+    engine = platform.engine
+    sched = platform.scheduler
+    why = rehearsal_problem(platform, row)
+    if why:
+        raise OfferRefused(why, 409)
+    steps = steps_of(row)
+    inputs = inputs_of(row)
+    if not steps or not row.folder or not os.path.isdir(row.folder):
+        raise OfferRefused("The folder these steps work in is not there any more, so nothing was made.", 409)
+    problem = (step_problem(steps, platform) or F.leak_problem(engine, steps) or F.asks_first(platform, steps)
+               or F.check_inputs(inputs))
+    if problem:
+        raise OfferRefused(f"These steps cannot be saved: {problem}. Nothing was made.", 409)
+    wf_name = _workflow_name(platform, row)
+    name = schedule_name(platform, row)
+    payload: dict[str, Any] = {"workflow": wf_name}
+    if inputs:
+        payload["inputs"] = inputs
+    try:
+        check_payload(platform, name, "workflow", payload)
+    except ScheduleRefused as exc:
+        raise OfferRefused(exc.detail, exc.status_code) from None
+    if not _claim(engine, row.id, ACCEPTED):
+        raise OfferRefused("This offer was already answered.", 409)
+    store = WorkflowStore(engine)
+    saved = False
+    try:
+        store.save(wf_name, steps, description=STEPS_DESCRIPTION, folder=row.folder)
+        saved = True
+        chat = row.chat_thread_id if chat_exists(engine, row.chat_thread_id) else ""
+        rec = sched.add_task(name, row.cadence, kind="workflow", payload=payload, enabled=True,
+                             chat_thread_id=chat)
+    except Exception as exc:  # noqa: BLE001 - the offer waits again, and says why
+        if saved:
+            try:
+                store.remove(wf_name)
+            except Exception:  # noqa: BLE001
+                log.warning("schedule offers: the workflow %r could not be taken back", wf_name, exc_info=True)
+        _reopen(engine, row.id)
+        from ..core.failures import plain_failure
+
+        raise OfferRefused(plain_failure("That schedule could not be saved.", exc), 400) from None
+    with session_scope(engine) as db:
+        got = db.get(ScheduleOfferRecord, row.id)
+        if got is not None:
+            got.schedule_name = rec.name
+            got.workflow_name = wf_name
+            db.add(got)
+            db.commit()
+    return {"ok": True, "schedule": rec.name, "workflow": wf_name,
+            "note": steps_note(wf_name, rec.name, rh.words)}
+
+
+#: What a workflow saved from a job done by hand says on the Workflows page.
+STEPS_DESCRIPTION = "Saved from a job you did the same way each time. It runs the same way each time and uses no model."
+
+
+def steps_note(workflow: str, schedule: str, when: str) -> str:
+    """What the page says after Accept on a fixed-steps offer."""
+    return (f"Saved the steps as the workflow “{workflow}”, and made the schedule “{schedule}”: it runs "
+            f"by itself {when}, the same way each time, with no model. Workflows can change the steps "
+            "or put an earlier version back, and Schedules can pause or remove it.")
 
 
 def accepted_note(name: str, when: str, with_skill: bool, skill: str) -> str:
@@ -549,7 +794,9 @@ def decline(engine: Any, offer_id: str) -> dict[str, Any]:
             update(ScheduleOfferRecord)  # type: ignore[call-overload]
             .where(ScheduleOfferRecord.id == offer_id, ScheduleOfferRecord.status == WAITING)
             .values(status=DECLINED, decided_at=utcnow(), words="",
-                    match_tokens=" ".join(sorted(task_tokens(row.words))))
+                    match_tokens=" ".join(sorted(task_tokens(row.words))),
+                    # Release 11: the steps hold file names; none is kept.
+                    steps_json="", inputs_json="")
         )
         db.commit()
     if not getattr(res, "rowcount", 0):
@@ -585,6 +832,25 @@ def offer_view(platform: Any, row: ScheduleOfferRecord) -> dict[str, Any]:
         "evidence": evidence(row), "newest_day": newest_day(row), "account": row.account,
         "reports_to_chat": chat_exists(platform.engine, row.chat_thread_id),
         "rehearsal_id": "" if row.rehearsal_id.startswith("claim:") else row.rehearsal_id, "created_at": row.created_at, "local_only": row.local_only,
+        # Release 11: fixed steps.
+        "kind": row.kind or KIND_TASK,
+        **(_steps_view(platform, row, rh) if row.kind == KIND_STEPS else {}),
+    }
+
+
+def _steps_view(platform: Any, row: ScheduleOfferRecord, rh: Any) -> dict[str, Any]:
+    """Release 11: what Improvements shows of a fixed-steps offer, read from
+    the record now. BLOCKING."""
+    from . import fixed_steps as F
+
+    steps = steps_of(row)
+    inputs = inputs_of(row)
+    return {
+        "often": rh.often_words if rh is not None else "",
+        "offline": bool(row.offline),
+        "question": F.input_words(inputs),
+        "steps": F.step_lines(steps, inputs),
+        "rehearsal_problem": rehearsal_problem(platform, row),
     }
 
 
@@ -654,7 +920,9 @@ def set_rehearsal(engine: Any, offer_id: str, rehearsal_id: str) -> None:
 
 
 __all__ = [
-    "ACCEPTED", "DECLINED", "DECLINED_NOTE", "KIND_TASK", "OFFERS_MAX", "OfferRefused", "ScheduleOfferRecord",
+    "ACCEPTED", "DECLINED", "DECLINED_NOTE", "KIND_STEPS", "KIND_TASK", "NOT_REHEARSED_STEPS", "OFFERS_MAX",
+    "STEPS_DESCRIPTION", "accept_steps", "inputs_of", "rehearsal_problem", "steps_note", "steps_of",
+    "workflow_def", "OfferRefused", "ScheduleOfferRecord",
     "WAITING", "accept", "accepted_note", "check", "decline", "drop_thread", "evidence", "get",
     "CLAIM_STALE_S", "LOCAL_ONLY_OFF_NETWORK", "claim_is_live", "claim_rehearsal", "clear_claims", "make_offers", "newest_day", "offer_for", "payload_of",
     "rhythm_of", "runs_home", "schedule_name", "set_rehearsal",

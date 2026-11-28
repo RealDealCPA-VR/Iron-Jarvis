@@ -97,6 +97,17 @@ def check_payload(platform: Any, name: str, kind: str, payload: dict, *, from_us
             why = _choice.agent_conflict(platform, raw_account, _rec, who="schedule")
         if why:
             raise ScheduleRefused(status_code=409, detail=why)
+    # The intelligence plan, release 11: a workflow schedule's inputs, each
+    # a plain value or a rule code fills at the fire (the newest file of a
+    # kind in the workflow's folder). Refused NOW in words, never at 3am.
+    if "inputs" in payload:
+        from .fixed_steps import check_inputs
+
+        problem = check_inputs(payload.get("inputs")) if kind == "workflow" else (
+            "inputs apply to workflow schedules only"
+        )
+        if problem:
+            raise ScheduleRefused(status_code=422, detail=problem)
     wanted = payload.get("notify_channels")
     if wanted:
         known = set(platform.notifier.channels())

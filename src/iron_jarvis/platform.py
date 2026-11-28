@@ -3055,6 +3055,9 @@ def build_platform(
                 # A scheduled SAVED workflow keeps its project pin — the
                 # whole point of pinning is recurring in-project work.
                 "project_id": store.get_project_id(rec.name),
+                # Release 11: and its own folder, and the schedule's inputs.
+                "folder": rec.folder or "",
+                **({"inputs": payload["inputs"]} if isinstance(payload.get("inputs"), dict) else {}),
             }
         # Never silently "complete" a zero-step workflow — that masked every
         # mis-configured schedule as a success.
@@ -3073,10 +3076,16 @@ def build_platform(
             wf = load_workflow(payload)
         except UnknownStepKind as exc:
             raise _ScheduleRefused(str(exc)) from None
+        # The intelligence plan, release 11: a schedule may name the run's
+        # INPUTS (``payload.inputs``): a plain value, or a rule filled by code
+        # at each fire (the newest file of a kind in the workflow's folder,
+        # ``scheduling/fixed_steps.resolve_inputs``), never by a model.
+        wanted_inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else None
         # The SHARED orchestrator (attached in v1.119.0), so the cancel route
         # can find and stop a scheduled run's step sessions — a throwaway
         # orchestrator made cancels silently ineffective.
-        run = WorkflowEngine(platform, platform.orchestrator).run(wf)
+        wf_engine = WorkflowEngine(platform, platform.orchestrator)
+        run = wf_engine.run(wf) if not wanted_inputs else None
 
         async def _refused_by_name():
             # Idea 09 (09-a review): a block that would run wrongly is refused
@@ -3085,7 +3094,16 @@ def build_platform(
             from .workflows.validate import BlockRefused
 
             try:
-                return (await run) if inspect.isawaitable(run) else run
+                if run is not None:
+                    return (await run) if inspect.isawaitable(run) else run
+                from .scheduling import fixed_steps as _fixed
+
+                try:
+                    values = await asyncio.to_thread(_fixed.resolve_inputs, wanted_inputs, wf.folder)
+                except _fixed.InputMissing as exc:
+                    raise _ScheduleRefused(str(exc)) from None
+                record = await asyncio.to_thread(wf_engine.create_record, wf, values)
+                return await wf_engine.run_record(record, wf, inputs=values)
             except BlockRefused as exc:
                 raise _ScheduleRefused(str(exc)) from None
 

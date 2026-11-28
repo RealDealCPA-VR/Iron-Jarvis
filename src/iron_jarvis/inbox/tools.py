@@ -402,11 +402,26 @@ _MISSING_WORDS = re.compile(
 )
 
 
+#: The intelligence plan, release 11: "Do this by itself from now on", "run
+#: it on its own from now on", "can you do this by yourself every week?": the
+#: offer Iron Jarvis made to run a job by itself (19-b's, or its fixed steps).
+#: The list, the answer and the rehearsal (Accept on fixed steps waits for one).
+_BY_ITSELF_WORDS = re.compile(
+    r"\b(?:do|run|handle)\s+(?:this|that|it)\b[^.!?\n]{0,24}?\b(?:by\s+(?:itself|yourself)|on\s+(?:its|your)\s+own)\b",
+    re.IGNORECASE,
+)
+REHEARSE = "rehearse"
+
+
 def suggestion_tools_for(text: str) -> list[str]:
     """The suggestion tools a chat message asks for (linear: each pattern's
     gaps are bounded). A question keeps the readers only."""
     t = str(text or "")[:4000]
     out: list[str] = []
+    if _BY_ITSELF_WORDS.search(t):
+        # Release 11: the waiting offer to run it by itself, its rehearsal
+        # (it changes nothing) and its answer (asked on a card).
+        out += [LIST, REHEARSE, ANSWER]
     if _SUGGESTION_WORDS.search(t):
         out += [LIST, ANSWER]
     if _MISSING_WORDS.search(t) and LIST not in out:

@@ -297,6 +297,8 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
         before = await asyncio.to_thread(_store(platform).get, row.rehearsal_id)
         if before is not None and before.status == "running":
             return await asyncio.to_thread(report, platform, before.id)
+    if row.kind == O.KIND_STEPS:
+        return await _start_offer_steps(platform, row)
     rehearse = getattr(platform, "rehearse_scheduled", None)
     if rehearse is None:
         raise RehearsalRefused("Schedules are not running in this copy of Iron Jarvis.", status=409)
@@ -332,6 +334,61 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
         )
     await asyncio.to_thread(_record_webhooks, platform, rec.id)
     _DRIVERS[rec.id] = asyncio.ensure_future(_drive_schedule(platform, store, rec.id, task))
+    return await asyncio.to_thread(report, platform, rec.id)
+
+
+async def _start_offer_steps(platform: Any, row: Any) -> dict[str, Any]:
+    """The intelligence plan, release 11: rehearse the FIXED STEPS an offer
+    would save, before they exist, through the workflow engine's own door
+    (06-b): the workflow Accept would save (``scheduling/offers.
+    workflow_def``, not saved) runs with this rehearsal on its record, its
+    input filled by code exactly as each fire fills it, so every step that
+    would change something is held and listed. No model: the steps are tool
+    steps. One rehearsal at a time (the offer's claim, as a schedule
+    offer's). The offer keeps its id: Accept reads its report."""
+    from ..scheduling import fixed_steps as F
+    from ..scheduling import offers as O
+    from ..workflows.engine import STARTED_BY_PERSON, WorkflowEngine
+
+    claim = await asyncio.to_thread(O.claim_rehearsal, platform.engine, row.id, row.rehearsal_id)
+    if not claim:
+        now = await asyncio.to_thread(O.get, platform.engine, row.id)
+        rid = getattr(now, "rehearsal_id", "") or ""
+        if rid and not rid.startswith("claim:"):
+            return await asyncio.to_thread(report, platform, rid)
+        raise RehearsalRefused("A rehearsal of it is starting. Its report will show here.", status=409)
+    store = _store(platform)
+    try:
+        rec = await asyncio.to_thread(
+            lambda: store.create(kind="offer", subject_id=row.id, name=str(row.title or "repeated-task"), sample={})
+        )
+    except BaseException:
+        await asyncio.to_thread(O.set_rehearsal, platform.engine, row.id, row.rehearsal_id)
+        raise
+    await asyncio.to_thread(O.set_rehearsal, platform.engine, row.id, rec.id)
+
+    def _failed(words: str) -> None:
+        store.update(rec.id, status="failed", finished_at=utcnow(), summary={"error": words})
+
+    wf = await asyncio.to_thread(O.workflow_def, row)
+    try:
+        values = await asyncio.to_thread(F.resolve_inputs, O.inputs_of(row), wf.folder)
+    except F.InputMissing as exc:
+        await asyncio.to_thread(_failed, _sentence_case(str(exc)))
+        return await asyncio.to_thread(report, platform, rec.id)
+    engine = WorkflowEngine(platform, getattr(platform, "orchestrator", None))
+    try:
+        run = await asyncio.to_thread(
+            lambda: engine.create_record(wf, values or None, started_by=STARTED_BY_PERSON, rehearsal_id=rec.id)
+        )
+    except ValueError as exc:
+        await asyncio.to_thread(_failed, " ".join(str(exc).split()) or "These steps cannot run.")
+        return await asyncio.to_thread(report, platform, rec.id)
+    await asyncio.to_thread(lambda: store.update(rec.id, run_id=run.id))
+    await asyncio.to_thread(_record_webhooks, platform, rec.id, _WORKFLOW_FINISH_EVENTS, "workflow")
+    _DRIVERS[rec.id] = asyncio.ensure_future(
+        _drive_workflow(platform, store, rec.id, engine, run, wf, inputs=values or None)
+    )
     return await asyncio.to_thread(report, platform, rec.id)
 
 
@@ -439,13 +496,18 @@ def _end_workflow_run(platform: Any, run_id: str) -> None:
 
 
 async def _drive_workflow(
-    platform: Any, store: RehearsalStore, rid: str, engine: Any, run: Any, wf: Any
+    platform: Any, store: RehearsalStore, rid: str, engine: Any, run: Any, wf: Any,
+    inputs: "dict[str, str] | None" = None,
 ) -> None:
     """The workflow's rehearsal, run in the background. Its run record
     settles the report (:func:`_settle_workflow`). A Stop cancels this task;
-    the run then ends Stopped."""
+    the run then ends Stopped. ``inputs`` (release 11): the run's inputs, as
+    its record was made with them."""
     try:
-        await engine.run_record(run, wf)
+        if inputs:
+            await engine.run_record(run, wf, inputs=inputs)
+        else:
+            await engine.run_record(run, wf)
     except asyncio.CancelledError:
         await asyncio.shield(asyncio.to_thread(_end_workflow_run, platform, run.id))
         await asyncio.shield(asyncio.to_thread(
@@ -738,7 +800,8 @@ def _settle(platform: Any, store: RehearsalStore, rec: RehearsalRecord) -> Rehea
     ``failed`` (one failed: its own words) or ``stopped``. BLOCKING."""
     if rec.status != "running":
         return rec
-    if rec.subject_kind == "workflow":
+    if rec.subject_kind == "workflow" or (rec.subject_kind == "offer" and rec.run_id):
+        # Release 11: an offer's fixed steps are rehearsed as a workflow.
         return _settle_workflow(platform, store, rec)
     states = _session_states(platform, rec)
     if not states:
@@ -839,7 +902,8 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     sessions = sessions_of(platform, rec)
     # Leap 06-b: a workflow's tool steps, notify and ask are recorded under
     # its RUN's id (their ``ToolContext.session_id``).
-    run_ids = [rec.run_id] if rec.subject_kind == "workflow" and rec.run_id else []
+    # Release 11: so are an offer's fixed steps.
+    run_ids = [rec.run_id] if rec.subject_kind in ("workflow", "offer") and rec.run_id else []
     with session_scope(platform.engine) as db:
         rows = list(db.exec(
             select(ToolInvocation)
@@ -940,7 +1004,7 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         # to review"): only for a finished rehearsal that started none. A
         # workflow's: the steps that failed and were gone past.
         "detail": _mask(_sentence_case(str(summary.get("detail") or ""))) if status == "ready" and (
-            not ran or rec.subject_kind == "workflow"
+            not ran or rec.subject_kind == "workflow" or bool(run_ids)
         ) else "",
         "sample": "" if rec.subject_kind != "rule" else (
             "a made-up signal" if made_up else "the last signal it matched"
