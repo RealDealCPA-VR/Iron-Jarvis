@@ -105,6 +105,10 @@ PR that ships it.
 | The line on a skill suggestion whose text passed every check when it was written and holds no client name, contact detail or figure from the work (the intelligence plan, release 10) | **No client names, contact details or figures from your work are in it.** (never "no names": only clients' names are checked) | verified, sanitized, scrubbed, PII-free, redacted, anonymized, no names |
 | Where an improvement approved in Improvements shows in Activity › Your day | **In Improvements**; its row **changed a skill: the skill “name”** | skill_update, proposal approved, refine |
 | Going back to a skill's text before an approved improvement | **put back** (Your day's **Undo**; the note: **The version before is kept: Activity › Your day can put it back.**) | revert, rollback, restore, version history |
+| A second model account reading finished work after the owner's yes, once per reply or task that made or changed a file (the intelligence plan, 5b) | **double-check** (the setting: **Second model double-check**; the line: **Double-checked by <model>:** …) | second opinion (on screen), verifier, judge, review pass, cross-check, LLM check |
+| The once-only question that offers it | the card's own words: **Use <model> to double-check finished work? It reads the request, the reply and the files' text. About one small request per task on <account>.**; buttons **Yes, double-check** / **No** | opt in, enable verification, consent dialog |
+| A pass when not every file was read whole | **it found nothing wrong in the N of M files it read in full** | checked everything, all files verified |
+| The line while it runs | **<model> is double-checking this…** | pending, in progress, verifying |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads

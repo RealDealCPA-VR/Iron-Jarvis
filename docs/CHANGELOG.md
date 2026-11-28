@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.597.0
+
+**A second model can double-check finished work.** If you have more than one model account on the Several accounts card (Settings › Connections), Iron Jarvis asks you once, under a reply that made or changed a file:
+
 ## v1.596.0
 
 **A skill suggestion says what was checked.** When you ask for the same kind of task on three different days within five weeks, in chat or as a task you start yourself, the night review writes one skill draft from that work and it waits in Improvements.
@@ -77,7 +81,3 @@
 ## v1.580.4
 
 **A step that could not be double-checked says so where you look first.** When Iron Jarvis splits a larger task into steps, it checks each step before moving on.
-
-## v1.580.3
-
-**A workflow made in chat is checked like one made on the page.** A workflow that cannot work is now refused when it is saved, whichever way you made it.

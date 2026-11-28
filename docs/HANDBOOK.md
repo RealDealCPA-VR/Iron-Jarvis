@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.596.0 (2026-11-19).*
+holds itself to. Current as of v1.597.0 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,21 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## A second model can double-check finished work (v1.597.0)
+
+If you have more than one model account on the Several accounts card (Settings › Connections), Iron Jarvis asks you once, under a reply that made or changed a file:
+
+> Use Sonnet 4.5 to double-check finished work? It reads the request, the reply and the files' text. About one small request per task on “Work”.
+
+The card names the exact model and account. **No** keeps Iron Jarvis's own checks only, and the card is not shown again. **Yes, double-check** means: after each reply or task that makes or changes a file, that model, on that account and no other, reads what you asked, the reply and the files' text, and says whether it found anything wrong. While it reads, the line under the reply says "Sonnet 4.5 is double-checking this…". When it is done, the line says so in that model's name:
+
+- "Double-checked by Sonnet 4.5: it found nothing wrong." (or, when it could not read every file whole, "… it found nothing wrong in the 5 of 8 files it read in full.")
+- "Worth a look: Sonnet 4.5 found something that may be wrong."
+
+Its answer is that model's opinion: it is never shown as Iron Jarvis's own check, and never as a "Problem". If the account is gone, turned off, at its limit or needs to sign in again, nothing is sent and the line says why ("Not checked: the double-check by Sonnet 4.5 (the account “Work” is turned off)"). A Local only chat never sends anything for it, and neither does work a model on this PC or your network did. Only the task you asked for is double-checked, once; the helpers that worked on it are not, so a task whose files were all made by its helpers is not double-checked. With one account, nothing changes and nothing is asked.
+
+Change it any time in Settings › Models › Second model double-check, or ask in chat ("turn off the second model check"). Turning it on from chat shows a card naming the model and the account first.
 
 ## A skill suggestion says what was checked (v1.596.0)
 
