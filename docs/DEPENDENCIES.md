@@ -160,7 +160,7 @@ function runs.
 | `browser` | browser | 19 | **9**: daemon, hosted, mcpserver, onboarding, platform, providers, terminals, tools, triggers | computeruse, core, providers, tools | comm, daemon, detections, harness, skills |
 | `memory` | memory | 20 | **9**: agents, daemon, filesearch, inbox, learning, platform, projects, settings, workmap | computeruse, core, ltm, search, tools | detections, fleet, learning, profile, providers, workmap |
 | `terminals` | build | 18 | **9**: daemon, harness_bench, hosted, mcp, onboarding, platform, profile, providers, tools | browser, core, detections, hosted, iron_proxy, providers | connectors, daemon |
-| `workflows` | automations | 8 | **9**: agents, comm, daemon, goals, guide, platform, reflex, settings, triggers | core, tools | agents, checks, comm, computeruse, mcp, providers, reflex, scheduling, settings |
+| `workflows` | automations | 10 | **9**: agents, comm, daemon, goals, guide, platform, reflex, settings, triggers | core, tools | agents, checks, comm, computeruse, mcp, providers, reflex, scheduling, settings |
 | `fleet` | providers | 16 | **8**: agents, daemon, envelope, memory, onboarding, platform, providers, settings | core, providers | daemon |
 | `projects` | memory | 7 | **8**: agents, daemon, harness, hosted, mcp, mcpserver, scheduling, workmap | core | agents, assignments, harness, hosted, memory, providers, tools |
 | `reflex` | automations | 5 | **8**: agents, daemon, platform, settings, tools, triggers, webhooks, workflows | core | __init__, agents, comm, computeruse, harness, providers, tools, triggers, workflows |

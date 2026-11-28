@@ -129,7 +129,7 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
-## "If" and "For each" in a workflow (v1.589.0)
+## "If" and "For each" in a workflow (v1.595.0)
 
 A workflow can now decide and repeat. Say it the way you would to a
 person, in chat:
