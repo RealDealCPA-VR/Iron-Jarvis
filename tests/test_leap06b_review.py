@@ -123,7 +123,7 @@ async def test_r2_an_if_on_a_held_steps_output_guesses_no_lane(daemon):
     assert view["stopped_at"]["where"] == "would decide using what “W” would have made"
     assert view["stopped_words"] == (
         "It stopped where it would decide using what “W” would have made, "
-        "so what comes after was not rehearsed: “After”."
+        "so what comes after was not rehearsed: “Fine”, “Oops” and “After”."
     )
     assert view["sentence"] == "This would write 1 file. Nothing was changed."
     assert sent == []
@@ -144,7 +144,7 @@ async def test_r4_a_for_each_over_a_held_steps_output_ends_there(daemon):
     assert view["status"] == "ready", view
     assert view["error"] == ""
     assert view["stopped_at"]["where"] == "would work through what “W” would have made"
-    assert view["stopped_at"]["not_rehearsed"] == []
+    assert view["stopped_at"]["not_rehearsed"] == ["“Tell”"]  # its body (review 2)
     assert sent == []
 
 

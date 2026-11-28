@@ -577,6 +577,16 @@ def _held_ref(texts: "list[str]", view: dict) -> str:
     return ""
 
 
+def _step_texts(step: "Step") -> "list[str]":
+    """The templates a step renders before it runs (its task, its message,
+    its arguments)."""
+    try:
+        args = json.dumps(step.args, ensure_ascii=False, default=str) if step.args else ""
+    except (TypeError, ValueError):
+        args = ""
+    return [str(step.task or ""), str(step.message or ""), args]
+
+
 class UnreadableData(ValueError):
     """A step's stored JSON could not be read (it was clipped to the record's
     bound, :data:`_MAX_STEP_DATA`), so no field can be read from it."""
@@ -808,7 +818,19 @@ class _RehearsalEnd(_AskPark):
     the next decision or read would be made on what a held change would have
     made, which the rehearsal does not have. ``question`` is what it would
     do ("decide using what “W” would have made"); never raised in a real
-    run."""
+    run.
+
+    Review 2: ``own`` names the steps of the If or For each it stopped at
+    (both lanes, or the body), which come first in what was not rehearsed;
+    ``items_block`` / ``items_words`` say, for a For each of several items
+    at once, what of its items was not rehearsed (counted from the items
+    never started, not from the stopping item's place)."""
+
+    def __init__(self, *a: Any, own: "list[str] | None" = None, **kw: Any) -> None:
+        super().__init__(*a, **kw)
+        self.own = list(own or [])
+        self.items_block = ""
+        self.items_words: list[str] = []
 
 
 @dataclass
@@ -996,7 +1018,9 @@ def _after_ask(steps: "list[Step]", ask: "_AskPark", outputs: dict) -> list[str]
         words: list[str] = []
         for lst, i, block, bkey in reversed(levels):
             words.extend(f"“{s.name}”" for s in lst[i + 1:])
-            if block is not None and block.kind == "for_each":
+            if block is not None and block.kind == "for_each" and getattr(ask, "items_block", "") == bkey:
+                words.extend(ask.items_words)
+            elif block is not None and block.kind == "for_each":
                 held = outputs.get(bkey) if isinstance(outputs.get(bkey), dict) else {}
                 items = held.get("list") if isinstance(held.get("list"), list) else None
                 rest = ask.step[len(bkey) + 1:] if ask.step.startswith(bkey + "/") else ""
@@ -2161,6 +2185,16 @@ class WorkflowEngine:
                 # again (the router never retries one either).
                 break
         rehearsal = self.rehearsal_of(run_id)
+        if (
+            rehearsal
+            and not out.get("rehearsed")
+            and out.get("status") == "completed"
+            and _held_ref(_step_texts(step), scope)
+        ):
+            # Review 2: it RAN, but on what a held step would have made; its
+            # result is worked out without that change, so it counts as
+            # held for every later decision (transitively).
+            out["rehearsed"] = True
         if rehearsal and out.get("rehearsed"):
             self._held_steps.setdefault(run_id, []).append(step.name)
         if (
@@ -2399,6 +2433,7 @@ class WorkflowEngine:
                 raise _RehearsalEnd(
                     top_index, key, f"decide using what “{held}” would have made",
                     at=at if frame.prefix else None,
+                    own=[f"“{s.name}”" for s in [*step.steps, *step.else_steps]],
                 )
             outside = _reads_outside(logic.condition_texts(step.condition), view)
             mark = {"outside": True} if outside else {}
@@ -2576,6 +2611,7 @@ class WorkflowEngine:
                 raise _RehearsalEnd(
                     top_index, key, f"work through what “{held}” would have made",
                     at=at if frame.prefix else None,
+                    own=[f"“{s.name}”" for s in step.steps],
                 )
             items, found, outside, problem = await self._items_for(
                 ctx, step, _scope_view(outputs, frame)
@@ -2724,9 +2760,12 @@ class WorkflowEngine:
             halted = asyncio.Event()
 
             ended: "_RehearsalEnd | None" = None
+            started: set[int] = set()
+            finished: set[int] = set()
+            ended_at = 0
 
             async def guarded(n: int, item: Any) -> None:
-                nonlocal stop, cancelled, ended
+                nonlocal stop, cancelled, ended, ended_at
                 async with gate:
                     if halted.is_set():
                         return
@@ -2734,13 +2773,14 @@ class WorkflowEngine:
                         cancelled = True
                         halted.set()
                         return
+                    started.add(n)
                     try:
                         res = await one(n, item)
                     except _RehearsalEnd as end:
                         # Leap 06-b review: the rehearsal ends; the items
                         # under way finish, no new one starts.
                         if ended is None:
-                            ended = end
+                            ended, ended_at = end, n
                         halted.set()
                         return
                     except _AskPark:
@@ -2753,6 +2793,7 @@ class WorkflowEngine:
                         rows[n] = {"n": n, "label": _item_label(item, n), "status": "failed",
                                    "summary": res["failed"][1]["summary"], "halts": True}
                         await note_progress()
+                    finished.add(n)
                     if res["status"] == "cancelled":
                         cancelled = True
                         halted.set()
@@ -2765,6 +2806,16 @@ class WorkflowEngine:
 
             await asyncio.gather(*(guarded(n, it) for n, it in pending))
             if ended is not None:
+                # Review 2: what of the items was not rehearsed, from what
+                # really ran: those started and left part way, and those
+                # never started.
+                under_way = started - finished - {ended_at}
+                never = len(pending) - len(started)
+                ended.items_block = key
+                ended.items_words = (
+                    (["the rest of the items under way"] if under_way else [])
+                    + ([f"{never} more item{'s' if never != 1 else ''} of “{step.name}”"] if never > 0 else [])
+                )
                 raise ended
 
         done, failed, not_run = counts()
@@ -3267,6 +3318,8 @@ class WorkflowEngine:
         after = _after_ask(steps, ask, outputs)
         question = " ".join(str(ask.question or "").split())
         guess = isinstance(ask, _RehearsalEnd)
+        if guess:
+            after = [*ask.own, *after]
         # Leap 06-b review: a decision or a read the rehearsal cannot make
         # without a held change ends it the same way (``workflow_held``).
         if guess:

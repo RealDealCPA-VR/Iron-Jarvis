@@ -364,6 +364,12 @@ class DownloadManageTool(Tool):
         descriptor["pre_inline"] = _json.dumps(meta)
         return descriptor
 
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: the refusal ``execute``'s own plan gives (a file
+        the browser did not download, a place it cannot go). BLOCKING."""
+        plan = self._plan(args, ctx)
+        return str(plan.get("error") or "")
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         plan = await asyncio.to_thread(self._plan, args, ctx)
         if "error" in plan:

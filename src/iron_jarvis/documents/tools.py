@@ -1381,6 +1381,35 @@ class BatchDocumentsTool(Tool):
         #: reports honestly instead of crashing.
         self._router_resolver = router_resolver
 
+    @staticmethod
+    def _folder_problem(folder: Path, args: dict[str, Any]) -> str:
+        """Why ``execute`` would refuse this folder or output, or "". BLOCKING."""
+        ok, reason = fs_read_ok(str(folder))
+        if not ok:
+            return f"read denied: {reason}"
+        if not folder.is_dir():
+            return f"not a folder: {folder}"
+        output = str(args.get("output") or "both").strip().lower()
+        if output not in ("xlsx", "docx", "both"):
+            return f"unknown output {output!r} — use xlsx, docx, or both"
+        return ""
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: ``execute``'s own checks: the folder it reads,
+        the output it makes, and the folder it writes (inside the work
+        folder). BLOCKING."""
+        from . import batch as _batch
+
+        try:
+            folder = _resolve_read_path(str(args.get("folder", "")), ctx)
+            problem = self._folder_problem(folder, args)
+            if problem:
+                return problem
+            safe_path(ctx.workspace, f"batch/{_batch.slug_for(folder)}")
+        except (PermissionError, ValueError, OSError) as exc:
+            return str(exc)
+        return ""
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         from . import batch as _batch
 
@@ -1390,17 +1419,10 @@ class BatchDocumentsTool(Tool):
                 error="batch_documents needs a model router and none is wired",
             )
         folder = _resolve_read_path(str(args.get("folder", "")), ctx)
-        ok, reason = fs_read_ok(str(folder))
-        if not ok:
-            return ToolResult(ok=False, error=f"read denied: {reason}")
-        if not folder.is_dir():
-            return ToolResult(ok=False, error=f"not a folder: {folder}")
+        problem = self._folder_problem(folder, args)
+        if problem:
+            return ToolResult(ok=False, error=problem)
         output = str(args.get("output") or "both").strip().lower()
-        if output not in ("xlsx", "docx", "both"):
-            return ToolResult(
-                ok=False,
-                error=f"unknown output {output!r} — use xlsx, docx, or both",
-            )
         # 0/omitted falls to the default — the same `or`-default convention as
         # list_folder's `limit` (a 0-document batch is never what was meant).
         max_files = max(1, min(int(args.get("max_files") or 25), 100))

@@ -597,6 +597,20 @@ def _session_of(ctx: ToolContext) -> str:
     return str(ctx.session_id or "")
 
 
+
+def _resolve_cwd(ctx: Any, raw_cwd: Any) -> Path:
+    """The folder a program starts in: the work folder, or ``cwd`` inside
+    it. Raises ``ValueError`` in words. BLOCKING (it resolves the path)."""
+    if raw_cwd is None or str(raw_cwd).strip() in ("", "."):
+        return ctx.workspace.resolve()
+    try:
+        folder = safe_path(ctx.workspace, str(raw_cwd))
+    except PermissionError:
+        raise ValueError(f"`cwd` '{raw_cwd}' is outside the session's folder") from None
+    if not folder.is_dir():
+        raise ValueError(f"`cwd` '{raw_cwd}' is not a folder in the workspace")
+    return folder
+
 class ProcessStartTool(Tool):
     name = "process_start"
     description = (
@@ -643,6 +657,14 @@ class ProcessStartTool(Tool):
 
         # v1.516.0: the git guard's file checks run off the event loop.
         return await spend_check_off_loop(tool_check, args.get("command") if isinstance(args, dict) else "")
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: ``_start``'s own folder check (``cwd``)."""
+        try:
+            _resolve_cwd(ctx, args.get("cwd") if isinstance(args, dict) else None)
+        except ValueError as exc:
+            return str(exc)
+        return ""
 
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         command = str(args.get("command") or "").strip()
@@ -730,15 +752,7 @@ class ProcessStartTool(Tool):
         raw_cwd = args.get("cwd")
 
         def _resolve() -> Path:
-            if raw_cwd is None or str(raw_cwd).strip() in ("", "."):
-                return ctx.workspace.resolve()
-            try:
-                folder = safe_path(ctx.workspace, str(raw_cwd))
-            except PermissionError:
-                raise ValueError(f"`cwd` '{raw_cwd}' is outside the session's folder") from None
-            if not folder.is_dir():
-                raise ValueError(f"`cwd` '{raw_cwd}' is not a folder in the workspace")
-            return folder
+            return _resolve_cwd(ctx, raw_cwd)
 
         try:
             cwd = await asyncio.to_thread(_resolve)

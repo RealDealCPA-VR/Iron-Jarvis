@@ -224,6 +224,31 @@ class StackApplyTool(Tool):
         self._pending[id(args)] = desc
         return desc
 
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: the refusals ``execute`` and ``S.write_plan``
+        would give before writing: a plan that is gone, another folder's,
+        already written, or a document whose folder is outside this one.
+        BLOCKING. Nothing is written."""
+        try:
+            plan = S.load_plan(ctx.config.home, str(args.get("plan_id") or "").strip())
+            ws = Path(ctx.workspace).resolve()
+            if Path(str(plan.get("workspace") or "")).resolve() != ws:
+                return f"This plan belongs to another folder ({plan.get('workspace')}). Nothing was written."
+            if plan.get("applied"):
+                return "This plan was already written. Undo on its card takes those documents back first."
+            for doc in S.edited_documents(plan, args.get("documents")):
+                folder_rel = doc.get("folder") or ""
+                try:
+                    safe_path(ws, folder_rel or ".")
+                except Exception:  # noqa: BLE001 — write_plan's own words
+                    return (f"The folder {folder_rel!r} is outside this chat's folder ({ws}). "
+                            "Pick a folder inside it.")
+        except S.StackError as exc:
+            return str(exc)
+        except Exception:  # noqa: BLE001 — a check that cannot run says nothing
+            return ""
+        return ""
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         desc = self._pending.pop(id(args), None)
         plan_id = str(args.get("plan_id") or "").strip()

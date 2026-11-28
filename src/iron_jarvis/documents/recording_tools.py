@@ -420,25 +420,34 @@ class TranscribeRecordingTool(Tool):
         self._pending[id(args)] = desc
         return desc
 
+    @staticmethod
+    def _gate(raw: str, ctx: ToolContext) -> "tuple[Path | None, str]":
+        """``(the recording, "")`` or ``(None, why not)`` in words. BLOCKING."""
+        if not raw:
+            return None, "Say which recording to turn into text."
+        p = _resolve_read_path(raw, ctx)
+        allowed, reason = fs_read_ok(p)
+        if not allowed:
+            return None, reason
+        if not p.is_file():
+            return None, f"There is no file at {p}."
+        if not R.is_recording(p):
+            return None, (
+                f"{p.name} is not a recording. This turns audio (.m4a, .mp3, .wav, .ogg, ...) or the sound "
+                "of a video (.mp4, .mov, ...) into text.")
+        return p, ""
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: ``execute``'s own checks of the recording."""
+        return self._gate(str(args.get("path") or "").strip() if isinstance(args, dict) else "", ctx)[1]
+
     async def execute(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         desc = self._pending.pop(id(args), None)
         raw = str(args.get("path") or "").strip()
-        if not raw:
-            return ToolResult(ok=False, error="Say which recording to turn into text.")
-
-        def _gate() -> "tuple[Path, tuple[bool, str], bool]":
-            p = _resolve_read_path(raw, ctx)
-            return p, fs_read_ok(p), p.is_file()
-
-        path, (allowed, reason), exists = await asyncio.to_thread(_gate)
-        if not allowed:
-            return ToolResult(ok=False, error=reason)
-        if not exists:
-            return ToolResult(ok=False, error=f"There is no file at {path}.")
-        if not R.is_recording(path):
-            return ToolResult(ok=False, error=(
-                f"{path.name} is not a recording. This turns audio (.m4a, .mp3, .wav, .ogg, ...) or the sound "
-                "of a video (.mp4, .mov, ...) into text."))
+        found, problem = await asyncio.to_thread(self._gate, raw, ctx)
+        if found is None:
+            return ToolResult(ok=False, error=problem)
+        path = found
         from ..providers.egress import current_scope
 
         env = self._env(ctx)

@@ -142,6 +142,8 @@ def _parse_edits(args: dict[str, Any]) -> list[dict[str, Any]]:
 
 class MultiEditTool(Tool):
     name = "multi_edit"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('path',)
     description = (
         "Make several exact edits to ONE workspace text file in a single call. "
         "`edits` is an ordered list of {old, new, replace_all?}; each is applied "
@@ -508,6 +510,20 @@ class ApplyPatchTool(Tool):
         for key in ("patch", "input"):
             if isinstance(args.get(key), str):
                 return args[key]
+        return ""
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: the refusal ``execute`` would give, from the same
+        plan (every file the patch names inside the folder, every hunk
+        applying); nothing is written. BLOCKING."""
+        try:
+            _plan_patch(ctx.workspace, parse_patch(self._patch_text(args)))
+        except PatchError as exc:
+            return f"apply_patch verification failed — nothing was changed. {exc}"
+        except PermissionError as exc:
+            return unwritable_workspace_error(exc, ctx.workspace)
+        except OSError as exc:
+            return str(exc)
         return ""
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> "dict[str, Any] | None":
@@ -1004,6 +1020,17 @@ class NotebookEditTool(Tool):
     @staticmethod
     def _path_arg(args: dict[str, Any]) -> str:
         return str(args.get("path") or args.get("notebook_path") or "")
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: ``execute``'s own path check (inside the folder)."""
+        label = self._path_arg(args)
+        if not label:
+            return ""
+        try:
+            safe_path(ctx.workspace, label)
+        except (PermissionError, ValueError, OSError) as exc:
+            return str(exc)
+        return ""
 
     async def capture_undo(self, args: dict[str, Any], ctx: ToolContext) -> "dict[str, Any] | None":
         label = self._path_arg(args)

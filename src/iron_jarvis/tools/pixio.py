@@ -484,6 +484,37 @@ class PixioUploadTool(_PixioTool):
         super().__init__(key_resolver, http, artifact_sink)
         self._http_upload = http_upload or _default_http_upload
 
+    def _local_problem(self, p: "Any") -> str:
+        """Why the local file ``p`` cannot be published, or "". BLOCKING."""
+        from ..core.fs_policy import fs_read_ok
+        from ..creative.service import media_kind
+
+        if not p.is_file():
+            return f"no such file: {p}"
+        if media_kind(p.name) is None:
+            return (
+                f"'{p.suffix}' is not a media file — only image/video/audio "
+                "may be published to the public CDN"
+            )
+        ok, reason = fs_read_ok(str(p))
+        if not ok:
+            return f"blocked: {reason}"
+        if p.stat().st_size > self._MAX_UPLOAD:
+            return "file too large to publish (200MB max)"
+        return ""
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: ``_run``'s own checks of a local file."""
+        from pathlib import Path
+
+        raw_path = str(args.get("path") or "").strip() if isinstance(args, dict) else ""
+        if not raw_path:
+            return ""
+        p = Path(raw_path)
+        if not p.is_absolute():
+            p = ctx.workspace / raw_path
+        return self._local_problem(p)
+
     async def _run(self, key: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
         raw_path = str(args.get("path") or "").strip()
         remote = str(args.get("url") or "").strip()
@@ -506,27 +537,14 @@ class PixioUploadTool(_PixioTool):
 
         from pathlib import Path
 
-        from ..core.fs_policy import fs_read_ok
-        from ..creative.service import media_kind, mime_for
+        from ..creative.service import mime_for
 
         p = Path(raw_path)
         if not p.is_absolute():
             p = ctx.workspace / raw_path
-        if not p.is_file():
-            return ToolResult(ok=False, error=f"no such file: {p}")
-        if media_kind(p.name) is None:
-            return ToolResult(
-                ok=False,
-                error=(
-                    f"'{p.suffix}' is not a media file — only image/video/audio "
-                    "may be published to the public CDN"
-                ),
-            )
-        ok, reason = fs_read_ok(str(p))
-        if not ok:
-            return ToolResult(ok=False, error=f"blocked: {reason}")
-        if p.stat().st_size > self._MAX_UPLOAD:
-            return ToolResult(ok=False, error="file too large to publish (200MB max)")
+        problem = self._local_problem(p)
+        if problem:
+            return ToolResult(ok=False, error=problem)
 
         # read_bytes() (up to 200MB) + the POST both run OFF the loop.
         def _read_and_publish() -> tuple[str, int]:
