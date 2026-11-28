@@ -758,3 +758,13 @@ def test_the_check_reads_figures_strictly():
     assert not C.is_clean(md + "Keep 250 rows.", record)
     assert not C.is_clean(md + "Keep 3 rows.", record)
     assert not C.is_clean(md, ["x" * (C.RECORD_MAX + 1)])  # a record not read whole is never clean
+
+
+def test_a_client_list_holding_a_name_in_another_script_never_allows_the_line(desk):
+    """Its Latin spellings ("Ivanova" for "Иванова") cannot be known, so the
+    line is never said while such a name is on the list."""
+    _client(desk, "Иванова")
+    md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. ask Ivanova to confirm.\n"
+    assert C.check(desk.engine, md, ["the export came in."]).clean is False
+    plain = md.replace("ask Ivanova to confirm.", "ask the bank to confirm.")
+    assert C.check(desk.engine, plain, ["the export came in."]).clean is False

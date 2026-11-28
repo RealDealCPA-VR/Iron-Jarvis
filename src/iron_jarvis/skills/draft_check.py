@@ -195,6 +195,13 @@ def _name_keys(name: Any) -> tuple[str, str, set[str]]:
     return " ".join(words), "".join(words), {w for w in words if len(w) >= NAME_WORD_MIN and w not in _GENERIC}
 
 
+def _non_latin(text: Any) -> bool:
+    """Does ``text`` hold a letter of a script other than Latin? Pure."""
+    import unicodedata
+
+    return any(ch.isalpha() and not unicodedata.name(ch, "").startswith("LATIN") for ch in str(text or ""))
+
+
 def client_named_any_case(engine: Any, text: Any) -> bool:
     """Does ``text`` hold a client's name (confirmed or waiting: its display
     name, signature or an alias) in ANY case, accent or German spelling, any
@@ -202,8 +209,9 @@ def client_named_any_case(engine: Any, text: Any) -> bool:
     of it with :data:`NAME_WORD_MIN`+ letters that is not a generic company
     word? Loose on purpose: it only ever HIDES the checked line; holding a
     draft is ``learning.names_a_client``'s stricter rule. A list that cannot
-    be read answers True. Not covered: a Latin spelling of a name the list
-    holds in another script. BLOCKING."""
+    be read answers True, and so does a list holding any name written in
+    a script other than Latin (its Latin spellings cannot be known).
+    BLOCKING."""
     try:
         from ..workmap.clients import store
 
@@ -215,6 +223,10 @@ def client_named_any_case(engine: Any, text: Any) -> bool:
             for entry in (table or {}).values():
                 name, sig, aliases = entry
                 for want in (name, sig, *tuple(aliases or ())):
+                    if _non_latin(want):
+                        # Its Latin spellings ("Ivanova" for "Иванова")
+                        # cannot be known: the line is never said.
+                        return True
                     phrase, glued, single = _name_keys(want)
                     if not phrase:
                         continue
