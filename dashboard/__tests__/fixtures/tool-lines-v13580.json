@@ -749,7 +749,7 @@
       "failed": "tried a rule change and it failed"
     },
     "rehearse": {
-      "ok": "rehearsed a rule or a schedule",
+      "ok": "ran a rehearsal",
       "failed": "tried a rehearsal and it failed"
     },
     "rename_real_file": {

@@ -3,7 +3,11 @@
 /**
  * A rehearsal's report (leap 06-a): what a rule or a schedule WOULD have
  * written, moved, sent or run, with nothing changed. One component for the
- * Rules page, the Schedules page and the chat card ("rehearse it").
+ * Rules page, the Schedules page and the chat card ("rehearse it"); leap
+ * 06-b adds the Workflows page (a saved workflow) and the Autonomy page (one
+ * try of a goal), and two honest limits: a workflow that would ask you stops
+ * there and names what was not rehearsed, and a step that read after a held
+ * change says the real run may differ.
  *
  * Everything it says comes from `GET /rehearsals/{id}`, which the daemon
  * builds from the ledger's rehearsed rows every time it is read: the
@@ -37,6 +41,12 @@ export interface RehearsalView {
   refused?: RehearsalItem[];
   reads?: number;
   guessed_after?: boolean;
+  /** Leap 06-b: the line that says a later read was worked out without a
+   *  held change ("" when none). */
+  guessed_words?: string;
+  /** Leap 06-b: a workflow's rehearsal that stopped at its question: what
+   *  was not rehearsed, in one line ("" when it did not stop there). */
+  stopped_words?: string;
   error?: string;
   /** Why no run started (a schedule with nothing to do), in the row's words. */
   detail?: string;
@@ -49,7 +59,12 @@ export const REHEARSAL_POLL_MS = 3000;
 /** How many items show before "Show all". */
 export const REHEARSAL_SHOWN = 8;
 
-const SUBJECT_WORD: Record<string, string> = { rule: "rule", schedule: "schedule" };
+const SUBJECT_WORD: Record<string, string> = {
+  rule: "rule",
+  schedule: "schedule",
+  workflow: "workflow",
+  goal: "goal",
+};
 
 /** Decode a report from the wire (anything malformed becomes nothing). */
 export function decodeRehearsal(raw: unknown): RehearsalView | null {
@@ -81,6 +96,8 @@ export function decodeRehearsal(raw: unknown): RehearsalView | null {
     refused: items(r.refused),
     reads: typeof r.reads === "number" ? r.reads : 0,
     guessed_after: r.guessed_after === true,
+    guessed_words: typeof r.guessed_words === "string" ? r.guessed_words : "",
+    stopped_words: typeof r.stopped_words === "string" ? r.stopped_words : "",
     error: typeof r.error === "string" ? r.error : "",
     detail: typeof r.detail === "string" ? r.detail : "",
     sample: typeof r.sample === "string" ? r.sample : "",
@@ -274,6 +291,17 @@ export function RehearsalReport({
           </ul>
         </div>
       )}
+
+      {view && view.status !== "running" && view.stopped_words ? (
+        <p data-testid={`rehearsal-stopped-${id}`} className="break-words text-[13px] text-zinc-400">
+          {view.stopped_words}
+        </p>
+      ) : null}
+      {view && view.status !== "running" && view.guessed_words ? (
+        <p data-testid={`rehearsal-guessed-${id}`} className="break-words text-[13px] text-tone-warn">
+          {view.guessed_words}
+        </p>
+      ) : null}
 
       {view && view.status === "ready" && (
         <p className="text-[12px] text-zinc-500">

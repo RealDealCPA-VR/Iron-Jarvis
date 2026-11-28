@@ -4716,7 +4716,7 @@ const TOOL_WORDS_BUILTIN = {
   reflex_create: "add a rule that acts on its own",
   reflex_delete: "remove a rule that acts on its own",
   reflex_update: "change a rule that acts on its own",
-  rehearse: "rehearse a rule or a schedule",
+  rehearse: "run a rehearsal",
   remember_preference: "note a preference",
   rename_file: "rename or move a file",
   repl: "run some code",

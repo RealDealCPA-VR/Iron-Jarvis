@@ -18,9 +18,10 @@
 // "nothing uses this".
 
 import { useCallback, useEffect, useState } from "react";
-import { FolderOpen, Trash2, Workflow, X } from "lucide-react";
+import { FlaskConical, FolderOpen, Trash2, Workflow, X } from "lucide-react";
 import { useApi } from "@/lib/useApi";
-import { del, get, ApiError } from "@/lib/api";
+import { del, get, post, ApiError } from "@/lib/api";
+import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
 import { Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { IconButton } from "@/components/IconButton";
 import { LoadFailedLine } from "@/components/LoadFailedLine";
@@ -36,6 +37,16 @@ export interface SavedWorkflowDef {
   created_at?: string;
   /** v1.505.0 (D10): its live standing grants (absent on an older daemon). */
   standing_grants?: unknown;
+  /** Leap 06-b: when Keep it was pressed on a rehearsal of it (null = never). */
+  rehearsed_at?: string | null;
+}
+
+/** "Rehearsed 27 Nov" for a row whose rehearsal was kept, else "". */
+export function rehearsedWords(iso: string | null | undefined): string {
+  if (typeof iso !== "string" || !iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `Rehearsed ${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })}`;
 }
 
 /** GET /workflows/{name}/references — automations that fire this def by name. */
@@ -112,6 +123,45 @@ export function SavedWorkflows() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Leap 06-b: each workflow's rehearsal report on screen, by its name, and
+  // the row whose Rehearse is starting. A report still running, or finished
+  // and not kept, comes back after a reload (GET /rehearsals?kind=workflow).
+  const [rehearsals, setRehearsals] = useState<Record<string, RehearsalView>>({});
+  const [rehearsing, setRehearsing] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    get<{ rehearsals?: unknown[] }>("/rehearsals?kind=workflow")
+      .then((r) => {
+        if (!live) return;
+        const back: Record<string, RehearsalView> = {};
+        for (const raw of r.rehearsals ?? []) {
+          const v = decodeRehearsal(raw);
+          if (v && v.subject.name && !back[v.subject.name]) back[v.subject.name] = v;
+        }
+        setRehearsals((cur) => ({ ...back, ...cur }));
+      })
+      .catch(() => {
+        /* an older daemon, or none open: nothing to show again */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const rehearse = useCallback(async (name: string) => {
+    setRehearsing(name);
+    setErr(null);
+    setNotice(null);
+    try {
+      const view = decodeRehearsal(await post<unknown>("/rehearsals", { kind: "workflow", id: name }));
+      if (view) setRehearsals((cur) => ({ ...cur, [name]: view }));
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setRehearsing(null);
+    }
+  }, []);
 
   // Stay in step with the canvas: a Save/rename/delete there changes this list.
   useEffect(() => {
@@ -228,6 +278,11 @@ export function SavedWorkflows() {
                     <div className="truncate text-[11px] text-zinc-500">
                       {n} step{n === 1 ? "" : "s"}
                       {d.description ? ` · ${d.description}` : ""}
+                      {rehearsedWords(d.rehearsed_at) ? (
+                        <span data-testid={`workflow-rehearsed-${d.name}`}>
+                          {` · ${rehearsedWords(d.rehearsed_at)}`}
+                        </span>
+                      ) : null}
                     </div>
                     {/* v1.505.0 (D10): what "Always for this workflow" let
                         it do, each with Remove. */}
@@ -247,6 +302,24 @@ export function SavedWorkflows() {
                   >
                     <FolderOpen size={13} /> Load
                   </button>
+                  {/* Leap 06-b: run it once, reading for real and changing
+                      nothing; the report shows under the row. */}
+                  <button
+                    type="button"
+                    onClick={() => void rehearse(d.name)}
+                    disabled={confirming || rehearsing !== null}
+                    title={`Rehearse “${d.name}”: see what it would do, with nothing changed`}
+                    data-testid={`workflow-rehearse-${d.name}`}
+                    className={WF_GHOST_SM}
+                  >
+                    {rehearsing === d.name ? (
+                      <LoaderInline label="Starting…" />
+                    ) : (
+                      <>
+                        <FlaskConical size={13} /> Rehearse
+                      </>
+                    )}
+                  </button>
                   {!confirming && (
                     // v1.447.0 (calm sweep): the row's trash can, named
                     // "Delete <name>"; the press opens the same confirm below.
@@ -259,6 +332,24 @@ export function SavedWorkflows() {
                     />
                   )}
                 </div>
+                {rehearsals[d.name] && (
+                  <div className="mt-1.5 min-w-0 pl-6">
+                    <RehearsalReport
+                      key={rehearsals[d.name].id}
+                      id={rehearsals[d.name].id}
+                      initial={rehearsals[d.name]}
+                      onChange={(v) => setRehearsals((cur) => ({ ...cur, [d.name]: v }))}
+                      onKept={() => reload()}
+                      onClose={() =>
+                        setRehearsals((cur) => {
+                          const next = { ...cur };
+                          delete next[d.name];
+                          return next;
+                        })
+                      }
+                    />
+                  </div>
+                )}
                 {confirming && (
                   <div
                     className="mt-1.5 space-y-1.5 pl-6"

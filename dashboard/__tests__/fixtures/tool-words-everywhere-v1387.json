@@ -478,7 +478,7 @@
     "reflex_create": "add a rule that acts on its own",
     "reflex_delete": "remove a rule that acts on its own",
     "reflex_update": "change a rule that acts on its own",
-    "rehearse": "rehearse a rule or a schedule",
+    "rehearse": "run a rehearsal",
     "remember_preference": "note a preference",
     "rename_file": "rename or move a file",
     "repl": "run some code",
@@ -1194,8 +1194,8 @@
       "Changing a rule"
     ],
     "rehearse": [
-      "Rehearsed a rule or a schedule",
-      "Rehearsing a rule or a schedule"
+      "Ran a rehearsal",
+      "Running a rehearsal"
     ],
     "remember_preference": [
       "Noted a preference",

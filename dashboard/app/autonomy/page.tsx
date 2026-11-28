@@ -20,7 +20,9 @@ import {
   Pause,
   RotateCcw,
   ChevronRight,
+  FlaskConical,
 } from "lucide-react";
+import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
 import { api, get, post, put, ApiError } from "@/lib/api";
 import { OFFER_DISMISS_PREFIX, offerKey as goalOfferKey } from "@/lib/goalOffers";
 import { useApi, usePolledApi } from "@/lib/useApi";
@@ -1059,6 +1061,29 @@ function offerKey(goalId: string, offer: Offer): string {
 function GoalsSection() {
   const goals = useLiveGoals();
   const [busy, setBusy] = useState<string | null>(null);
+  // Leap 06-b: each goal's rehearsal report on screen (one try that spends
+  // nothing of its budget and changes nothing), by goal id. A report still
+  // running, or finished and not kept, comes back after a reload.
+  const [rehearsals, setRehearsals] = useState<Record<string, RehearsalView>>({});
+  useEffect(() => {
+    let live = true;
+    get<{ rehearsals?: unknown[] }>("/rehearsals?kind=goal")
+      .then((r) => {
+        if (!live) return;
+        const back: Record<string, RehearsalView> = {};
+        for (const raw of r.rehearsals ?? []) {
+          const v = decodeRehearsal(raw);
+          if (v && v.subject.id && !back[v.subject.id]) back[v.subject.id] = v;
+        }
+        setRehearsals((cur) => ({ ...back, ...cur }));
+      })
+      .catch(() => {
+        /* an older daemon, or none open: nothing to show again */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
   const [ok, setOk] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1174,6 +1199,22 @@ function GoalsSection() {
       await post(`/grants/${encodeURIComponent(grant.id)}/revoke`);
       setOk(`Revoked "${grant.tool}" on "${g.name}" — it asks again from the next call.`);
       goals.reload();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Leap 06-b: rehearse one try of the goal; its report shows on its card. */
+  async function rehearse(g: GoalRecord) {
+    setBusy(`${g.id}:rehearse`);
+    setOk(null);
+    setWarn(null);
+    setError(null);
+    try {
+      const view = decodeRehearsal(await post<unknown>("/rehearsals", { kind: "goal", id: g.id }));
+      if (view) setRehearsals((cur) => ({ ...cur, [g.id]: view }));
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -1529,6 +1570,27 @@ function GoalsSection() {
                         )}
                       </Button>
                     )}
+                    {/* Leap 06-b: one try as a rehearsal (nothing changed,
+                        nothing of its budget spent). A paused goal too: a
+                        goal that is not live yet is what it is for. */}
+                    {(g.state === "active" || g.state === "paused") && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busy !== null}
+                        onClick={() => void rehearse(g)}
+                        data-testid={`goal-rehearse-${g.id}`}
+                        title={`Rehearse a try of "${g.name}": see what it would do, with nothing changed`}
+                      >
+                        {busy === `${g.id}:rehearse` ? (
+                          <LoaderInline label="Starting…" />
+                        ) : (
+                          <>
+                            <FlaskConical size={13} /> Rehearse
+                          </>
+                        )}
+                      </Button>
+                    )}
                     {(g.state === "satisfied" || g.state === "failed" || g.state === "stopped") && (
                       <Button
                         variant="soft"
@@ -1612,6 +1674,24 @@ function GoalsSection() {
                     </span>
                   </div>
                 </div>
+                {rehearsals[g.id] && (
+                  <div className="mt-3 min-w-0">
+                    <RehearsalReport
+                      key={rehearsals[g.id].id}
+                      id={rehearsals[g.id].id}
+                      initial={rehearsals[g.id]}
+                      onChange={(v) => setRehearsals((cur) => ({ ...cur, [g.id]: v }))}
+                      onKept={() => goals.reload()}
+                      onClose={() =>
+                        setRehearsals((cur) => {
+                          const next = { ...cur };
+                          delete next[g.id];
+                          return next;
+                        })
+                      }
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
