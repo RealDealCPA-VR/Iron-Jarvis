@@ -343,3 +343,12 @@ def test_other_words_do_not(words):
     from iron_jarvis.inbox.tools import suggestion_tools_for
 
     assert "rehearse" not in suggestion_tools_for(words)
+
+
+def test_a_folder_not_on_this_pc_never_says_works_offline(desk, monkeypatch):
+    from iron_jarvis.scheduling import fixed_steps as F
+
+    monkeypatch.setattr(F, "folder_is_local", lambda folder: False)  # a share or a mapped network drive
+    item = _offer_made(desk)
+    assert item["why"] == "It runs the same way each time, uses no model."
+    assert _offers(desk)[0].offline is False
