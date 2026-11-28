@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.599.0
+
+**Iron Jarvis notices things about your work.** A few times a day Iron Jarvis looks at its own record of your work and may suggest something you probably want to pick up.
+
 ## v1.598.0
 
 **Merge all that passed, in the morning.** The night shift leaves each task's work on its own branch.
@@ -77,7 +81,3 @@
 ## v1.582.0
 
 **Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below).
-
-## v1.581.0
-
-**Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
