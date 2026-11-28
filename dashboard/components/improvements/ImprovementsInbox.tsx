@@ -66,6 +66,8 @@ import {
   groupsToShow,
   nightOfferWords,
   offerRehearsalId,
+  acceptAfterRehearsal,
+  rehearsalLetsAccept,
   offerRehearse,
   nightWhy,
   waitingWords,
@@ -239,7 +241,10 @@ function ImprovementCard({
     setError(null);
     try {
       const view = decodeRehearsal(await post<unknown>(rehearse.path, {}));
-      if (view) setRehearsal({ id: view.id, view });
+      if (view) {
+        setRehearsal({ id: view.id, view });
+        setSeen(view);
+      }
     } catch (e) {
       setError(e instanceof Error && e.message ? e.message : DID_NOT_WORK);
       const status = failureOf(e).status;
@@ -248,6 +253,15 @@ function ImprovementCard({
       setRehearsing(false);
     }
   }
+
+  // Release 11: fixed steps' Accept waits for a rehearsal that changed
+  // nothing and needs no answer; once the report on screen says so, it can
+  // be pressed (the daemon checks again).
+  const [seen, setSeen] = useState<RehearsalView | null>(null);
+  const accept =
+    item.accept && acceptAfterRehearsal(item) && item.accept.blocked && rehearsalLetsAccept(seen)
+      ? { ...item.accept, blocked: "" }
+      : item.accept;
 
   const night = nightWhy(item);
   return (
@@ -273,13 +287,13 @@ function ImprovementCard({
         </ul>
       ) : null}
       {item.detail ? <Detail detail={item.detail} /> : null}
-      {item.accept?.blocked ? (
+      {accept?.blocked ? (
         <p data-testid="improvement-blocked" className="text-[12px] text-tone-warn">
-          {item.accept.blocked}
+          {accept.blocked}
         </p>
-      ) : item.accept?.note ? (
+      ) : accept?.note ? (
         <p data-testid="improvement-does" className="text-[12px] text-zinc-500">
-          {item.accept.note}
+          {accept.note}
         </p>
       ) : null}
       {!item.accept && !item.decline ? (
@@ -288,13 +302,13 @@ function ImprovementCard({
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
-        {item.accept ? (
+        {accept ? (
           <PressButton
-            action={item.accept}
+            action={accept}
             testId="improvement-accept"
             className={ACCEPT_CLASS}
             busy={busy}
-            onPress={() => void press(item.accept!, true)}
+            onPress={() => void press(accept, true)}
           />
         ) : null}
         {item.decline ? (
@@ -334,6 +348,7 @@ function ImprovementCard({
           id={rehearsal.id}
           initial={rehearsal.view}
           keepable={false}
+          onChange={setSeen}
           onClose={() => setRehearsal(null)}
         />
       ) : null}

@@ -216,6 +216,24 @@ export function offerRehearsalId(item: ImprovementItem): string {
   return /^[A-Za-z0-9_-]+$/.test(id) ? id : "";
 }
 
+/** The intelligence plan, release 11: an offer whose Accept waits for its
+ *  rehearsal (fixed steps run by themselves, so you see them first). */
+export function acceptAfterRehearsal(item: ImprovementItem): boolean {
+  return item.kind === "schedule_offer" && item.extra.after_rehearsal === true;
+}
+
+/** Release 11: a rehearsal report that lets such an Accept be pressed:
+ *  finished, nothing refused, nothing that would ask, no question it stopped
+ *  at. The daemon checks the same again when Accept is pressed. */
+export function rehearsalLetsAccept(
+  view: { status?: string; refused?: unknown[]; would?: { would?: string }[]; stopped_words?: string } | null,
+): boolean {
+  if (!view || view.status !== "ready") return false;
+  if ((view.refused ?? []).length > 0) return false;
+  if ((view.stopped_words ?? "").trim()) return false;
+  return (view.would ?? []).every((w) => (w.would ?? "run") === "run");
+}
+
 export function isDecisionPath(path: string): boolean {
   return DECISION_PATHS.some((rx) => rx.test(path));
 }
