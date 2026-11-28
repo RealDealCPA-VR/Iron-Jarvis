@@ -426,6 +426,8 @@ def uncached_formulas(path: Path, sheet: "str | None", max_rows: int = 50_000) -
 
 class ExcelEditTool(Tool):
     name = "excel_edit"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('path',)
     reversibility = Reversibility.REVERSIBLE  # TX-01: prior workbook bytes captured
     description = (
         "Edit an EXISTING Excel workbook IN PLACE inside the workspace: set "
@@ -1285,6 +1287,8 @@ class ExcelSheetSpecTool(Tool):
 
 class ExcelApplySpecTool(Tool):
     name = "excel_apply_spec"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('path',)
     reversibility = Reversibility.REVERSIBLE  # TX-01: prior bytes captured
     description = (
         "REPRODUCE a captured sheet spec (excel_sheet_spec) onto a workbook in "

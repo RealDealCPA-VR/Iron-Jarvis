@@ -62,6 +62,8 @@ async def _capture_output_undo(target: Path, rel: str, ctx: ToolContext) -> "dic
 
 class DocxEditTool(Tool):
     name = "docx_edit"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('output',)
     reversibility = Reversibility.REVERSIBLE  # TX-01: prior bytes / created file
     risk_class = RiskClass.PAGE_ACTION
     description = (
@@ -278,6 +280,8 @@ class PdfFormFieldsTool(Tool):
 
 class PdfFormFillTool(Tool):
     name = "pdf_form_fill"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('output',)
     reversibility = Reversibility.REVERSIBLE
     risk_class = RiskClass.PAGE_ACTION
     description = (

@@ -399,6 +399,8 @@ class ReadDocumentTool(Tool):
 
 class WriteDocumentTool(Tool):
     name = "write_document"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('path',)
     reversibility = Reversibility.REVERSIBLE  # TX-01: prior file bytes are captured
     description = (
         "Create a document inside the session workspace. The file type follows "
@@ -733,6 +735,8 @@ def _xlsx_content(source: Path, *, keep_sheets: bool) -> Any:
 
 class ConvertDocumentTool(Tool):
     name = "convert_document"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('target',)
     description = (
         "Convert a document from one format to another: read any supported "
         "source (PDF, .docx, .xlsx, .pptx, .csv, text/code) and re-write it as "
@@ -1038,6 +1042,8 @@ class RedactScanTool(Tool):
 
 class RedactPiiTool(Tool):
     name = "redact_pii"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('output_path',)
     reversibility = Reversibility.REVERSIBLE  # only the NEW output file to undo
     description = (
         "Redact PII from a document and write a NEW file in the SAME format — "

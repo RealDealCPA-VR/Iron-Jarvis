@@ -1011,6 +1011,8 @@ class ReadFileTool(Tool):
 
 class WriteFileTool(Tool):
     name = "write_file"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('path',)
     description = "Create or overwrite a UTF-8 text file in the session workspace."
     reversibility = Reversibility.REVERSIBLE  # TX-01: prior bytes are captured
     input_schema = {
@@ -1144,6 +1146,8 @@ class EditFileTool(Tool):
     """
 
     name = "edit_file"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('path',)
     description = (
         "Replace `old` with `new` in a workspace text file. `old` must match "
         "the file EXACTLY ONCE (copy it with its indentation): the edit is "
@@ -1480,6 +1484,17 @@ class RenameFileTool(Tool):
         },
         "required": ["path", "new_path"],
     }
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        """Leap 06-b review: in a rehearsal, the refusal :meth:`_targets` would
+        give (both names inside the work folder), in its own words."""
+        try:
+            self._targets(args, ctx)
+        except (PermissionError, ValueError, OSError) as exc:
+            return str(exc) or "the file cannot be renamed there"
+        except (KeyError, TypeError):
+            return ""  # the shape check already spoke
+        return ""
 
     @staticmethod
     def _targets(args: dict[str, Any], ctx: ToolContext) -> "tuple[Path, Path]":

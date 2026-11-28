@@ -227,7 +227,7 @@ def activity_snapshot(d) -> dict[str, Any]:
     from sqlmodel import select
 
     from ...core.models import Session, SessionStatus
-    from ...workflows.models import WorkflowRunRecord
+    from ...workflows.models import WorkflowRunRecord, real_runs
 
     with session_scope(d.platform.engine) as db:
         live_sessions = list(
@@ -243,7 +243,8 @@ def activity_snapshot(d) -> dict[str, Any]:
                 select(WorkflowRunRecord.status).where(
                     WorkflowRunRecord.status.in_(  # type: ignore[attr-defined]
                         ["running", "waiting", "cancelling", "resuming"]
-                    )
+                    ),
+                    real_runs(),  # leap 06-b review: a rehearsal is no workflow's run
                 )
             )
         )

@@ -1458,6 +1458,33 @@ class ToolRegistry:
         # (``rehearsed`` + ``would``), the event is ``tool.rehearsed`` (never
         # ``tool.executed``) and the model is told to carry on as if it worked.
         if held:
+            # Leap 06-b review: the tool's OWN check that ``execute`` would
+            # make (a write outside the work folder) is asked here, off the
+            # loop, so the report never says "would write" what the real run
+            # would refuse. A refusal is the real run's, in the tool's words.
+            refusal = ""
+            preflight = getattr(tool, "rehearsal_preflight", None)
+            if callable(preflight):
+                try:
+                    refusal = str(await asyncio.to_thread(
+                        preflight, run_args if isinstance(run_args, dict) else {}, ctx
+                    ) or "")
+                except Exception:  # noqa: BLE001 — a check that cannot run says nothing
+                    refusal = ""
+            if refusal:
+                inv_id = await asyncio.to_thread(
+                    self._record,
+                    ctx, name, args, decision.mode, ok=False,
+                    output=refusal, reversibility=rev_value,
+                    rehearsed=True, would="refuse",
+                )
+                await ctx.event_bus.publish(
+                    EventType.TOOL_REHEARSED,
+                    {"tool": name, "would": "refuse", "invocation_id": inv_id,
+                     "reversibility": rev_value, "risk_class": risk},
+                    session_id=ctx.session_id,
+                )
+                return ToolResult(ok=False, error=f"PermissionError: {refusal}")
             return await self._rehearse(
                 ctx, tool, name, args, decision, rev_value, risk, would, grant_id
             )

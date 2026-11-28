@@ -426,6 +426,28 @@ class Tool(ABC):
             spec["quarantined"] = True
         return spec
 
+    #: Leap 06-b review: the arguments that name a file this tool WRITES,
+    #: each checked by :meth:`rehearsal_preflight` the way ``execute`` checks
+    #: it (``safe_path``: inside the work folder). Empty = no check.
+    workspace_paths: tuple[str, ...] = ()
+
+    def rehearsal_preflight(self, args: dict[str, Any], ctx: "ToolContext") -> str:
+        """Leap 06-b review: in a REHEARSAL, where a held call never reaches
+        ``execute``, the refusal its own check would give, in its own words;
+        "" when it would pass (or the tool has no such check). The default
+        checks :data:`workspace_paths` through ``safe_path``; a tool whose
+        target is worked out another way overrides it. BLOCKING (it resolves
+        paths): the registry calls it off the loop. Never raises."""
+        for key in self.workspace_paths:
+            raw = args.get(key) if isinstance(args, dict) else None
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            try:
+                safe_path(Path(ctx.workspace), raw)
+            except (PermissionError, ValueError, OSError) as exc:
+                return str(exc) or f"{self.name} cannot use {raw}"
+        return ""
+
     def redact_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return a copy of ``args`` safe to PERSIST/return — the tool-invocation
         transcript is written to the DB at rest, returned by session export, and

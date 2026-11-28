@@ -561,6 +561,22 @@ def _reads_outside(texts: "list[str]", view: dict) -> bool:
     return False
 
 
+def _held_ref(texts: "list[str]", view: dict) -> str:
+    """Leap 06-b review: the name of a step a REHEARSAL held (its output
+    carries ``rehearsed``) that any ``{{name}}`` in *texts* reads, found as
+    :func:`_reads_outside` finds it; "" when none."""
+    from .validate import _ref_base
+
+    for text in texts:
+        for m in _TEMPLATE_RX.finditer(text or ""):
+            ref = m.group(1).strip()
+            for name in (ref, _ref_base(ref)):
+                out = view.get(name)
+                if isinstance(out, dict) and out.get("rehearsed"):
+                    return name
+    return ""
+
+
 class UnreadableData(ValueError):
     """A step's stored JSON could not be read (it was clipped to the record's
     bound, :data:`_MAX_STEP_DATA`), so no field can be read from it."""
@@ -787,6 +803,14 @@ class _AskPark(Exception):
         self.at = at
 
 
+class _RehearsalEnd(_AskPark):
+    """Leap 06-b review: a REHEARSAL ends here, the way it ends at an ask:
+    the next decision or read would be made on what a held change would have
+    made, which the rehearsal does not have. ``question`` is what it would
+    do ("decide using what “W” would have made"); never raised in a real
+    run."""
+
+
 @dataclass
 class _RunCtx:
     """What every step of one drive shares (idea 09: the block runner reads
@@ -907,6 +931,31 @@ def _item_extras(item: Any, n: int, outside: bool) -> dict:
     if outside:
         entry["outside"] = True
     return {"item": entry, "index": {"status": "completed", "summary": str(n), "kind": "item"}}
+
+
+def _held_any(engine: Any, session_id: str) -> bool:
+    """Did the run ``session_id`` have a change HELD (a rehearsed row that is
+    not a refusal, nor one that acts only after the run)? BLOCKING. Never
+    raises."""
+    try:
+        from sqlmodel import select
+
+        from ..core.models import ToolInvocation
+        from ..tools.rehearsal import AFTER_THE_RUN
+
+        with session_scope(engine) as db:
+            row = db.exec(
+                select(ToolInvocation.id).where(
+                    ToolInvocation.session_id == session_id,
+                    ToolInvocation.rehearsed == True,  # noqa: E712
+                    ToolInvocation.would != "refuse",
+                    # a lesson kept, a chat report: only after the run
+                    ToolInvocation.tool.not_in(sorted(AFTER_THE_RUN)),  # type: ignore[union-attr]
+                )
+            ).first()
+        return row is not None
+    except Exception:  # noqa: BLE001 — unknown: count it held (the safe side)
+        return True
 
 
 def _rehearsal_option() -> str:
@@ -1049,6 +1098,9 @@ class WorkflowEngine:
         #: Leap 06-b: the scratch folder a rehearsal's tool steps were given
         #: (no project folder), removed when its run ends.
         self._rehearsal_dirs: dict[str, str] = {}
+        #: Leap 06-b review: the steps a rehearsal held so far, in order, by
+        #: run id (a read that fails after one ends the rehearsal).
+        self._held_steps: dict[str, list[str]] = {}
 
     def rehearsal_of(self, run_id: str) -> str:
         """The rehearsal the run ``run_id`` belongs to ("" for a real run)."""
@@ -1210,6 +1262,7 @@ class WorkflowEngine:
         finally:
             if rehearsal:
                 self._rehearsals.pop(record.id, None)
+                self._held_steps.pop(record.id, None)
                 scratch = self._rehearsal_dirs.pop(record.id, "")
                 if scratch:
                     import shutil
@@ -2107,6 +2160,27 @@ class WorkflowEngine:
                 # check DECLINED — the same task to the same model is declined
                 # again (the router never retries one either).
                 break
+        rehearsal = self.rehearsal_of(run_id)
+        if rehearsal and out.get("rehearsed"):
+            self._held_steps.setdefault(run_id, []).append(step.name)
+        if (
+            rehearsal
+            and out.get("status") == "failed"
+            and step.kind == "tool"
+            and not absent
+            and not unreadable
+            and self._held_steps.get(run_id)
+            and self._only_reads(step.tool)
+        ):
+            # Leap 06-b review: a READ that failed after a held change read
+            # the world without that change; the real run may read what it
+            # wrote. The rehearsal ends here instead of failing on a guess.
+            first = self._held_steps[run_id][0]
+            raise _RehearsalEnd(
+                idx if park_index is None else park_index, key,
+                f"read what “{first}” would have written",
+                at=at if view is not None else None,
+            )
         if out.get("status") == "failed" and step.on_failure == "skip":
             # The failure stays VISIBLE on the step, but the run continues.
             out["handled"] = "skipped"
@@ -2177,6 +2251,13 @@ class WorkflowEngine:
             key=key, view=_scope_view(ctx.outputs, frame), at=[*frame.at, i],
             park_index=frame.top_index, block=frame.top_name,
         )
+
+    def _only_reads(self, tool_name: str) -> bool:
+        """Is ``tool_name`` a tool a rehearsal lets run (a read)?"""
+        from ..tools import rehearsal as _rehearsal
+
+        tool = self.platform.registry.get(str(tool_name or ""))
+        return tool is not None and not _rehearsal.holds(tool)
 
     async def _cancelling(self, run_id: str) -> bool:
         current = await asyncio.to_thread(self._get_record, run_id)
@@ -2308,6 +2389,17 @@ class WorkflowEngine:
         outside = bool(prior.get("outside")) if took in ("then", "else") else False
         if took not in ("then", "else"):
             view = _scope_view(outputs, frame)
+            held = (
+                _held_ref(logic.condition_texts(step.condition), view)
+                if self.rehearsal_of(ctx.run_id) else ""
+            )
+            if held:
+                # Leap 06-b review: the real run decides on what the held
+                # step would have made; a rehearsal never guesses a lane.
+                raise _RehearsalEnd(
+                    top_index, key, f"decide using what “{held}” would have made",
+                    at=at if frame.prefix else None,
+                )
             outside = _reads_outside(logic.condition_texts(step.condition), view)
             mark = {"outside": True} if outside else {}
             absent = missing_values(step, view)
@@ -2469,6 +2561,22 @@ class WorkflowEngine:
         if prior.get("status") == "failed" and isinstance(prior.get("list"), list):
             return prior
         if not (prior.get("status") == "running" and isinstance(prior.get("list"), list)):
+            over = step.over if isinstance(step.over, dict) else {}
+            files = over.get("files") if isinstance(over.get("files"), dict) else {}
+            held = (
+                _held_ref(
+                    [str(over.get("from") or ""), str(files.get("folder") or ""), str(files.get("glob") or "")],
+                    _scope_view(outputs, frame),
+                )
+                if self.rehearsal_of(ctx.run_id) else ""
+            )
+            if held:
+                # Leap 06-b review: the list is what the held step would
+                # have made; the rehearsal ends here.
+                raise _RehearsalEnd(
+                    top_index, key, f"work through what “{held}” would have made",
+                    at=at if frame.prefix else None,
+                )
             items, found, outside, problem = await self._items_for(
                 ctx, step, _scope_view(outputs, frame)
             )
@@ -2568,7 +2676,7 @@ class WorkflowEngine:
                             "status": o.get("status"),
                             "summary": str(o.get("summary") or "")[:_MAX_ITEM_SUMMARY],
                         }
-                        for keep in ("kind", "handled", "took", "session_id", "bound", "folded", "outside"):
+                        for keep in ("kind", "handled", "took", "session_id", "bound", "folded", "outside", "rehearsed"):
                             if o.get(keep) not in (None, ""):
                                 small[keep] = o[keep]
                         outputs[k] = small
@@ -2615,8 +2723,10 @@ class WorkflowEngine:
             gate = asyncio.Semaphore(parallel)
             halted = asyncio.Event()
 
+            ended: "_RehearsalEnd | None" = None
+
             async def guarded(n: int, item: Any) -> None:
-                nonlocal stop, cancelled
+                nonlocal stop, cancelled, ended
                 async with gate:
                     if halted.is_set():
                         return
@@ -2626,6 +2736,13 @@ class WorkflowEngine:
                         return
                     try:
                         res = await one(n, item)
+                    except _RehearsalEnd as end:
+                        # Leap 06-b review: the rehearsal ends; the items
+                        # under way finish, no new one starts.
+                        if ended is None:
+                            ended = end
+                        halted.set()
+                        return
                     except _AskPark:
                         # ``validate`` refuses an ask here; an unchecked def
                         # still never parks half a batch of items.
@@ -2647,6 +2764,8 @@ class WorkflowEngine:
                         halted.set()
 
             await asyncio.gather(*(guarded(n, it) for n, it in pending))
+            if ended is not None:
+                raise ended
 
         done, failed, not_run = counts()
         out: dict = {
@@ -2810,8 +2929,9 @@ class WorkflowEngine:
             "kind": "agent",
             # Additive: the verdict itself (None for a run with none).
             "outcome": ending.outcome,
-            # Leap 06-b: a rehearsal's agent step made none of its changes.
-            **({"rehearsed": True} if self.rehearsal_of(run_id) else {}),
+            # Leap 06-b: a rehearsal's agent step whose run HELD a change.
+            **({"rehearsed": True} if self.rehearsal_of(run_id) and await asyncio.to_thread(
+                _held_any, self.platform.engine, session.id) else {}),
         }
 
     async def _failed_run_words(self, orch, session, exc: BaseException) -> str:
@@ -3146,19 +3266,37 @@ class WorkflowEngine:
 
         after = _after_ask(steps, ask, outputs)
         question = " ".join(str(ask.question or "").split())
-        await asyncio.to_thread(
-            lambda: _rehearsal.record_side_door(
-                self.platform.engine, session_id=run_id, run_id=run_id,
-                door="workflow_ask", words=f"ask you: {question}",
-                extra={"after": after},
+        guess = isinstance(ask, _RehearsalEnd)
+        # Leap 06-b review: a decision or a read the rehearsal cannot make
+        # without a held change ends it the same way (``workflow_held``).
+        if guess:
+            await asyncio.to_thread(
+                lambda: _rehearsal.record_side_door(
+                    self.platform.engine, session_id=run_id, run_id=run_id,
+                    door="workflow_held", words=question, extra={"after": after},
+                )
             )
-        )
-        outputs[ask.step] = {
-            "status": "completed",
-            "kind": "ask",
-            "summary": f"Rehearsal: stopped here. Would ask you: {question}"[:_MAX_STEP_SUMMARY],
-            "rehearsed": True,
-        }
+        else:
+            await asyncio.to_thread(
+                lambda: _rehearsal.record_side_door(
+                    self.platform.engine, session_id=run_id, run_id=run_id,
+                    door="workflow_ask", words=f"ask you: {question}", extra={"after": after},
+                )
+            )
+        if guess:
+            prior = outputs.get(ask.step) if isinstance(outputs.get(ask.step), dict) else {}
+            outputs[ask.step] = {
+                **{k: v for k, v in prior.items() if k == "kind"},
+                "status": "skipped",
+                "summary": f"Not rehearsed: it would {question}."[:_MAX_STEP_SUMMARY],
+            }
+        else:
+            outputs[ask.step] = {
+                "status": "completed",
+                "kind": "ask",
+                "summary": f"Rehearsal: stopped here. Would ask you: {question}"[:_MAX_STEP_SUMMARY],
+                "rehearsed": True,
+            }
         for s in steps[ask.index + 1:]:
             outputs.setdefault(s.name, {
                 "status": "skipped", "kind": s.kind,

@@ -107,6 +107,8 @@ def _blank_passwords(args: dict[str, Any]) -> dict[str, Any]:
 
 class PdfArrangeTool(Tool):
     name = "pdf_arrange"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('output',)
     reversibility = Reversibility.REVERSIBLE  # TX-01: only the NEW output file
     description = (
         "Rearrange, merge, rotate, delete, duplicate, reverse, or crop the "
@@ -311,6 +313,8 @@ class PdfArrangeTool(Tool):
 
 class PdfSplitTool(Tool):
     name = "pdf_split"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('out_dir',)
     reversibility = Reversibility.REVERSIBLE  # TX-01: only the NEW output files
     description = (
         "Split a real PDF into multiple NEW PDFs in the session workspace — "

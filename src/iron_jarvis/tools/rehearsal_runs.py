@@ -877,12 +877,18 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         effect = R.effect_of(row.tool, args, platform.registry.get(row.tool) if row.tool else None)
         if (row.would or "run") != "refuse":
             order.append((row.tool if row.tool in R.AFTER_THE_RUN else effect.kind, True))
-        if row.tool == "workflow_ask" and stopped_at is None:
+        if row.tool in ("workflow_ask", "workflow_held") and stopped_at is None:
             after = args.get("after") if isinstance(args.get("after"), list) else []
+            asks = row.tool == "workflow_ask"
             stopped_at = {
-                "question": _mask(str(effect.words or "").removeprefix("ask you: ")),
+                "question": _mask(str(effect.words or "").removeprefix("ask you: ")) if asks else "",
+                # Leap 06-b review: where it stopped, in words ("would ask
+                # you", "would decide using what “W” would have made").
+                "where": "would ask you" if asks else f"would {_mask(str(effect.words or ''))}",
                 "not_rehearsed": [_mask(str(a)) for a in after if str(a).strip()][:20],
             }
+        if row.tool == "workflow_held":
+            continue  # where it stopped: said by ``stopped_words``, not an item
         # An item quotes a command or a message: every secret-looking value
         # in it is masked (the shared mask), on the card and on the phone.
         item = {"kind": effect.kind, "words": _mask(effect.words), "target": _mask(effect.target),
@@ -926,6 +932,9 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         # what came after it (not rehearsed).
         "stopped_at": stopped_at,
         "stopped_words": _stopped_words(stopped_at),
+        # Leap 06-b review: a paused goal's rehearsal says the goal itself
+        # will not run until it is resumed (read live).
+        "note": PAUSED_GOAL_WORDS if _goal_is_paused(platform, rec) else "",
         "error": _mask(str(summary.get("error") or "")),
         # Why no run started, in the schedule row's own words ("nothing new
         # to review"): only for a finished rehearsal that started none. A
@@ -942,15 +951,31 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     }
 
 
+#: The line a paused goal's rehearsal adds (leap 06-b review).
+PAUSED_GOAL_WORDS = "This goal is paused, so it will not run until you resume it."
+
+
+def _goal_is_paused(platform: Any, rec: RehearsalRecord) -> bool:
+    """Is the goal a rehearsal tried paused NOW? BLOCKING. Never raises."""
+    if rec.subject_kind != "goal":
+        return False
+    try:
+        goal = platform.goal_engine.store.get(rec.subject_id)
+        return goal is not None and goal.state == "paused"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _stopped_words(stopped_at: "dict[str, Any] | None") -> str:
     """The line under a workflow's report that ended at its question."""
     if not stopped_at:
         return ""
     after = list(stopped_at.get("not_rehearsed") or [])
+    where = str(stopped_at.get("where") or "would ask you")
     if not after:
-        return "It stopped where it would ask you. Nothing comes after the question."
+        return f"It stopped where it {where}. Nothing comes after it."
     listed = after[0] if len(after) == 1 else ", ".join(after[:-1]) + " and " + after[-1]
-    return f"It stopped where it would ask you, so what comes after was not rehearsed: {listed}."
+    return f"It stopped where it {where}, so what comes after was not rehearsed: {listed}."
 
 
 # --------------------------------------------------------------------------- #
@@ -1100,6 +1125,8 @@ def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool =
         lines.append(str(view["stopped_words"]))
     if view.get("guessed_words"):
         lines.append(str(view["guessed_words"]))
+    if view.get("note"):
+        lines.append(str(view["note"]))
     return "\n".join(lines)
 
 

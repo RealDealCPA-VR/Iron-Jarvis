@@ -329,18 +329,22 @@ def prune_runs(
     SYNCHRONOUS; wire it through ``asyncio.to_thread``, never directly on the
     event loop (the v1.153.1 "Daemon offline" failure mode).
     """
-    from .models import WorkflowRunRecord
+    from .models import WorkflowRunRecord, real_runs
 
     keep = max(0, int(keep))
     with session_scope(engine) as db:
-        stale_ids = list(
-            db.exec(
-                select(WorkflowRunRecord.id)  # type: ignore[call-overload]
-                .where(WorkflowRunRecord.status.in_(PRUNABLE_RUN_STATUSES))  # type: ignore[attr-defined]
-                .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
-                .offset(keep)
+        # Leap 06-b review: rehearsals' runs never take a real run's place in
+        # the window: the two are kept apart, ``keep`` of each.
+        stale_ids = []
+        for kind in (real_runs(), ~real_runs()):
+            stale_ids += list(
+                db.exec(
+                    select(WorkflowRunRecord.id)  # type: ignore[call-overload]
+                    .where(WorkflowRunRecord.status.in_(PRUNABLE_RUN_STATUSES), kind)  # type: ignore[attr-defined]
+                    .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
+                    .offset(keep)
+                )
             )
-        )
         cutoff = utcnow() - timedelta(days=max(0, int(interrupted_after_days)))
         stale_ids += list(
             db.exec(

@@ -394,12 +394,17 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
         from ...workflows.models import WorkflowRecord, WorkflowRunRecord
 
         total = _count(db, select(func.count()).select_from(WorkflowRecord))
-        used = _count(db, select(func.count()).select_from(WorkflowRunRecord).where(WorkflowRunRecord.started_at >= since))
+        from ...workflows.models import real_runs
+
+        # Leap 06-b review: a rehearsal's run is no use of a workflow.
+        used = _count(db, select(func.count()).select_from(WorkflowRunRecord).where(
+            WorkflowRunRecord.started_at >= since, real_runs()))
         live = _count(
             db,
             select(func.count())
             .select_from(WorkflowRunRecord)
-            .where(WorkflowRunRecord.status.in_(["running", "waiting", "cancelling", "resuming"])),  # type: ignore[attr-defined]
+            .where(WorkflowRunRecord.status.in_(["running", "waiting", "cancelling", "resuming"]),  # type: ignore[attr-defined]
+                   real_runs()),
         )
         return _node(
             "workflows", "page_workflows", setup=total, used=used, live=live, unit="workflow",

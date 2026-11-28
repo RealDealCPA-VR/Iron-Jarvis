@@ -213,9 +213,9 @@ def register(app: FastAPI, d) -> None:
                 stmt = stmt.where(WorkflowRunRecord.status == status)
             # Leap 06-b: a rehearsal's run is not a run of the workflow; its
             # report is the rehearsal's card (GET /rehearsals/{id}).
-            stmt = stmt.where(
-                (WorkflowRunRecord.rehearsal_id == "") | (WorkflowRunRecord.rehearsal_id.is_(None))  # type: ignore[union-attr]
-            )
+            from ...workflows.models import real_runs
+
+            stmt = stmt.where(real_runs())
             if offset:
                 stmt = stmt.offset(offset)
             rows = list(db.exec(stmt))

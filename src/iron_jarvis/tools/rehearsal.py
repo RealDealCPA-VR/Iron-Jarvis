@@ -196,7 +196,7 @@ def holds(tool: Any) -> bool:
 # --------------------------------------------------------------------------- #
 
 #: The kinds of effect a report counts.
-KINDS = ("write", "change", "move", "remove", "send", "run", "app", "page", "ask")
+KINDS = ("write", "change", "move", "remove", "send", "run", "app", "page", "ask", "stop")
 
 
 @dataclass(frozen=True)
@@ -435,6 +435,13 @@ SIDE_DOORS: dict[str, SideDoor] = {
     "workflow_ask": SideDoor(
         "ask", "ask you a question", "ask you", "question", "workflows/engine.py"
     ),
+    # Leap 06-b review: an If or a For each that would decide on, or a read
+    # that would read, what a HELD step would have made. The rehearsal ENDS
+    # there (no lane guessed), names it and what came after (``after``).
+    # Listed, never counted: it is not something the run would change.
+    "workflow_held": SideDoor(
+        "stop", "stop where it needs what a held step would have made", "", "", "workflows/engine.py"
+    ),
 }
 
 #: Side doors that act only AFTER the run ends (its delivery, a webhook that
@@ -459,7 +466,7 @@ def guessed_after(rows: "list[tuple[str, bool]]") -> bool:
     seen_change = False
     for kind, held in rows:
         if held:
-            if kind != "ask" and kind not in AFTER_THE_RUN:
+            if kind not in ("ask", "stop") and kind not in AFTER_THE_RUN:
                 seen_change = True
         elif kind == "read" and seen_change:
             return True

@@ -71,10 +71,10 @@ async def test_a_workflow_that_writes_then_reads_its_own_file_says_so(daemon):
     ], project_id=pid)
     started = await RR.start(p, "workflow", "Write and check")
     view = await _settled(p, started["id"])
-    # The read found no file (the write was held): the rehearsal stops there
-    # and says why it may differ from the real run.
-    assert view["status"] == "failed", view
-    assert view["error"].startswith("The step “Read it back” failed:"), view["error"]
+    # The read found no file (the write was held): the rehearsal ENDS there
+    # (06-b review), names it, and says why it may differ from the real run.
+    assert view["status"] == "ready", view
+    assert view["stopped_at"]["where"] == "would read what “Write” would have written"
     assert view["guessed_after"] is True
     assert view["guessed_words"] == WORDS
     assert [w["words"] for w in view["would"]] == ["write total.txt"]

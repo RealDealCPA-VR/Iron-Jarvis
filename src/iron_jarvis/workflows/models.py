@@ -78,6 +78,14 @@ class WorkflowRunRecord(SQLModel, table=True):
     finished_at: datetime | None = None
 
 
+def real_runs():
+    """Leap 06-b: the SQL condition for a run that is NOT a rehearsal (its
+    ``rehearsal_id`` is "" or NULL on an older row). Every count, list and
+    retention window of workflow runs uses it: a rehearsal is no run of the
+    workflow."""
+    return (WorkflowRunRecord.rehearsal_id == "") | (WorkflowRunRecord.rehearsal_id.is_(None))  # type: ignore[union-attr]
+
+
 def reconcile_interrupted_runs(engine: Engine) -> int:
     """On boot, mark runs left ``running``/``cancelling`` by a crash/restart as
     ``interrupted`` (none are actually executing on a fresh process) so they

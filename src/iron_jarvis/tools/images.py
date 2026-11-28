@@ -646,6 +646,8 @@ _HELD_NO_VISION_ERROR = (
 
 class ImageConvertTool(_ImageTool):
     name = "image_convert"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('target',)
     #: v1.504.0 (4.5): a convert onto an existing image is undoable, and the
     #: replaced file is kept in the app's trash.
     reversibility = Reversibility.REVERSIBLE
@@ -734,6 +736,8 @@ class ImageConvertTool(_ImageTool):
 
 class ImageResizeTool(_ImageTool):
     name = "image_resize"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('target',)
     #: v1.504.0 (4.5): the default writes over the SOURCE — the user's own
     #: image. It is undoable, and the original is kept in the app's trash.
     reversibility = Reversibility.REVERSIBLE

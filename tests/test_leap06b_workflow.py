@@ -150,7 +150,9 @@ async def test_a_write_a_notify_and_an_ask_rehearse_to_a_report_naming_all_three
     )
     assert view["counts"] == {"write": 1, "send": 1, "ask": 1}
     # The ask ENDS the rehearsal and names what came after it.
-    assert view["stopped_at"] == {"question": "Send it to the team?", "not_rehearsed": ["“Archive”"]}
+    assert view["stopped_at"] == {
+        "question": "Send it to the team?", "where": "would ask you", "not_rehearsed": ["“Archive”"],
+    }
     assert view["stopped_words"] == (
         "It stopped where it would ask you, so what comes after was not rehearsed: “Archive”."
     )
@@ -390,7 +392,9 @@ async def test_an_ask_inside_an_if_lists_the_rest_of_its_lane_then_the_workflows
     ])
     view = await _rehearse(app, "workflow", "Ask in if")
     assert view["status"] == "ready", view
-    assert view["stopped_at"] == {"question": "Go ahead?", "not_rehearsed": ["“Write”", "“Tell”"]}
+    assert view["stopped_at"] == {
+        "question": "Go ahead?", "where": "would ask you", "not_rehearsed": ["“Write”", "“Tell”"],
+    }
     assert sent == [] and not (folder / "go.txt").exists()
 
 

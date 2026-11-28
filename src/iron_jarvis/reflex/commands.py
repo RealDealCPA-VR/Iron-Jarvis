@@ -69,8 +69,11 @@ class CommandInterpreter:
         from sqlmodel import select
 
         cfg = self.p.config
+        from ..workflows.models import real_runs
+
         with session_scope(self.p.engine) as db:
-            runs = list(db.exec(select(WorkflowRunRecord)))
+            # Leap 06-b review: a rehearsal's run is no live work of a workflow.
+            runs = list(db.exec(select(WorkflowRunRecord).where(real_runs())))
         # v1.170.0: a parked (``waiting``) or just-answered (``resuming``) run
         # is live work in flight — counting only running/cancelling made a run
         # waiting on THIS phone invisible to the person it was waiting on.
@@ -112,7 +115,7 @@ class CommandInterpreter:
         return f"Couldn't start '{name}': {res.get('error')}"
 
     async def _cmd_runs(self, _rest: str) -> str:
-        from ..workflows.models import WorkflowRunRecord
+        from ..workflows.models import WorkflowRunRecord, real_runs
         from sqlmodel import select
 
         with session_scope(self.p.engine) as db:
@@ -120,10 +123,7 @@ class CommandInterpreter:
                 db.exec(
                     select(WorkflowRunRecord)
                     # Leap 06-b: a rehearsal's run is not a run of the workflow.
-                    .where(
-                        (WorkflowRunRecord.rehearsal_id == "")
-                        | (WorkflowRunRecord.rehearsal_id.is_(None))  # type: ignore[union-attr]
-                    )
+                    .where(real_runs())
                     .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
                     .limit(8)
                 )

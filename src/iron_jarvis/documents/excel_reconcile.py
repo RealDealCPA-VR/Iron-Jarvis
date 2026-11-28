@@ -625,6 +625,8 @@ _SIDE_SCHEMA = {
 
 class ExcelReconcileTool(Tool):
     name = "excel_reconcile"
+    #: Leap 06-b review: checked in a rehearsal (``Tool.rehearsal_preflight``).
+    workspace_paths = ('save_as',)
     description = (
         "Match two lists of transactions row by row: a bank statement against the books, a sub-ledger "
         "against its control account, two exports. Use this instead of matching rows yourself. Amounts are "
