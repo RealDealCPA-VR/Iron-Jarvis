@@ -312,10 +312,12 @@ const pause = (ms: number) => act(() => new Promise<void>((r) => setTimeout(r, m
 async function commentThroughDialog(words: string, index = 0) {
   const press = await screen.findAllByTestId(`review-hunk-comment-${index}`, {}, { timeout: 10_000 });
   fireEvent.click(press[0]);
-  const box = await screen.findByTestId("review-comment-words");
+  // A slow runner (CI's took 5 s for one test) can take longer than the
+  // default 1 s to draw the dialog: the waits get the file's 10 s bound.
+  const box = await screen.findByTestId("review-comment-words", {}, { timeout: 10_000 });
   fireEvent.change(box, { target: { value: words } });
   fireEvent.click(screen.getByTestId("review-comment-save"));
-  await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull());
+  await waitFor(() => expect(screen.queryByTestId("review-comment-dialog")).toBeNull(), { timeout: 10_000 });
 }
 
 /* ================================================================ the store */
@@ -975,21 +977,27 @@ describe("Build › Code", () => {
     codeView("a1");
     await screen.findByTestId("code-stop", {}, { timeout: 10_000 });
     await commentThroughDialog("Use a constant");
-    await screen.findByTestId("comment-chip");
+    await screen.findByTestId("comment-chip", {}, { timeout: 10_000 });
     type("also this");
     fireEvent.keyDown(screen.getByTestId("code-box"), { key: "Enter", shiftKey: true });
-    await waitFor(() => expect(posted("/build/app/sessions/a1/steer")).toHaveLength(1));
+    await waitFor(() => expect(posted("/build/app/sessions/a1/steer")).toHaveLength(1), { timeout: 10_000 });
     expect(posted("/build/app/sessions/a1/steer")[0].body).toEqual({ text: "also this" });
-    await waitFor(() => expect((screen.getByTestId("code-box") as HTMLTextAreaElement).value).toBe(""));
+    await waitFor(() => expect((screen.getByTestId("code-box") as HTMLTextAreaElement).value).toBe(""), {
+      timeout: 10_000,
+    });
     expect(screen.getByTestId("comment-chip").textContent).toBe("cart.py 1–2: Use a constant");
     expect(posted("/build/app/sessions/a1/queue")).toHaveLength(0);
-    await pause(20);
     // The reply had ended: the note goes as a message of its own, and the
     // comments still wait for the user's next message from the box.
     H.fail["/build/app/sessions/a1/steer"] = { status: 409, message: "not working", body: { code: "not_working" } };
     type("one more");
+    // A note pressed while the first is still going out does nothing: wait
+    // for its arrow to come back on (it replaces a fixed 20 ms pause).
+    await waitFor(() => expect((screen.getByTestId("code-steer-send") as HTMLButtonElement).disabled).toBe(false), {
+      timeout: 10_000,
+    });
     fireEvent.keyDown(screen.getByTestId("code-box"), { key: "Enter", shiftKey: true });
-    await waitFor(() => expect(turnBody("a1")).toBeTruthy());
+    await waitFor(() => expect(turnBody("a1")).toBeTruthy(), { timeout: 10_000 });
     expect(turnBody("a1")).toMatchObject({ text: "one more" });
     expect(turnBody("a1")).not.toHaveProperty("comments");
     expect(screen.getByTestId("comment-chip")).toBeTruthy();
