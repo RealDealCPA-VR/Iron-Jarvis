@@ -38,7 +38,7 @@
           "started_at": "2026-10-27T03:31:00Z",
           "ended_at": "2026-10-27T03:33:05Z",
           "failure": "The model's server went away.",
-          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": false, "pr_url": "", "merged": false},
+          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": false, "pr_url": "", "merged": false, "merged_into": "", "merge_reversed": false},
           "usage_words": ["12,345 tokens · ≈$0.42 at list price (your plan)"]
         },
         {
@@ -76,7 +76,7 @@
           "local_only": false,
           "started_at": "2026-10-27T03:32:00Z",
           "ended_at": "2026-10-27T03:37:00Z",
-          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": false, "pr_url": "", "merged": false},
+          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": false, "pr_url": "", "merged": false, "merged_into": "", "merge_reversed": false},
           "usage_words": ["1,000 tokens · free"]
         },
         {
@@ -108,14 +108,24 @@
           "local_only": false,
           "started_at": "2026-10-27T03:33:00Z",
           "ended_at": "2026-10-27T03:43:12Z",
-          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": true, "pr_url": "https://github.com/acme/calc/pull/7", "merged": false},
+          "session": {"exists": true, "archived": false, "has_branch": true, "removed": false, "pushed": true, "pr_url": "https://github.com/acme/calc/pull/7", "merged": false, "merged_into": "", "merge_reversed": false},
           "usage_words": ["5,500 tokens · $0.05"]
         }
       ],
       "counts": {"failed": 1, "needs_you": 1, "running": 0, "done": 1, "stopped": 0},
       "words": {"title": "Last night: 1 failed, 1 needs you, 1 done", "body": "Failed: Fix the parser · Needs you: Write the release notes · Done: Make add() add"},
       "ready_at": "2026-10-27T03:43:30Z",
-      "notified": true
+      "notified": true,
+      "land": {
+        "folders": [
+          {"folder": "C:\\work\\parser", "folder_name": "parser", "green": 0, "total": 1, "words": "0 of 1 passed their tests.", "button": ""},
+          {"folder": "C:\\work\\shop", "folder_name": "shop", "green": 0, "total": 1, "words": "0 of 1 passed their tests.", "button": ""},
+          {"folder": "C:\\work\\calc", "folder_name": "calc", "green": 1, "total": 1, "words": "1 task passed its tests.", "button": "Merge it"}
+        ],
+        "green": 1,
+        "total": 3,
+        "merges": []
+      }
     },
     {
       "night": "2026-10-25",
@@ -148,14 +158,22 @@
           "local_only": false,
           "started_at": "2026-10-26T03:01:00Z",
           "ended_at": "2026-10-26T03:01:30Z",
-          "session": {"exists": true, "archived": true, "has_branch": true, "removed": true, "pushed": false, "pr_url": "", "merged": false},
+          "session": {"exists": true, "archived": true, "has_branch": true, "removed": true, "pushed": false, "pr_url": "", "merged": false, "merged_into": "", "merge_reversed": false},
           "usage_words": []
         }
       ],
       "counts": {"failed": 0, "needs_you": 0, "running": 0, "done": 0, "stopped": 1},
       "words": {"title": "Last night: 1 stopped", "body": "Stopped: Tidy the readme"},
       "ready_at": "2026-10-26T12:00:30Z",
-      "notified": true
+      "notified": true,
+      "land": {
+        "folders": [
+          {"folder": "C:\\work\\shop", "folder_name": "shop", "green": 0, "total": 1, "words": "0 of 1 passed their tests.", "button": ""}
+        ],
+        "green": 0,
+        "total": 1,
+        "merges": []
+      }
     }
   ],
   "keep": 14

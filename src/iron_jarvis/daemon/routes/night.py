@@ -15,6 +15,9 @@ ROUTES (Coding sessions › Tonight):
   ``POST /build/night/{id}/move {direction: up|down}``;
   ``POST /build/night/{id}/cancel`` — a queued task never starts (stopped);
   a running one's turn is stopped (it settles as stopped).
+* 25-a, Merge all that passed: ``GET``/``POST /build/night/summaries/{night}/land``,
+  ``GET /build/night/land/{id}``, ``POST /build/night/land/{id}/undo``
+  (``routes/night_land``).
 
 THE LOOP (:func:`night_loop`, a lifespan task on the DAEMON's loop —
 ``bg_tasks["night_shift"]``, ``loop_health["night_shift"]``; never a
@@ -598,6 +601,12 @@ async def morning_pass(d: Any, settled: "list[str] | None" = None) -> list[str]:
     return made
 
 
+def _merge_reversed(facts: dict[str, Any]) -> bool:
+    from ...harness.landing import merge_reversed
+
+    return merge_reversed(facts)
+
+
 def _session_facts(engine: Any, thread_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Each night session's branch as it is NOW (the buttons: pushed, a pull
     request, the folder thrown away), off its stored git facts — no git
@@ -624,6 +633,10 @@ def _session_facts(engine: Any, thread_ids: list[str]) -> dict[str, dict[str, An
                 "pushed": bool(facts.get("pushed_at")),
                 "pr_url": str(facts.get("pr_url") or ""),
                 "merged": bool(facts.get("merged_at")),
+                # 25-a: where Merge (or Merge all) put it, and whether a
+                # Merge all's Undo reversed it since (its commits stay in history).
+                "merged_into": str(facts.get("merged_into") or ""),
+                "merge_reversed": _merge_reversed(facts),
             }
     return out
 
@@ -639,11 +652,20 @@ def summaries_view(d: Any) -> dict[str, Any]:
     ids = [str(r.get("thread_id") or "") for n in nights for r in n["rows"]]
     live = _session_facts(engine, ids)
     gone = {"exists": False, "archived": False, "has_branch": False, "removed": False, "pushed": False,
-            "pr_url": "", "merged": False}
+            "pr_url": "", "merged": False, "merged_into": "", "merge_reversed": False}
     for n in nights:
         for r in n["rows"]:
             r["session"] = live.get(str(r.get("thread_id") or ""), gone)
             r["usage_words"] = [M.usage_words(u) for u in r.get("usage") or []]
+        # 25-a: Merge all that passed — the head line's numbers and the
+        # night's merges, read off the records (no git call; the preview reads git).
+        try:
+            from .night_land import night_land_view
+
+            n["land"] = night_land_view(engine, n["night"], n["rows"])
+        except Exception:  # noqa: BLE001 — the summary stands without its merge line
+            log.warning("night %s's merge line could not be read", n.get("night"), exc_info=True)
+            n["land"] = None
     return {"nights": nights, "keep": M.KEEP_NIGHTS}
 
 
@@ -1329,6 +1351,11 @@ def list_view(d: Any) -> dict[str, Any]:
 
 
 def register(app: FastAPI, d: Any) -> None:
+    from . import night_land
+
+    # 25-a: Merge all that passed (the preview, the merge, its record, Undo).
+    night_land.register(app, d)
+
     def _refused(exc: N.NightRefused) -> HTTPException:
         return HTTPException(status_code=exc.status, detail=str(exc))
 

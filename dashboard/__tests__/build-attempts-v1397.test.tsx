@@ -291,13 +291,13 @@ describe("when they end: one card, side by side, and Keep", () => {
   it("Keep posts the person's press and re-reads; a refusal is said in words", async () => {
     const kept = vi.fn();
     api.postAnswers["POST /build/sessions/s1/attempts/keep"] = new api.ApiError(
-      "Merging would conflict in calc.py. Nothing was changed: bring ij/session-ab12's changes into this branch.", 409,
+      "Merging would clash in calc.py. Nothing was changed: bring ij/session-ab12's changes into this branch.", 409,
     );
     renderCard(CARD, true, kept);
     fireEvent.click(within(column("try2")).getByTestId("attempt-keep"));
     const said = await screen.findByTestId("attempts-said");
     expect(said).toHaveAttribute("role", "alert");
-    expect(said).toHaveTextContent("would conflict in calc.py");
+    expect(said).toHaveTextContent("would clash in calc.py");
     expect(kept).not.toHaveBeenCalled();
     expect(api.calls).toContainEqual({
       method: "POST", path: "/build/sessions/s1/attempts/keep", body: { turn_id: "t1", attempt: "try2" },

@@ -666,7 +666,7 @@ async def test_a_merge_conflict_is_said_in_words_and_nothing_moves(app, fake, re
     status, body = await asgi(app, "POST", f"/build/sessions/{sid}/attempts/keep",
                               {"turn_id": "mc-1", "attempt": codex["id"]})
     assert status == 409, body
-    assert "would conflict in calc.py" in body["detail"] and "Nothing was changed" in body["detail"]
+    assert "would clash in calc.py" in body["detail"] and "Nothing was changed" in body["detail"]
     # Nothing moved: the session's branch, every attempt's folder, the
     # attempt's own branch (Iron Jarvis's commit taken back: its work is in
     # its folder, not committed, exactly as before the press), the card.

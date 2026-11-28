@@ -287,6 +287,7 @@ _LATE_MODEL_MODULES = (
     "..checks.record",        # CheckRecord — what Iron Jarvis itself checked (intelligence plan, release 5)
     "..daemon.chat_kept",     # ChatKept — what a chat keeps between replies (intelligence plan, release 7)
     "..scheduling.offers",   # ScheduleOfferRecord — an offer to run a repeated task by itself (next leaps 19-b)
+    "..harness.landing",      # LandRecord — one press of Merge all that passed (25-a)
 )
 
 

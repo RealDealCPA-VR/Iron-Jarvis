@@ -617,7 +617,7 @@ async def test_a_merge_that_would_conflict_is_refused_and_nothing_is_left_half_m
     before = snapshot(repo)
     status, body = await asgi(app, "POST", f"/build/sessions/{sid}/git/merge", {})
     assert status == 409, body
-    assert "would conflict in app.py" in body["detail"] and "Nothing was changed" in body["detail"]
+    assert "would clash in app.py" in body["detail"] and "Nothing was changed" in body["detail"]
     assert snapshot(repo) == before
     assert not (repo / ".git" / "MERGE_HEAD").exists()
 

@@ -129,6 +129,54 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## Merge all that passed, in the morning (v1.598.0)
+
+The night shift leaves each task's work on its own branch. In the morning,
+**Coding sessions › Last night** says how many passed their tests, for example *5 of 6
+passed their tests.*, with one button: **Merge all 5**. Its count is what can
+be merged now: a task whose branch would clash with your main branch (both
+change the same lines) says *Merging would clash in a.py* on its own row and
+is not counted. When nothing can be merged now, the button is **Show why**.
+
+**The first press only shows.** It lists every branch that passed, in the
+order you queued the tasks on Tonight: its commits, every file it changes
+with the lines added and removed, the branch it goes into (*main in
+D:\code\shop*) and the test command run after each merge (*Tests run after
+each: `npm test`*). A branch that would clash says so here too and is left
+out, and so is every task that did not pass, each with why. A task that started
+from another branch (or in another repository) is left out too, and its row
+says so: open it to merge it into its own branch. If your checkout of
+the main branch has changes that are not committed, the list says so and
+nothing can be merged until you commit or put them away.
+
+**The second press merges exactly that list.** Iron Jarvis merges the
+branches one by one in a copy of your folder (the merges there run none of
+your repository's hooks), runs the tests after each, and stops at the first branch
+that clashes or whose tests fail: that branch and everything after it are
+not merged. Only then does your main branch move, once, to the last merge
+that passed; your own files change only at that moment. If a branch or your
+main branch moved after you looked, nothing is merged and the list asks you
+to look again. The result line says what happened, for example *Merged 3.
+Stopped at 'Add CSV export': 2 tests failed after merging it. Nothing after
+it was merged.* Under it, **Each step** lists every branch with how it ended
+and how long it took (*merged in the copy only* when your main branch never
+moved). Nothing is pushed: your main branch changed on this PC
+only, and pushing it stays yours. Emergency stop, or closing Iron Jarvis, ends
+a merge at once (a test that is running is stopped) and leaves your main
+branch as it was. If files that are not in git would be overwritten when your
+main branch moves, the result names them and nothing moves.
+
+**Undo** says what it will do before you press it (twice). When nothing came
+after the merge and it was not pushed, it puts your main branch back exactly
+as it was. Otherwise it adds one commit per merge that reverses it, so
+nothing is taken out of your history; those tasks then say *Merged into main,
+then reversed by Undo* and Merge all leaves them out (git cannot merge the
+same commits again). While your checkout has changes that
+are not committed, Undo waits and says so.
+
+A task's row says **Merged into main** once it is in. Chat does not merge
+the night's work: ask, and it says where the button is.
+
 ## A second model can double-check finished work (v1.597.0)
 
 If you have more than one model account on the Several accounts card (Settings › Connections), Iron Jarvis asks you once, under a reply that made or changed a file:
@@ -14909,7 +14957,7 @@ to **Branch** to see everything the branch changed against where it started
   them). Otherwise the Branch view offers **Open a pull request on GitHub**.
 - **Merge into main** (or whatever the base is) — two presses; a normal
   merge, never a rewrite. It is refused, with nothing changed, when the
-  merge would conflict, when your checkout of main has changes you have not
+  merge would clash, when your checkout of main has changes you have not
   committed, or when that checkout is in the middle of a rebase.
 - **Discard** — two presses; the second one says how many files are not
   committed. The worktree folder moves to Iron Jarvis's trash (never

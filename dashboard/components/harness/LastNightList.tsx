@@ -38,6 +38,8 @@ import {
   type AttemptsCard,
 } from "@/lib/buildAttempts";
 import { getSession } from "@/lib/buildSessions";
+import { LastNightMerge, useMergeLook } from "@/components/harness/LastNightMerge";
+import { clashByTask } from "@/lib/nightLand";
 import { providerDisplay } from "@/lib/onboarding";
 import { useVisibleInterval } from "@/lib/useVisibleInterval";
 import {
@@ -87,10 +89,13 @@ async function readRowAttempts(threadId: string): Promise<RowAttempts | null> {
 
 function NightTaskRow({
   row,
+  clash,
   onChanged,
   onOpenSession,
 }: {
   row: NightRow;
+  /** 25-a: "Merging would clash in a.py." from the night's preview ("" = none). */
+  clash: string;
   onChanged: () => void;
   onOpenSession: (threadId: string, opts?: { changes?: boolean }) => void;
 }) {
@@ -215,6 +220,12 @@ function NightTaskRow({
         {testsWords(row)} · {filesWords(row)}
         {row.commit ? ` · Committed ${row.commit.sha.slice(0, 7)}` : ""}
       </p>
+      {clash ? (
+        // 25-a: said on the row before anything is pressed; Merge all leaves it out.
+        <p data-testid={`last-night-clash-${row.id}`} className="break-words text-[12px] font-medium text-tone-warn">
+          {clash}
+        </p>
+      ) : null}
       {row.committedWords || row.commitNote ? (
         <p data-testid={`last-night-commit-${row.id}`} className="break-words text-[12px] text-zinc-500">
           {row.committedWords || row.commitNote}
@@ -335,6 +346,13 @@ function NightTaskRow({
             Folder in the trash; the branch is kept.
           </span>
         ) : null}
+        {s.merged ? (
+          // 25-a: VOCABULARY.md's "Merged" (never "landed").
+          <span data-testid={`last-night-merged-${row.id}`} className="px-2 text-[12px] text-zinc-400">
+            Merged{s.mergedInto ? ` into ${s.mergedInto}` : ""}
+            {s.mergeReversed ? ", then reversed by Undo" : ""}
+          </span>
+        ) : null}
       </div>
       {said ? (
         <p role="status" data-testid={`last-night-said-${row.id}`} className="break-words text-[12px] text-zinc-400">
@@ -353,23 +371,40 @@ function NightTaskRow({
 function NightBlock({
   summary,
   newest,
+  active,
   onChanged,
   onOpenSession,
 }: {
   summary: NightSummary;
   newest: boolean;
+  /** On screen (the newest night, or an earlier one that is open). */
+  active: boolean;
   onChanged: () => void;
   onOpenSession: (threadId: string, opts?: { changes?: boolean }) => void;
 }) {
+  // 25-a: the night's preview, read once while it is on screen (not on the
+  // summary's beat), so a clash is on its row before anything is pressed.
+  const look = useMergeLook(summary.night, summary.land, active);
+  const clashes = clashByTask(look.look);
   return (
-    <ol data-testid={`last-night-rows-${summary.night}`} className="divide-y divide-white/[0.05]">
-      {summary.rows.map((r) => (
-        <NightTaskRow key={r.id} row={r} onChanged={onChanged} onOpenSession={onOpenSession} />
-      ))}
-      {!summary.rows.length ? (
-        <li className="px-2 py-2 text-[12px] text-zinc-500">{newest ? "No task ran that night." : "No tasks."}</li>
-      ) : null}
-    </ol>
+    <>
+      {/* 25-a: "5 of 6 passed their tests. Merge all 5", at the top of the night. */}
+      <LastNightMerge night={summary.night} land={summary.land} look={look} onChanged={onChanged} />
+      <ol data-testid={`last-night-rows-${summary.night}`} className="divide-y divide-white/[0.05]">
+        {summary.rows.map((r) => (
+          <NightTaskRow
+            key={r.id}
+            row={r}
+            clash={clashes[r.id] ?? ""}
+            onChanged={onChanged}
+            onOpenSession={onOpenSession}
+          />
+        ))}
+        {!summary.rows.length ? (
+          <li className="px-2 py-2 text-[12px] text-zinc-500">{newest ? "No task ran that night." : "No tasks."}</li>
+        ) : null}
+      </ol>
+    </>
   );
 }
 
@@ -383,6 +418,8 @@ export function LastNightList({
 }) {
   const [nights, setNights] = useState<NightSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The earlier nights that are open (their merge preview is read only then).
+  const [openOlder, setOpenOlder] = useState<ReadonlySet<string>>(() => new Set(focusNight ? [focusNight] : []));
 
   const refresh = useCallback(async () => {
     try {
@@ -417,8 +454,8 @@ export function LastNightList({
           </p>
         ) : null}
         <p data-testid="last-night-rule" className="text-[12px] text-zinc-500">
-          When a night task ends, Iron Jarvis commits its work to the task&apos;s own branch. It never pushes or
-          merges: that is yours to do here.
+          When a night task ends, Iron Jarvis commits its work to the task&apos;s own branch. It merges only when
+          you press Merge here, and it never pushes: that is yours to do.
         </p>
       </header>
 
@@ -436,7 +473,7 @@ export function LastNightList({
         </p>
       ) : (
         <>
-          <NightBlock summary={newest} newest onChanged={() => void refresh()} onOpenSession={onOpenSession} />
+          <NightBlock summary={newest} newest active onChanged={() => void refresh()} onOpenSession={onOpenSession} />
           {older.length ? (
             <div data-testid="last-night-older" className="space-y-1 pt-2">
               <h3 className="px-2 text-[12px] font-medium text-zinc-400">Earlier nights</h3>
@@ -445,12 +482,28 @@ export function LastNightList({
                   key={n.night}
                   data-testid={`last-night-older-${n.night}`}
                   open={focusNight === n.night}
+                  onToggle={(e) => {
+                    const isOpen = (e.currentTarget as HTMLDetailsElement).open;
+                    setOpenOlder((prev) => {
+                      if (prev.has(n.night) === isOpen) return prev;
+                      const next = new Set(prev);
+                      if (isOpen) next.add(n.night);
+                      else next.delete(n.night);
+                      return next;
+                    });
+                  }}
                   className="rounded-[10px] px-2 py-1"
                 >
                   <summary className="cursor-pointer select-none text-[13px] text-zinc-300 hover:text-zinc-100">
                     {nightHeading(n, false)} · {n.rows.length} task{n.rows.length === 1 ? "" : "s"}: {countsWords(n.counts)}
                   </summary>
-                  <NightBlock summary={n} newest={false} onChanged={() => void refresh()} onOpenSession={onOpenSession} />
+                  <NightBlock
+                    summary={n}
+                    newest={false}
+                    active={openOlder.has(n.night)}
+                    onChanged={() => void refresh()}
+                    onOpenSession={onOpenSession}
+                  />
                 </details>
               ))}
             </div>

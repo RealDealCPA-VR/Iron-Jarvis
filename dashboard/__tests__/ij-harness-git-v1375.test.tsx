@@ -485,13 +485,13 @@ describe("the Branch view", () => {
   it("a merge refused after Keep's commit says both: what was committed, and the daemon's words", async () => {
     api.posts["POST /build/sessions/s1/git/commit"] = { committed: true, sha: "9f8e7d6c5b4a", subject: "Add the cart" };
     api.posts["POST /build/sessions/s1/git/merge"] = new api.ApiError("x", 409, false, {
-      detail: "Merging would conflict in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",
+      detail: "Merging would clash in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",
     });
     renderBranch();
     await screen.findByText("cart.py");
     fireEvent.click(screen.getByTestId("branch-keep"));
     const err = await screen.findByTestId("branch-error");
-    expect(err).toHaveTextContent("Committed 9f8e7d6c5b4a. Merging would conflict in app.py. Nothing was changed");
+    expect(err).toHaveTextContent("Committed 9f8e7d6c5b4a. Merging would clash in app.py. Nothing was changed");
     expect(screen.queryByTestId("branch-merged")).toBeNull();
   });
 
@@ -525,13 +525,13 @@ describe("the Branch view", () => {
 
   it("a refused merge says the daemon's words; nothing else happens", async () => {
     api.posts["POST /build/sessions/s1/git/merge"] = new api.ApiError("x", 409, false, {
-      detail: "Merging would conflict in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",
+      detail: "Merging would clash in app.py. Nothing was changed: bring main's changes into this branch and settle them first, then merge.",
     });
     renderBranch();
     await screen.findByText("cart.py");
     fireEvent.click(screen.getByRole("button", { name: "Merge into main" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm merge" }));
-    expect(await screen.findByTestId("branch-error")).toHaveTextContent("Merging would conflict in app.py. Nothing was changed");
+    expect(await screen.findByTestId("branch-error")).toHaveTextContent("Merging would clash in app.py. Nothing was changed");
     expect(screen.queryByTestId("branch-merged")).toBeNull();
   });
 

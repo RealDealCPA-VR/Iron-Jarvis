@@ -2805,6 +2805,14 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     )
                 except Exception:  # noqa: BLE001 — shutdown never raises
                     pass
+            # 25-a: a running Merge all stops (its test is killed, the base is
+            # not moved) before the loop waits for its worker threads.
+            try:
+                from .routes.night_land import stop_all as _stop_merges
+
+                _stop_merges()
+            except Exception:  # noqa: BLE001 — shutdown never raises
+                pass
             # v1.422.0: Build › Code's carry-on loop stops before its turns are
             # cut off (a carry-on started now would be cut off at once).
             _hosted_carry = bg_tasks.pop("build_app_carry", None)

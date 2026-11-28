@@ -196,6 +196,8 @@ GIT_KEYS: tuple[str, ...] = (
     "repo", "checkout", "main", "worktree", "branch", "base", "base_commit", "name",
     "created_at", "remote", "pushed_at", "pr_url", "pr_number", "merged_at",
     "merged_into", "merge_commit", "removed_at", "trash",
+    # 25-a: the merge commit a Merge all's Undo reversed (``landing.merge_reversed``).
+    "merge_reversed",
 )
 
 
@@ -1081,10 +1083,12 @@ def _split_z(text: str) -> list[str]:
     return [p for p in text.split("\0")]
 
 
-def _name_status(wt: Path, mb: str) -> list[tuple[str, str, str]]:
+def _name_status(wt: Path, mb: str, to: str = "") -> list[tuple[str, str, str]]:
     """``[(code, old, new)]`` of the working tree against ``mb`` (tracked
-    files, committed and not)."""
-    got = _g(["diff", "--no-color", "--no-ext-diff", "-M", "--name-status", "-z", mb], wt, reads=True)
+    files, committed and not); with ``to`` (25-a), of commit ``to`` against
+    ``mb`` (no working tree read)."""
+    got = _g(["diff", "--no-color", "--no-ext-diff", "-M", "--name-status", "-z", mb, *([to] if to else [])],
+             wt, reads=True)
     if not got.ok:
         raise GitRefused("The branch's changes could not be read.", 409, _masked(got.err))
     parts = _split_z(got.out)
@@ -1106,8 +1110,9 @@ def _name_status(wt: Path, mb: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def _numstat(wt: Path, mb: str) -> dict[str, tuple[int | None, int | None]]:
-    got = _g(["diff", "--no-color", "--no-ext-diff", "-M", "--numstat", "-z", mb], wt, reads=True)
+def _numstat(wt: Path, mb: str, to: str = "") -> dict[str, tuple[int | None, int | None]]:
+    got = _g(["diff", "--no-color", "--no-ext-diff", "-M", "--numstat", "-z", mb, *([to] if to else [])],
+             wt, reads=True)
     out: dict[str, tuple[int | None, int | None]] = {}
     if not got.ok:
         return out
@@ -1650,6 +1655,54 @@ def pr_status(facts: dict[str, str]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+def merge_check(cwd: Any, onto: str, head: str) -> dict[str, Any]:
+    """WOULD ``head`` MERGE INTO ``onto`` CLEANLY? (25-a: the read Merge made
+    inline, as its own function — Merge, and each step of a landing, call it.)
+    ``git merge-tree --write-tree`` of the two commits: no working tree, index
+    or ref is touched (git writes only the merged tree's objects).
+    ``{clean, files, tree}``: ``files`` are the paths that would clash (git's
+    own list, every one), ``tree`` the merged tree when clean.
+    :class:`GitRefused` when git could not tell. BLOCKING."""
+    check = _g(["merge-tree", "--write-tree", "--name-only", "--no-messages", onto, head], cwd, reads=True)
+    lines = [ln for ln in check.out.splitlines() if ln.strip()]
+    if check.code == 1:
+        seen: list[str] = []
+        for ln in lines[1:]:
+            name = ln.strip()
+            if name and name not in seen:
+                seen.append(name)
+        return {"clean": False, "files": seen, "tree": ""}
+    if not check.ok or not lines:
+        raise GitRefused("Git could not check whether the merge would go through.", 409,
+                         _masked(check.err or check.out))
+    return {"clean": True, "files": [], "tree": lines[0].strip()}
+
+
+def commit_files(cwd: Any, since: str, head: str, *, cap: int = MAX_FILES) -> dict[str, Any]:
+    """The files commit ``head`` changes against commit ``since`` (25-a: what
+    a branch would add to its base, from where they meet): ``{files: [{path,
+    status, added, removed}], added, removed, count, more}`` — at most ``cap``
+    listed, ``count`` every one. Commits only: no working tree is read.
+    :class:`GitRefused` when git could not read them. BLOCKING."""
+    entries = _name_status(Path(cwd), since, head)
+    counts = _numstat(Path(cwd), since, head)
+    files: list[dict[str, Any]] = []
+    added = removed = 0
+    for code, old, new in entries:
+        rel = new or old
+        a, r = counts.get(rel, (None, None))
+        added += int(a or 0)
+        removed += int(r or 0)
+        if len(files) < cap:
+            row: dict[str, Any] = {"path": rel, "status": {"A": "created", "D": "deleted"}.get(code, "modified"),
+                                   "added": a, "removed": r}
+            if code == "R" and old != new:
+                row["from"] = old
+            files.append(row)
+    return {"files": files, "added": added, "removed": removed, "count": len(entries),
+            "more": max(0, len(entries) - len(files))}
+
+
 def merge(facts: dict[str, str]) -> dict[str, Any]:
     """MERGE INTO <base> — a normal merge of ``ij/<name>`` into its base.
 
@@ -1683,19 +1736,16 @@ def merge(facts: dict[str, str]) -> dict[str, Any]:
     head = _ref_sha(wt, "HEAD")
     if _g(["merge-base", "--is-ancestor", head, base_sha], wt, reads=True).ok:
         raise GitRefused(NOTHING_TO_MERGE.format(base=base), 409)
-    check = _g(["merge-tree", "--write-tree", "--name-only", "--no-messages", base_sha, head], wt, reads=True)
-    lines = [ln for ln in check.out.splitlines() if ln.strip()]
-    if check.code == 1:
-        files = lines[1:9]
-        more = "" if len(lines) <= 9 else f" and {len(lines) - 9} more"
+    check = merge_check(wt, base_sha, head)
+    if not check["clean"]:
+        files = check["files"][:8]
+        more = "" if len(check["files"]) <= 8 else f" and {len(check['files']) - 8} more"
         raise GitRefused(
-            f"Merging would conflict in {', '.join(files) or 'some files'}{more}. Nothing was changed: "
+            # VOCABULARY.md (25-a): two branches that change the same lines CLASH.
+            f"Merging would clash in {', '.join(files) or 'some files'}{more}. Nothing was changed: "
             f"bring {base}'s changes into this branch and settle them first, then merge.", 409,
         )
-    if not check.ok or not lines:
-        raise GitRefused("Git could not check whether the merge would go through.", 409,
-                         _masked(check.err or check.out))
-    tree = lines[0].strip()
+    tree = check["tree"]
     message = f"Merge branch '{branch}' into {base}"
     where = _worktree_of_branch(wt, base)
     if where and not Path(where).is_dir():
@@ -1920,6 +1970,7 @@ __all__ = [
     "branch_point",
     "clean_git_record",
     "commit",
+    "commit_files",
     "compare_url",
     "create_pr",
     "current",
@@ -1930,6 +1981,7 @@ __all__ = [
     "in_worktree",
     "inspect_folder",
     "merge",
+    "merge_check",
     "pr_status",
     "prompt_line",
     "push",

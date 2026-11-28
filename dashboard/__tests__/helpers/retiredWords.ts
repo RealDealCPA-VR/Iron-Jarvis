@@ -180,6 +180,11 @@ export const RETIRED_ON_SURFACES: readonly Retired[] = [
   // workflow surfaces: Build › Code's "Work on a new branch" is a git branch.
   onSurfaces("loop", /\bloops?\b/i, "For each", isWorkflowSurface),
   onSurfaces("branch", /\bbranch(?:es)?\b/i, "If (its lanes are Then and Otherwise)", isWorkflowSurface),
+  // 25-a (R3.5, VOCABULARY.md "Merge all that passed", "clash"): the night's
+  // passing branches are MERGED, never "landed" or "green"; two that change
+  // the same lines CLASH. Scoped to Last night and its merge screens.
+  onSurfaces("Land all green", /\bland(?:ed|ing)?\b|\bgreen\b/i, "Merge all that passed; done is Merged", isMergeSurface),
+  onSurfaces("conflict", /\bconflicts?\b/i, "clash", isMergeSurface),
 ];
 
 /** Idea 09 (09-a): the surfaces that show a workflow's steps. */
@@ -188,6 +193,15 @@ export function isWorkflowSurface(file: string): boolean {
     file.startsWith("components/workflow/") ||
     file === "app/workflows/page.tsx" ||
     file === "components/chat/WorkflowDraftCard.tsx"
+  );
+}
+
+/** 25-a: Last night and its Merge all screens. */
+export function isMergeSurface(file: string): boolean {
+  return (
+    file === "components/harness/LastNightList.tsx" ||
+    file === "components/harness/LastNightMerge.tsx" ||
+    file === "lib/nightLand.ts"
   );
 }
 

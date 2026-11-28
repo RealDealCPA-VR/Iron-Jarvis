@@ -276,7 +276,7 @@ describe("Last night: the decoders and words", () => {
     expect([row.state, row.tests, row.usage.length, row.usage[0].kind, row.usage[0].inputTokens]).toEqual([
       "stopped", "", 1, "", 1,
     ]);
-    expect(row.session).toEqual({ exists: false, archived: false, hasBranch: false, removed: false, pushed: false, prUrl: "", merged: false });
+    expect(row.session).toEqual({ exists: false, archived: false, hasBranch: false, removed: false, pushed: false, prUrl: "", merged: false, mergedInto: "", mergeReversed: false });
     expect(decodeSummary({ night: "" })).toBeNull();
   });
 

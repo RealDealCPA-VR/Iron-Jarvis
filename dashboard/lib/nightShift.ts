@@ -9,6 +9,7 @@
  */
 
 import { del, get, patch, post } from "@/lib/api";
+import { decodeNightLand, type NightLand } from "@/lib/nightLand";
 import { outcomeWords, statusWords, type StatusWords } from "@/lib/statusWords";
 
 export type NightState = "queued" | "running" | "done" | "failed" | "needs_you" | "stopped";
@@ -293,6 +294,11 @@ export interface NightRowSession {
   pushed: boolean;
   prUrl: string;
   merged: boolean;
+  /** 25-a: the branch it was merged into ("" = not merged). */
+  mergedInto: string;
+  /** 25-a: a Merge all's Undo reversed that merge since (its commits stay
+   *  in the branch's history). */
+  mergeReversed: boolean;
 }
 
 export interface NightRow {
@@ -335,6 +341,9 @@ export interface NightSummary {
   /** The notice's own words ("Last night: 1 failed, 1 needs you, 1 done"). */
   title: string;
   body: string;
+  /** 25-a: Merge all that passed — the head line's numbers and the night's
+   *  merges (lib/nightLand). null from a daemon without it. */
+  land: NightLand | null;
 }
 
 function int(v: unknown): number {
@@ -367,6 +376,8 @@ function decodeRowSession(raw: unknown): NightRowSession {
     pushed: r?.pushed === true,
     prUrl: str(r?.pr_url, 500),
     merged: r?.merged === true,
+    mergedInto: str(r?.merged_into, 300),
+    mergeReversed: r?.merge_reversed === true,
   };
 }
 
@@ -422,6 +433,7 @@ export function decodeSummary(raw: unknown): NightSummary | null {
     counts: Object.fromEntries(NIGHT_STATES.map((s) => [s, int(counts?.[s])])) as Record<NightState, number>,
     title: str(w?.title, 300),
     body: str(w?.body, 300),
+    land: decodeNightLand(r.land),
   };
 }
 

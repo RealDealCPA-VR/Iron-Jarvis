@@ -64,7 +64,10 @@ PAGES: tuple[Page, ...] = (
     Page("page_chat", "Chat", "/chat",
          "Talk to Iron Jarvis; the Chat | Code switch at the top opens Code, where Iron Jarvis writes, runs "
          "and checks code in a folder, one coding session each. A chat is renamed, archived or deleted from "
-         "its ⋯ menu there, and a coding session is archived or deleted from its menu in Code's list.",
+         "its ⋯ menu there, and a coding session is archived or deleted from its menu in Code's list. Code's "
+         "Last night view lists the night's tasks, and Merge all that passed merges every branch whose tests "
+         "passed into your main branch, the tests run after each, with Undo; it never pushes, and chat does "
+         "not merge them.",
          routes=("chat",)),
     Page("page_build", "Build", "/terminals",
          "Terminals on this PC, and Build's Code view, where the user's own Claude Code, Codex, Pi, OpenCode "
