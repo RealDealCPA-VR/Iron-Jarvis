@@ -27,7 +27,10 @@ guarantee (the review of release 10: a person's name written in lower case
 cannot be found in general, so it never says "no names"):
 
 * CLIENT NAMES: no name, signature or alias the client list holds (confirmed
-  or waiting) is in the WHOLE draft in any case or script ("hartwell",
+  or waiting), nor any one word of it of 4+ letters that is not a generic
+  company word, nor the name joined into one word, is in the WHOLE draft in
+  any case, accent or German spelling, any script (:func:`fold`; a Latin
+  spelling of a name held in another script is NOT covered) ("hartwell",
   "HARTWELL", "“Hartwell”", "иванова"), as whole words (:func:`client_named_any_case`;
   a list that cannot be read is never clean);
 * CONTACT DETAILS: the mask and the identifier patterns find nothing in the
@@ -100,13 +103,23 @@ def _bounded(parts: Iterable[Any]) -> tuple[str, bool]:
     return "\n".join(out), True
 
 
+def ascii_digits(text: Any) -> str:
+    """``text`` with every Unicode decimal digit written as 0-9 (Arabic-
+    Indic, full-width, Devanagari …), so "١٢٥٠" and "１２５０" are 1250.
+    Pure."""
+    import unicodedata
+
+    body = str(text or "")
+    return "".join(str(unicodedata.decimal(ch)) if not ch.isascii() and ch.isdecimal() else ch for ch in body)
+
+
 def figure_forms(text: Any) -> set[str]:
     """Every form of every figure in ``text``, without leading zeros: each
     run of digits, and each run joined to the runs that follow it in the
     same figure ("1,250.00" gives 1, 250, 0, 1250 and 125000). Pure, linear
     in the figures' size."""
     out: set[str] = set()
-    for m in _FIGURE.finditer(str(text or "")):
+    for m in _FIGURE.finditer(ascii_digits(text)):
         runs = _DIGITS.findall(m.group(0))
         for i in range(len(runs)):
             joined = ""
@@ -123,7 +136,7 @@ figures = figure_forms
 def draft_figures(text: Any) -> set[str]:
     """:func:`figure_forms` of a DRAFT, its ordered list numbers left out.
     Pure."""
-    return figure_forms(_LIST_NUMBER.sub(r"\1\2", str(text or "")))
+    return figure_forms(_LIST_NUMBER.sub(r"\1\2", ascii_digits(text)))
 
 
 def new_lines(text: Any, before: Any = "") -> str:
@@ -145,36 +158,67 @@ def is_clean(draft: Any, record: Iterable[Any]) -> bool:
     return not (draft_figures(draft) & figure_forms(source))
 
 
-def _signed(text: str) -> str:
-    """``text`` as client-name signature tokens, lower case, any script,
-    joined by single spaces with a space at each end (the client list's own
-    folding, ``workmap/clients/names``)."""
-    from ..workmap.clients import names as N
+#: Letters NFKD leaves whole, spelled as plain Latin letters.
+_LETTERS = str.maketrans({"ß": "ss", "æ": "ae", "ø": "o", "œ": "oe", "đ": "d", "ł": "l", "þ": "th", "ð": "d",
+                          "ı": "i"})
+#: The German spellings of ä ö ü ("Mueller" = "Müller"), folded the same
+#: way on both sides.
+_GERMAN = re.compile(r"(?<=[a-z])(ae|oe|ue)")
+#: Words a client's name may hold that name no one on their own.
+_GENERIC = frozenset(
+    "and the of for sons son brothers bros group gmbh ag sa sas bv nv kg ohg ltd limited inc incorporated "
+    "llc llp lp plc pllc pc co corp corporation company companies services service holdings holding "
+    "partners partnership associates trust foundation firm consulting consultants solutions "
+    "international global enterprises industries bau".split()
+)
+#: The shortest single word of a client's name that hides the line alone.
+NAME_WORD_MIN = 4
+_WORD = re.compile(r"[^\W_]+")
 
-    out: list[str] = []
-    for m in N._TOKEN_RX.finditer(text):
-        sig = N.signature(m.group(0).lower())
-        if sig:
-            out.append(sig)
-    return " " + " ".join(out) + " "
+
+def fold(text: Any) -> str:
+    """``text`` folded for comparing names: lower case, accents dropped
+    (NFKD, combining marks removed), ß æ ø œ … spelled out, the German ae /
+    oe / ue read as a / o / u. Any script. Pure."""
+    import unicodedata
+
+    low = unicodedata.normalize("NFKD", str(text or "").lower())
+    plain = "".join(ch for ch in low if not unicodedata.combining(ch)).translate(_LETTERS)
+    return _GERMAN.sub(lambda m: m.group(1)[0], plain)
+
+
+def _name_keys(name: Any) -> tuple[str, str, set[str]]:
+    """One client name as ``(phrase, joined, words)``: its folded words
+    with spaces, the same joined into one ("smithjones"), and each word of
+    :data:`NAME_WORD_MIN`+ letters that is not a generic company word."""
+    words = _WORD.findall(fold(name))
+    return " ".join(words), "".join(words), {w for w in words if len(w) >= NAME_WORD_MIN and w not in _GENERIC}
 
 
 def client_named_any_case(engine: Any, text: Any) -> bool:
-    """Does ``text`` hold a name the client list has (confirmed or waiting:
-    its display name, signature or an alias), in ANY case or script, as
-    whole words? A list that cannot be read answers True. BLOCKING."""
+    """Does ``text`` hold a client's name (confirmed or waiting: its display
+    name, signature or an alias) in ANY case, accent or German spelling, any
+    script: the whole name, the name joined into one word, or any one word
+    of it with :data:`NAME_WORD_MIN`+ letters that is not a generic company
+    word? Loose on purpose: it only ever HIDES the checked line; holding a
+    draft is ``learning.names_a_client``'s stricter rule. A list that cannot
+    be read answers True. Not covered: a Latin spelling of a name the list
+    holds in another script. BLOCKING."""
     try:
-        from ..workmap.clients import names as N
         from ..workmap.clients import store
 
         cmap = store.load_map(engine)
-        joined = _signed(str(text or ""))
+        words = _WORD.findall(fold(text))
+        tokens = set(words)
+        joined = " " + " ".join(words) + " "
         for table in (cmap.names, cmap.waiting_names):
             for entry in (table or {}).values():
                 name, sig, aliases = entry
-                for want in (N.signature(str(name or "").lower()), str(sig or ""), *tuple(aliases or ())):
-                    want = " ".join(str(want or "").lower().split())
-                    if want and f" {want} " in joined:
+                for want in (name, sig, *tuple(aliases or ())):
+                    phrase, glued, single = _name_keys(want)
+                    if not phrase:
+                        continue
+                    if f" {phrase} " in joined or glued in tokens or single & tokens:
                         return True
         return False
     except Exception:  # noqa: BLE001 — unreadable: never called clean
@@ -228,5 +272,5 @@ def check(engine: Any, draft: Any, record: Iterable[Any], *, before: Any = "") -
 
 __all__ = [
     "CLIENT", "INSTRUCTION", "RECORD_MAX", "SECRET", "Verdict", "check", "client_named_any_case",
-    "draft_figures", "figure_forms", "figures", "is_clean", "new_lines", "read_as_instruction", "secret_shaped",
+    "NAME_WORD_MIN", "ascii_digits", "draft_figures", "figure_forms", "fold", "figures", "is_clean", "new_lines", "read_as_instruction", "secret_shaped",
 ]

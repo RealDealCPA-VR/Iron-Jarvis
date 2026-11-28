@@ -284,6 +284,9 @@ def test_the_checked_line_promises_only_what_the_checks_guarantee():
     ("Marlow sent 1 250 in total.", "Confirm the 1250 total."),
     ("The total was 1250.", "Confirm the 1,250.00 total."),
     ("The total was 1250.", "Confirm the 1.250 total."),
+    ("The total was 1250.", "Confirm the \u0661\u0662\u0665\u0660 total."),   # Arabic-Indic digits
+    ("The total was 1250.", "Confirm the \uff11\uff12\uff15\uff10 total."),   # full-width digits
+    ("The total was \u0661\u0662\u0665\u0660.", "Confirm the 1250 total."),
 ])
 def test_a_figure_is_caught_across_its_separators(record, draft):
     md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. " + draft + "\n"
@@ -302,6 +305,39 @@ def test_a_client_s_name_in_any_form_is_never_called_clean(desk, client, record,
     md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. " + draft + "\n"
     verdict = C.check(desk.engine, md, [record])
     assert verdict.clean is False
+
+
+@pytest.mark.parametrize("client,draft", [
+    ("Müller Bau", "ask muller bau to confirm."),
+    ("Müller Bau", "ask MULLER BAU to confirm."),
+    ("Müller Bau", "ask Mueller Bau to confirm."),
+    ("Müller Bau", "ask Müller to confirm."),          # one word of the name
+    ("Hartwell & Sons", "ask hartwell to confirm."),
+    ("Smith-Jones", "ask smithjones to confirm."),      # the name joined
+    ("Smith-Jones", "ask jones to confirm."),
+    ("Иванова", "спросите ИВАНОВУ или иванова."),
+    ("ACME Ltd.", "ask acme to confirm."),
+    ("Ørsted Æble", "ask orsted and aeble."),
+])
+def test_a_client_s_name_in_any_spelling_or_part_hides_the_line(desk, client, draft):
+    _client(desk, client)
+    md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. " + draft + "\n"
+    assert C.check(desk.engine, md, ["the export came in."]).clean is False
+
+
+def test_a_partial_client_name_hides_the_line_but_never_holds_the_draft(desk):
+    """Hiding the line reads the client list loosely; holding a draft keeps
+    the wall's own stricter rule: "ask acme" is shown, without the line."""
+    _client(desk, "ACME Ltd.")
+    md = "---\nname: x\ndescription: Make the sheet.\n---\n\n1. Read it.\n2. ask acme to confirm.\n"
+    verdict = C.check(desk.engine, md, ["the export came in."])
+    assert verdict.refused == "" and verdict.clean is False
+    plain = md.replace("ask acme to confirm.", "ask the bank to confirm.")
+    assert C.check(desk.engine, plain, ["the export came in."]).clean is True
+    # A generic company word alone is no client's name.
+    _client(desk, "Hartwell & Sons")
+    sons = md.replace("ask acme to confirm.", "ask the sons and the group to confirm.")
+    assert C.check(desk.engine, sons, ["the export came in."]).clean is True
 
 
 def test_a_draft_holding_contact_details_is_never_called_clean(desk):
