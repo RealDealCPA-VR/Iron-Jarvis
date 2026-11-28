@@ -732,6 +732,8 @@ NOTICED_NO = "No"
 NOTICED_STOP = "Stop suggesting this kind"
 NOTICED_NO_NOTE = "Iron Jarvis won't suggest this again."
 NOTICED_LOCAL_TITLE = "a suggestion about Local only work (its words are on the Improvements page)"
+NOTICED_CHAT_NOTE = "Opens a new chat in {where}. Nothing starts until you send."
+NOTICED_RUN_NOTE = "Starts an agent run in {where} now, with these facts as its record."
 
 
 def noticed_item(row: Any, *, stopped: bool = False) -> dict[str, Any]:
@@ -751,13 +753,17 @@ def noticed_item(row: Any, *, stopped: bool = False) -> dict[str, Any]:
     where = folder_label(folder) or "that folder"
     if how == N.HOW_RUN:
         accept = action(NOTICED_YES, f"/proposals/{_seg(pid)}/approve", confirm=True,
-                        note=f"Starts an agent run in {where} now, with these facts as its record.",
+                        note=NOTICED_RUN_NOTE.format(where=where),
                         blocked=STOPPED_BLOCK if stopped else "")
         door = ""
     else:
         accept = action(NOTICED_YES, f"/proposals/{_seg(pid)}/approve",
-                        note=f"Opens a new chat in {where}. Nothing starts until you send.")
+                        note=NOTICED_CHAT_NOTE.format(where=where))
         door = N.door_for(row)
+    # 03-a review 3: what a turn told the suggestion only neutrally (Local
+    # only work, a folder its client wall keeps out) hears after a Yes: the
+    # same sentence with no folder name (``inbox/tools.suggestion_answer``).
+    chat_note = (NOTICED_RUN_NOTE if how == N.HOW_RUN else NOTICED_CHAT_NOTE).format(where="that folder")
     link = next((str(f.get("link") or "") for f in facts if str(f.get("link") or "").startswith("/")), "")
     return item(
         KIND_NOTICED, pid, title=str(getattr(row, "title", "") or "Something Iron Jarvis noticed"),
@@ -772,7 +778,8 @@ def noticed_item(row: Any, *, stopped: bool = False) -> dict[str, Any]:
                          "in Settings › Automation."),
         home=link,
         extra={"notice_kind": kind, "folder": folder, "how": how, "door": door,
-               "local_only": bool(getattr(row, "local_only", False)), "chat_title": NOTICED_LOCAL_TITLE},
+               "local_only": bool(getattr(row, "local_only", False)), "chat_title": NOTICED_LOCAL_TITLE,
+               "chat_note": chat_note},
     )
 
 

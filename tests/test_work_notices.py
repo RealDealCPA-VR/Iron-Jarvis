@@ -567,6 +567,47 @@ async def test_chat_lists_a_local_only_or_walled_suggestion_without_its_words(ap
 
 
 @pytest.mark.asyncio
+async def test_a_yes_from_chat_names_no_folder_of_a_suggestion_told_neutrally(app_desk, monkeypatch):
+    """Review 3, finding 1: a turn told a suggestion only neutrally (Local
+    only work, or a folder its client wall keeps out) is not told its folder
+    by the Yes either; an ordinary one still is."""
+    from iron_jarvis.providers import egress
+    from iron_jarvis.workmap import keys
+    from iron_jarvis.workmap.clients import ClientRoot, names, store
+
+    desk = app_desk
+    local = _chat(desk, "Bank reconciliation", desk.hartleys, local_only=True)
+    _open_item(desk, local, "Check the duplicate invoice")
+    smith = _chat(desk, "Smith books", desk.smith)
+    _open_item(desk, smith, "Ask Smith for the bank letter")
+    site = str(desk.tmp / "Projects" / "Website")
+    plain = _chat(desk, "Site copy", site)
+    _open_item(desk, plain, "Send the new homepage words")
+    N.pass_once(desk.platform)
+    N.pass_once(desk.platform)
+    by_folder = {r.folder: r for r in _rows(desk)}
+    assert set(by_folder) == {desk.hartleys, desk.smith, site}
+    monkeypatch.setattr(egress, "may_recall_local_only_chats", lambda: False)
+    key = keys.folder_key(keys.home_folder(desk.smith))
+    cmap = store.ClientMap(
+        version=1, confirmed=(ClientRoot("client_00000000000b", "Smith", key, desk.smith),), waiting=(),
+        names={"client_00000000000b": ("Smith", names.signature("Smith"), ())}, waiting_names={},
+    )
+    monkeypatch.setattr(store, "load_map", lambda engine: cmap)
+    tool = desk.platform.registry.get("suggestion_answer")
+    ctx = SimpleNamespace(session_id="chat", turn_id="t")
+    for folder, neutral in ((desk.hartleys, "Local only work"), (desk.smith, "work in a client's folder")):
+        yes = await tool.execute({"id": f"noticed:{by_folder[folder].id}", "answer": "accept"}, ctx)
+        assert yes.ok, yes.error
+        assert neutral in yes.output
+        assert "Hartleys" not in yes.output and "Smith" not in yes.output, yes.output
+        assert "Opens a new chat in that folder." in yes.output
+    yes = await tool.execute({"id": f"noticed:{by_folder[site].id}", "answer": "accept"}, ctx)
+    assert yes.ok, yes.error
+    assert "Opens a new chat in Projects › Website." in yes.output
+
+
+@pytest.mark.asyncio
 async def test_chat_can_stop_the_kind_and_a_yes_leaves_the_chats_door(app_desk):
     from iron_jarvis.daemon import doors
 
@@ -610,6 +651,28 @@ def test_a_local_only_suggestion_never_reaches_the_deliberation_model(desk):
     sent = json.dumps(context, default=str)
     assert "duplicate invoice" not in sent and row.id not in sent
     assert [p["id"] for p in context["open_proposals"]] == [own.id]
+
+
+def test_the_briefing_sent_to_the_phone_counts_suggestions_from_the_record_and_never_quotes_them(desk):
+    """Review 3, finding 2: "Send briefing" may go to Slack, Telegram or email;
+    a suggestion from the record (a Local only chat's words, a client's
+    folder) is counted there, never quoted (D-03.2)."""
+    tid = _chat(desk, "Bank reconciliation", desk.hartleys, local_only=True)
+    _open_item(desk, tid, "Check the duplicate invoice")
+    _pass(desk)
+    (row,) = _rows(desk)
+    desk.platform.intent._create_proposal(
+        goal_id=None, title="Tidy the downloads folder", rationale="r", agent_type="builder", task="t", risk="low",
+    )
+    sent: list[str] = []
+    desk.platform.notifier = SimpleNamespace(notify=lambda text: sent.append(text) or True)
+    got = desk.platform.intent.briefing(notify=True)
+    assert sent == [got["text"]]
+    assert "duplicate invoice" not in sent[0] and "Hartleys" not in sent[0] and row.title not in sent[0]
+    assert "Tidy the downloads folder" in sent[0]
+    assert "- Proposals awaiting your call: 1" in sent[0]
+    assert "- Suggestions about your work waiting on the Improvements page: 1" in sent[0]
+    assert got["pending_proposals"] == 2
 
 
 def test_a_switch_turned_off_in_settings_takes_what_waits_off_the_list_at_once(app_desk):

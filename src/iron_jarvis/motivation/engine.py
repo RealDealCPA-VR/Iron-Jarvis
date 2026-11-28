@@ -1024,14 +1024,21 @@ class IntentEngine:
                     )
                 )
             )
+        # 03-a review 3: a suggestion from the owner's record can quote a
+        # Local only chat or name a client's folder, and this text may go to
+        # the phone; it is counted, never quoted (D-03.2).
+        own = [p for p in pending if p.source != "notice"]
+        noticed = len(pending) - len(own)
         lines = [
             "Iron Jarvis — morning briefing",
             f"- Active goals: {len(active)}",
             f"- Actions I took in the last 24h: {len(recent)}",
-            f"- Proposals awaiting your call: {len(pending)}",
+            f"- Proposals awaiting your call: {len(own)}",
         ]
-        for p in pending[:5]:
+        for p in own[:5]:
             lines.append(f"  • [{p.risk}] {p.title}")
+        if noticed:
+            lines.append(f"- Suggestions about your work waiting on the Improvements page: {noticed}")
         text = "\n".join(lines)
         pushed = None
         if notify:

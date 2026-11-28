@@ -380,6 +380,10 @@ class SuggestionAnswerTool(Tool):
             return ToolResult(ok=False, error=f"Not done: {detail or 'the answer was refused'}", data={"door": HREF})
         word = str(press.get("label") or answer.title())
         note = str(press.get("note") or "")
+        extra = it.get("extra") if isinstance(it.get("extra"), dict) else {}
+        if answer == "accept" and title != str(it.get("title") or "") and "chat_note" in extra:
+            # 03-a review 3: told neutrally, so the note names no folder either.
+            note = str(extra.get("chat_note") or "")
         out = f"{word}: {title}." + (f" {note}" if note else "")
         data: dict[str, Any] = {"suggestion": sid, "answer": answer, "title": title}
         door = str((it.get("extra") or {}).get("door") or "") if answer == "accept" else ""

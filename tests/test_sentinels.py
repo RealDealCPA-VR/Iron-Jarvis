@@ -422,6 +422,36 @@ def test_a_watchers_suggestion_carries_facts_and_counts_toward_the_days_limit(pl
 
 
 
+def test_a_watcher_batch_in_the_same_second_as_an_answered_one_is_its_own_and_the_kind_switch_stops_it(
+    platform, monkeypatch,
+):
+    """03-a review 3: a batch is its OWN subject, so one made in the same
+    second as a batch already answered is still suggested (never dropped as
+    answered); with the new-files switch off, nothing is suggested at all
+    (the switch is the only thing that stops a watcher's suggestion)."""
+    from iron_jarvis.motivation import notices
+
+    frozen = notices._now()
+    monkeypatch.setattr(notices, "_now", lambda: frozen)
+    svc, intent = platform.sentinels, platform.intent
+    svc.add("intake", path="/clients/hartleys/intake")
+    fs: dict[str, float] = {}
+    scan = _scanner(fs)
+    svc.poll_once(intent, scanner=scan)  # baseline
+    fs["/clients/hartleys/intake/a.pdf"] = 1.0
+    [first] = svc.poll_once(intent, scanner=scan)
+    intent.reject(first.id)
+    fs["/clients/hartleys/intake/b.pdf"] = 1.0
+    [second] = svc.poll_once(intent, scanner=scan)
+    assert second.id != first.id and second.subject_key != first.subject_key
+    assert "b.pdf" in second.decoded_evidence()[0]["text"]
+    intent.reject(second.id)
+    platform.config.notice_new_files = False
+    fs["/clients/hartleys/intake/c.pdf"] = 1.0
+    assert svc.poll_once(intent, scanner=scan) == []
+    assert intent.list_proposals(status="pending") == []
+
+
 def _age_suggestions(platform, *, hours: float) -> None:
     """Move every suggestion's ``created_at`` back (the day's limit counts
     the last 24 hours from the rows)."""

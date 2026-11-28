@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
@@ -691,7 +692,11 @@ def mint_watcher(platform: Any, rec: Any, changed: list[dict], now: "datetime | 
                 .where(ProposalRecord.subject_key.startswith(f"files:{fkey}#", autoescape=True))  # type: ignore[attr-defined]
             ).first()
             before = waiting.decoded_evidence() if waiting is not None else []
-            subject = waiting.subject_key if waiting is not None else f"files:{fkey}#{when:%Y%m%d%H%M%S}"
+            # 03-a review 3: each batch is its OWN subject (a stamp plus a
+            # random part), so a batch made in the same second as one already
+            # answered is never taken for it.
+            subject = (waiting.subject_key if waiting is not None
+                       else f"files:{fkey}#{when:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:8]}")
         names_before: list[str] = []
         since = when
         for c in changed or []:
