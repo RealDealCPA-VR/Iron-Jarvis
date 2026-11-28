@@ -29,7 +29,7 @@ from collections.abc import Callable
 from datetime import timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import select
 
 from ...core.db import session_scope
@@ -429,7 +429,9 @@ def _automations(d, db, since) -> list[dict[str, Any]]:
             db,
             select(func.count())
             .select_from(ProposalRecord)
-            .where(ProposalRecord.source == "sentinel")
+            # Next leaps 03-a: a watcher's suggestion is a "notice" of kind
+            # new_files now; an older row keeps its "sentinel" source.
+            .where(or_(ProposalRecord.source == "sentinel", ProposalRecord.kind == "new_files"))
             .where(ProposalRecord.created_at >= since),
         )
         erroring = _count(

@@ -591,3 +591,114 @@ async def test_chat_can_stop_the_kind_and_a_yes_leaves_the_chats_door(app_desk):
     stop = await tool.execute({"id": f"noticed:{second.id}", "answer": "decline", "stop_kind": True}, ctx)
     assert stop.ok, stop.error
     assert desk.platform.config.notice_open_items is False
+
+
+# ---- the review's findings ------------------------------------------------------
+def test_a_local_only_suggestion_never_reaches_the_deliberation_model(desk):
+    """Review finding 1: the goal engine's deliberation context lists ITS
+    backlog; a suggestion from the record (whose title can quote a Local only
+    chat) is never in it."""
+    tid = _chat(desk, "Bank reconciliation", desk.hartleys, local_only=True)
+    _open_item(desk, tid, "Check the duplicate invoice")
+    _pass(desk)
+    (row,) = _rows(desk)
+    assert row.local_only is True
+    own = desk.platform.intent._create_proposal(
+        goal_id=None, title="Tidy the downloads folder", rationale="r", agent_type="builder", task="t", risk="low",
+    )
+    context = desk.platform.intent._gather_context([])
+    sent = json.dumps(context, default=str)
+    assert "duplicate invoice" not in sent and row.id not in sent
+    assert [p["id"] for p in context["open_proposals"]] == [own.id]
+
+
+def test_a_switch_turned_off_in_settings_takes_what_waits_off_the_list_at_once(app_desk):
+    """Review finding 3: switched off through the ONE settings writer (as
+    Settings and chat do), the waiting suggestions of that kind leave the
+    Improvements list and the chat's list at once, not 4 hours later."""
+    from iron_jarvis.daemon.routes.settings import config_writer
+    import importlib
+
+    C = importlib.import_module("iron_jarvis.inbox.collect")
+
+    desk = app_desk
+    tid = _chat(desk, "Bank reconciliation", desk.hartleys)
+    _open_item(desk, tid, "Check the duplicate invoice")
+    _run(desk, "Rebuild the register", desk.smith, days_ago=3)
+    N.pass_once(desk.platform)
+    assert {r.kind for r in _rows(desk, status="pending")} == {"open_item", "stalled_work"}
+
+    def listed() -> list[str]:
+        got = C.collect(desk.app.state.d)
+        return sorted(it["extra"]["notice_kind"] for it in got["items"] if it["kind"] == "noticed")
+
+    assert listed() == ["open_item", "stalled_work"]
+    config_writer(desk.app.state.d).apply({"notice_open_items": False}, actor="settings")
+    assert listed() == ["stalled_work"]
+    assert [r.kind for r in _rows(desk, status="withdrawn")] == ["open_item"]
+    config_writer(desk.app.state.d).apply({"notice_work": False}, actor="chat")
+    assert listed() == []
+    assert _rows(desk, status="pending") == []
+
+
+def test_the_list_never_shows_a_kind_that_is_off_even_before_its_rows_are_withdrawn(app_desk):
+    """Review finding 3, the read's own guard: a switch flipped without the
+    writer (an edited config) still hides that kind."""
+    import importlib
+
+    C = importlib.import_module("iron_jarvis.inbox.collect")
+
+    desk = app_desk
+    tid = _chat(desk, "Bank reconciliation", desk.hartleys)
+    _open_item(desk, tid, "Check the duplicate invoice")
+    N.pass_once(desk.platform)
+    desk.platform.config.notice_open_items = False
+    got = C.collect(desk.app.state.d)
+    assert [it for it in got["items"] if it["kind"] == "noticed"] == []
+    assert len(_rows(desk, status="pending")) == 1  # not withdrawn: only hidden
+
+
+def test_the_watchers_star_counts_a_watchers_suggestion(app_desk):
+    """Review finding 6: the system map's Watchers star counts the
+    suggestions watchers made this week (now kind new_files)."""
+    desk = app_desk
+    svc = desk.platform.sentinels
+    svc.add("intake", path=desk.hartleys)
+    state: dict[str, float] = {}
+    svc.poll_once(desk.platform.intent, scanner=lambda p, g=None: dict(state))
+    state[desk.hartleys + "/a.pdf"] = 1.0
+    assert len(svc.poll_once(desk.platform.intent, scanner=lambda p, g=None: dict(state))) == 1
+    body = desk.client.get("/ui/system-map").json()
+    nodes = {n["key"]: n for a in body["areas"] for n in a["nodes"]}
+    assert nodes["sentinels"]["used"] == 1
+
+
+def test_a_held_back_change_keeps_the_day_it_was_first_seen(desk):
+    """Review finding 4: what the day's limit held back is suggested later
+    with "Since" the day it was first seen."""
+    from iron_jarvis.sentinels.models import SentinelRecord
+
+    desk.platform.config.notice_max_per_day = 0
+    svc = desk.platform.sentinels
+    svc.add("intake", path=desk.hartleys)
+    state: dict[str, float] = {}
+    scan = lambda p, g=None: dict(state)  # noqa: E731
+    svc.poll_once(desk.platform.intent, scanner=scan)
+    state[desk.hartleys + "/a.pdf"] = 1.0
+    assert svc.poll_once(desk.platform.intent, scanner=scan) == []
+    with session_scope(desk.engine) as db:
+        w = db.exec(select(SentinelRecord)).one()
+        st = w.decoded_state()
+        assert [h["path"] for h in st["held"]] == [desk.hartleys + "/a.pdf"]
+        st["held"][0]["seen_at"] = (utcnow() - timedelta(days=2)).isoformat()
+        w.last_state_json = json.dumps(st)
+        db.add(w)
+        db.commit()
+    desk.platform.config.notice_max_per_day = 3
+    [p] = svc.poll_once(desk.platform.intent, scanner=scan)
+    since = [f for f in p.decoded_evidence() if f.get("role") == "since"][0]
+    from datetime import datetime
+
+    assert N._naive(datetime.fromisoformat(since["at"])) < N._now() - timedelta(days=1)
+    with session_scope(desk.engine) as db:
+        assert "held" not in db.exec(select(SentinelRecord)).one().decoded_state()

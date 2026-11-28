@@ -570,7 +570,10 @@ class IntentEngine:
         return rec, True
 
     def _gather_context(self, goals: list[GoalRecord]) -> dict[str, Any]:
-        pending = self.list_proposals(status="pending")
+        # 03-a review: a suggestion from the owner's record (``source``
+        # "notice") is not this engine's backlog, and its title can quote a
+        # Local only chat's words: it never reaches the deliberation model.
+        pending = [p for p in self.list_proposals(status="pending") if p.source != "notice"]
         events = [
             {"type": e.type, "ts": e.ts}
             for e in list(self.p.event_bus.history)[-_RECENT_EVENTS:]

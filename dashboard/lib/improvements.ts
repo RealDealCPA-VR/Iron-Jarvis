@@ -235,6 +235,22 @@ export function noticeDoor(answer: unknown): string {
   return NOTICE_DOOR.test(door) ? door : "";
 }
 
+/**
+ * Next leaps 03-a review: where a waiting suggestion on the Autonomy page
+ * came from, in plain words. The engine's own name for it ("notice",
+ * "sentinel", "deliberation") is never shown; an unknown one shows nothing.
+ */
+const SOURCE_WORDS: Record<string, string> = {
+  notice: "Noticed in your work",
+  sentinel: "Watcher",
+  deliberation: "From your goals",
+  event: "From something that happened",
+};
+
+export function proposalSourceWords(source: unknown): string {
+  return typeof source === "string" ? SOURCE_WORDS[source] ?? "" : "";
+}
+
 /** How the page goes to a door (a seam a test replaces). */
 export const doorNav = {
   go(href: string): void {

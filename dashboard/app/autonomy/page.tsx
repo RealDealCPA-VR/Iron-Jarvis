@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { api, get, post, put, ApiError } from "@/lib/api";
 import { OFFER_DISMISS_PREFIX, offerKey as goalOfferKey } from "@/lib/goalOffers";
-import { doorNav, noticeDoor } from "@/lib/improvements";
+import { doorNav, noticeDoor, proposalSourceWords } from "@/lib/improvements";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -611,7 +611,11 @@ export default function AutonomyPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-medium text-zinc-100">{p.title}</span>
                           <Badge value={p.risk} tone={statusTone(p.risk)} />
-                          <span className="text-[11px] text-zinc-600">{p.source}</span>
+                          {proposalSourceWords(p.source) && (
+                            <span className="text-[11px] text-zinc-600">
+                              {proposalSourceWords(p.source)}
+                            </span>
+                          )}
                         </div>
                         {p.rationale && (
                           <p className="mt-1.5 line-clamp-3 text-sm text-zinc-400">

@@ -1052,8 +1052,16 @@ def _noticed(d: Any) -> Read:
 
     if getattr(d.platform, "intent", None) is None:
         return Read()
+    from ..motivation import notices as N
+
     stopped = bool(getattr(getattr(d.platform, "config", None), "autonomy_kill_switch", False))
-    rows, total = _pending(d.platform.engine, R, R.status == "pending", R.source == "notice")
+    # 03-a review: a kind switched off is never listed, even before the
+    # settings writer (or the 4-hourly pass) has taken its rows off the list.
+    on = [k for k in N.KINDS if N.kind_on(d.platform, k)]
+    if not on:
+        return Read({KIND_NOTICED: ([], 0)})
+    rows, total = _pending(d.platform.engine, R, R.status == "pending", R.source == "notice",
+                           R.kind.in_(on))  # type: ignore[attr-defined]
     return Read({KIND_NOTICED: (_built(rows, lambda r: noticed_item(r, stopped=stopped), "noticed"), total)})
 
 

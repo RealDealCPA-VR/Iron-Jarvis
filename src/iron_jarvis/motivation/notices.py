@@ -550,6 +550,14 @@ def withdraw_kind(platform: Any, kind: str, now: "datetime | None" = None) -> in
     return len(rows)
 
 
+def withdraw_switched_off(platform: Any, now: "datetime | None" = None) -> int:
+    """Withdraw every waiting suggestion whose kind is switched off now (its
+    own switch, or the master switch): the settings writer calls it when a
+    ``notice_*`` setting changes, so Settings and chat take them off the list
+    at once. Returns how many."""
+    return sum(withdraw_kind(platform, k, now) for k in KINDS if not kind_on(platform, k))
+
+
 # --------------------------------------------------------------------------- #
 # minting
 # --------------------------------------------------------------------------- #
@@ -563,6 +571,16 @@ def made_today(engine: Any, now: "datetime | None" = None) -> int:
             .where(ProposalRecord.source == SOURCE)
             .where(ProposalRecord.created_at >= when - DAY)  # type: ignore[operator]
         ).one() or 0)
+
+
+def limit_holds(platform: Any, kind: str, now: "datetime | None" = None) -> bool:
+    """Is a NEW suggestion of ``kind`` held back by the day's limit alone
+    (its switches on, today's limit used)? A watcher keeps its changes for
+    the next sweep then (``sentinels/service``), so nothing is lost."""
+    try:
+        return kind_on(platform, kind) and made_today(platform.engine, now) >= day_limit(platform)
+    except Exception:  # noqa: BLE001 — unsure: not held
+        return False
 
 
 def answered(engine: Any, subject_key: str) -> bool:
@@ -676,6 +694,14 @@ def mint_watcher(platform: Any, rec: Any, changed: list[dict], now: "datetime | 
             subject = waiting.subject_key if waiting is not None else f"files:{fkey}#{when:%Y%m%d%H%M%S}"
         names_before: list[str] = []
         since = when
+        for c in changed or []:
+            # A change the day's limit held back says when it was first seen.
+            try:
+                seen = _naive(datetime.fromisoformat(str(c.get("seen_at") or "")))
+            except ValueError:
+                seen = None
+            if seen is not None and seen < since:
+                since = seen
         for f in before:
             if f.get("role") == "since":
                 try:
@@ -697,7 +723,9 @@ def mint_watcher(platform: Any, rec: Any, changed: list[dict], now: "datetime | 
         title = _safe(f"Your watcher {name} saw {n} new or changed file{'' if n == 1 else 's'} in {where}", 200)
         if not title:
             return None
-        files_fact = _fact("New or changed: " + ", ".join(shown) + (f" and {more} more" if more > 0 else ""))             if shown else None
+        files_fact = None
+        if shown:
+            files_fact = _fact("New or changed: " + ", ".join(shown) + (f" and {more} more" if more > 0 else ""))
         if files_fact is not None:
             files_fact.update({"role": "files", "names": all_names[:50]})  # type: ignore[dict-item]
         since_fact = _fact(f"Since {_day(since)}", at=since)
@@ -810,7 +838,7 @@ def kind_words(kind: str) -> str:
 __all__ = [
     "ANSWERED", "Candidate", "DAY", "EVERY_S", "FIRST_PASS_S", "HOW_CHAT", "HOW_RUN", "KINDS", "KIND_FILES",
     "KIND_OPEN", "KIND_STALLED", "KIND_WORDS", "MASTER", "PER_PASS", "READERS", "RUN_SENTENCE", "SETTING_OF",
-    "SOURCE", "answered", "candidates", "day_limit", "door_for", "kind_on", "kind_words", "made_today",
+    "SOURCE", "answered", "candidates", "day_limit", "door_for", "kind_on", "kind_words", "limit_holds", "made_today",
     "master_on", "mint", "mint_watcher", "notices_loop", "open_item_candidates", "pass_once", "run_task",
-    "stalled_candidates", "withdraw_kind", "withdraw_stale",
+    "stalled_candidates", "withdraw_kind", "withdraw_stale", "withdraw_switched_off",
 ]

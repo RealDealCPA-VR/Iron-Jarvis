@@ -59,7 +59,7 @@ vi.mock("next/link", () => ({
 import type React from "react";
 import { ImprovementsInbox } from "@/components/improvements/ImprovementsInbox";
 import { NOTICED_ROW_TITLE, toActivity } from "@/components/NotificationBell";
-import { decodeInbox, doorNav, noticeDoor } from "@/lib/improvements";
+import { decodeInbox, doorNav, noticeDoor, proposalSourceWords } from "@/lib/improvements";
 import type { IJEvent } from "@/lib/types";
 
 const ev = (type: string, payload: Record<string, unknown>): IJEvent =>
@@ -196,5 +196,18 @@ describe("Improvements", () => {
     expect(it.stop).toBeNull();
     const [good] = decodeInbox(inboxOf([NOTICED])).items;
     expect(good.stop?.body).toEqual({ stop_kind: true });
+  });
+
+  it("the Autonomy page names where a suggestion came from in plain words, never the engine's", async () => {
+    expect(proposalSourceWords("notice")).toBe("Noticed in your work");
+    expect(proposalSourceWords("sentinel")).toBe("Watcher");
+    expect(proposalSourceWords("deliberation")).toBe("From your goals");
+    expect(proposalSourceWords("some_new_engine_name")).toBe("");
+    expect(proposalSourceWords(undefined)).toBe("");
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const page = readFileSync(join(__dirname, "..", "app", "autonomy", "page.tsx"), "utf8").replace(/\r\n/g, "\n");
+    expect(page).not.toMatch(/>\{p\.source\}</);
+    expect(page).toContain("proposalSourceWords(p.source)");
   });
 });

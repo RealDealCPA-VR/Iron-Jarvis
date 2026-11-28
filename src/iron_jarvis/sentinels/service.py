@@ -372,12 +372,58 @@ class SentinelService:
             previous = rec.decoded_state().get("seen", {})
             changed = [] if first else diff_state(previous, current)
 
-            rec.last_state_json = json.dumps({"seen": current}, default=str)
+            state: dict = {"seen": current}
+            # Next leaps 03-a review: changes held back by the day's limit for
+            # suggestions wait on the row (``held``) until a suggestion can
+            # be made; a new baseline never drops them.
+            held = rec.decoded_state().get("held")
+            if isinstance(held, list) and held:
+                state["held"] = held
+            rec.last_state_json = json.dumps(state, default=str)
             rec.last_checked_at = utcnow()
             rec.last_error = None
             db.add(rec)
             db.commit()
         return changed
+
+    #: 03-a review: the most changes a watcher keeps waiting for a suggestion.
+    HELD_MAX = 200
+
+    def _held(self, rec_id: str) -> list[dict]:
+        """The changes this watcher holds back for its next suggestion."""
+        with session_scope(self.engine) as db:
+            row = db.get(SentinelRecord, rec_id)
+            held = row.decoded_state().get("held") if row is not None else None
+        return [h for h in held if isinstance(h, dict) and h.get("path")] if isinstance(held, list) else []
+
+    def _keep_held(self, rec_id: str, held: list[dict]) -> None:
+        """Keep (or, with ``[]``, clear) the changes held back on the row."""
+        with self._lock, session_scope(self.engine) as db:
+            row = db.get(SentinelRecord, rec_id)
+            if row is None:
+                return
+            state = row.decoded_state()
+            before = state.get("held") or []
+            if held:
+                state["held"] = held[: self.HELD_MAX]
+            else:
+                state.pop("held", None)
+            if (state.get("held") or []) == before:
+                return
+            row.last_state_json = json.dumps(state, default=str)
+            db.add(row)
+            db.commit()
+
+    @staticmethod
+    def _limit_holds(intent) -> bool:
+        """03-a review: did the day's limit for suggestions about the owner's
+        work (and nothing else) hold this watcher's suggestion back?"""
+        platform = getattr(intent, "p", None)
+        if platform is None or getattr(platform, "engine", None) is None:
+            return False
+        from ..motivation import notices
+
+        return notices.limit_holds(platform, notices.KIND_FILES)
 
     #: Leap 05-a: the most rule starts ONE scan of a watcher hands on; the
     #: rest wait for the next scan (not marked seen until they start).
@@ -531,15 +577,30 @@ class SentinelService:
                 continue
             try:
                 changed = self.check(rec.name, scanner=scanner)
+                held = self._held(rec.id)
             except Exception:  # noqa: BLE001 — keep sweeping the rest
                 log.exception("sentinel %s check failed", rec.name)
                 continue
-            if not changed:
+            # 03-a review: what the day's limit held back is suggested on the
+            # first sweep that can, with whatever is new (newest first, once).
+            seen_paths = {str(c.get("path")) for c in changed}
+            todo = [*changed, *(h for h in held if str(h.get("path")) not in seen_paths)]
+            if not todo:
                 # Idea 39 (D-39.3): changes held back by the hour go out once
                 # the hour is up, even when nothing new came.
                 self.report_to_chat(rec, [])
                 continue
-            proposal = self._propose(intent, rec, changed)
+            proposal = self._propose(intent, rec, todo)
+            try:
+                # Held back by the day's limit: kept on the row, never lost.
+                # Made, or held back by a switch / a forgotten folder: cleared.
+                keep: list[dict] = []
+                if proposal is None and self._limit_holds(intent):
+                    stamp = utcnow().isoformat()
+                    keep = [{**c, "seen_at": c.get("seen_at") or stamp} for c in todo]
+                self._keep_held(rec.id, keep)
+            except Exception:  # noqa: BLE001 — keep sweeping the rest
+                log.warning("watcher %s could not keep its held-back changes", rec.name, exc_info=True)
             if proposal is not None:
                 created.append(proposal)
             self.report_to_chat(rec, changed, suggested=proposal is not None)

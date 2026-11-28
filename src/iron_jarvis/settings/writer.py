@@ -690,6 +690,16 @@ class ConfigWriter:
                 )
             except Exception:  # noqa: BLE001 — the next boot picks it up
                 pass
+        if any(k.startswith("notice_") for k in updated):
+            # Next leaps 03-a review: a kind of suggestion about the owner's
+            # work switched off (or the whole of it) takes what waits of that
+            # kind off the list at once, as its help text says.
+            try:
+                from ..motivation import notices
+
+                notices.withdraw_switched_off(self.platform)
+            except Exception:  # noqa: BLE001 — the list's own read skips them too
+                log.warning("suggestions of a switched-off kind could not be taken off the list", exc_info=True)
         if "opencode_local_models" in updated:
             try:
                 self.platform.providers.refresh_opencode()

@@ -404,9 +404,36 @@ def test_a_watchers_suggestion_carries_facts_and_counts_toward_the_days_limit(pl
     svc.poll_once(intent, scanner=_scanner(fs2))
     fs2["/clients/smith/intake/a.pdf"] = 1.0
     assert svc.poll_once(intent, scanner=_scanner(fs2)) == []
+    # 03-a review: held back, never lost. The change waits on the watcher's
+    # row; a sweep inside the 24 hours still makes nothing, and the first
+    # sweep after they are up suggests it, with no new file since.
+    assert svc.poll_once(intent, scanner=_scanner(fs2)) == []
+    _age_suggestions(platform, hours=25)
+    [held] = svc.poll_once(intent, scanner=_scanner(fs2))
+    assert held.title == "Your watcher second saw 1 new or changed file in intake"
+    assert "a.pdf" in held.decoded_evidence()[0]["text"]
+    assert svc.poll_once(intent, scanner=_scanner(fs2)) == []  # made once, then cleared
+    intent.reject(held.id)
     # Its kind's switch stops it too.
     platform.config.notice_max_per_day = 10
     platform.config.notice_new_files = False
     fs2["/clients/smith/intake/b.pdf"] = 1.0
     assert svc.poll_once(intent, scanner=_scanner(fs2)) == []
 
+
+
+def _age_suggestions(platform, *, hours: float) -> None:
+    """Move every suggestion's ``created_at`` back (the day's limit counts
+    the last 24 hours from the rows)."""
+    from datetime import timedelta
+
+    from sqlmodel import select
+
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.motivation.models import ProposalRecord
+
+    with session_scope(platform.engine) as db:
+        for r in db.exec(select(ProposalRecord)):
+            r.created_at = r.created_at - timedelta(hours=hours)
+            db.add(r)
+        db.commit()
