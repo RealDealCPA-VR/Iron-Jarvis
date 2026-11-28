@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.600.0
+
+**A rule works hands-off inside the limits you approved once.** A rule that starts agent work now runs on its own **inside limits you approve once**: rehearse it, read what it would do, and press **Keep it**.
+
 ## v1.599.0
 
 **Iron Jarvis notices things about your work.** A few times a day Iron Jarvis looks at its own record of your work and may suggest something you probably want to pick up.
@@ -77,7 +81,3 @@
 ## v1.583.0
 
 **See what is filling a chat.** When a chat gets long, a small meter under the message box shows how full it is.
-
-## v1.582.0
-
-**Open items stay until they are done.** The card a new chat or coding session shows for a folder you have worked in now keeps every **open item** of that folder, however old, until it is done (the card itself is in "Pick up where you left off in a folder" below).
