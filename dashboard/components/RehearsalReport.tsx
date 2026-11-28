@@ -47,6 +47,8 @@ export interface RehearsalView {
   /** Leap 06-b: a workflow's rehearsal that stopped at its question: what
    *  was not rehearsed, in one line ("" when it did not stop there). */
   stopped_words?: string;
+  /** Leap 06-b review: one more line from the daemon (a paused goal). */
+  note?: string;
   error?: string;
   /** Why no run started (a schedule with nothing to do), in the row's words. */
   detail?: string;
@@ -98,6 +100,7 @@ export function decodeRehearsal(raw: unknown): RehearsalView | null {
     guessed_after: r.guessed_after === true,
     guessed_words: typeof r.guessed_words === "string" ? r.guessed_words : "",
     stopped_words: typeof r.stopped_words === "string" ? r.stopped_words : "",
+    note: typeof r.note === "string" ? r.note : "",
     error: typeof r.error === "string" ? r.error : "",
     detail: typeof r.detail === "string" ? r.detail : "",
     sample: typeof r.sample === "string" ? r.sample : "",
@@ -295,6 +298,11 @@ export function RehearsalReport({
       {view && view.status !== "running" && view.stopped_words ? (
         <p data-testid={`rehearsal-stopped-${id}`} className="break-words text-[13px] text-zinc-400">
           {view.stopped_words}
+        </p>
+      ) : null}
+      {view && view.status !== "running" && view.note ? (
+        <p data-testid={`rehearsal-note-${id}`} className="break-words text-[13px] text-zinc-400">
+          {view.note}
         </p>
       ) : null}
       {view && view.status !== "running" && view.guessed_words ? (

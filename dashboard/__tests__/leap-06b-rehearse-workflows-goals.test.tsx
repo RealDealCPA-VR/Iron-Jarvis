@@ -139,6 +139,25 @@ describe("the report's honest limits", () => {
   });
 });
 
+describe("a paused goal's rehearsal (06-b review)", () => {
+  it("draws the daemon's line that the goal will not run until it is resumed", () => {
+    render(
+      <RehearsalReport
+        id="reh_goal"
+        initial={workflowReport({
+          id: "reh_goal",
+          subject: { kind: "goal", id: "g_1", name: "Plan" },
+          stopped_words: "",
+          note: "This goal is paused, so it will not run until you resume it.",
+        }) as never}
+      />,
+    );
+    expect(screen.getByTestId("rehearsal-note-reh_goal")).toHaveTextContent(
+      "This goal is paused, so it will not run until you resume it.",
+    );
+  });
+});
+
 describe("Workflows: Rehearse on a saved workflow", () => {
   it("starts a rehearsal of that workflow and shows its report under the row", async () => {
     api.responses["/workflows"] = {
