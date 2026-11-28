@@ -493,12 +493,12 @@ REVIEWED_DOORS: dict[tuple[str, str], tuple[int, str]] = {
     ("webhooks/outbound.py", "http_post"): (
         1, "an outgoing webhook: skips every event of a rehearsal's run (SIDE_DOORS outbound_webhook)"),
     ("workflows/engine.py", "chat_post"): (
-        1, "a workflow run's report into the chat it was run from (report_to_chat, idea 39): a rule "
-           "or a schedule that starts a workflow cannot be rehearsed yet (06-b), so no rehearsal "
-           "reaches it"),
+        1, "a workflow run's report into the chat it was run from (report_to_chat, idea 39): "
+           "_report_end returns first for a rehearsal's run (leap 06-b, WorkflowEngine.rehearsal_of)"),
     ("workflows/engine.py", "notify"): (
-        1, "a workflow's notify step: a rule or a schedule that starts a workflow cannot be "
-           "rehearsed yet (06-b), so no rehearsal reaches it"),
+        1, "a workflow's notify step (_deliver): in a rehearsal's run _run_notify_step records "
+           "SIDE_DOORS workflow_notify and returns before it, and the ask step ends the run before "
+           "the parked question's line (leap 06-b)"),
 }
 
 

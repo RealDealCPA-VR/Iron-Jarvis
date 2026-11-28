@@ -909,6 +909,58 @@ def _item_extras(item: Any, n: int, outside: bool) -> dict:
     return {"item": entry, "index": {"status": "completed", "summary": str(n), "kind": "item"}}
 
 
+def _rehearsal_option() -> str:
+    """The run option a rehearsal rides on (``tools/rehearsal``)."""
+    from ..tools.rehearsal import REHEARSAL_OPTION
+
+    return REHEARSAL_OPTION
+
+
+def _after_ask(steps: "list[Step]", ask: "_AskPark", outputs: dict) -> list[str]:
+    """Leap 06-b: what comes after an ``ask`` a rehearsal stopped at, in
+    words, innermost first: each step after it in the list it sits in
+    ("“Tell”"), the items a For each it sits in had left ("2 more items of
+    “Each file”"), then the steps after its block, up to the workflow's own.
+    Read from the definition (``ask.at``) and the For each's stored list;
+    never raises (what cannot be read is left out, never guessed)."""
+    try:
+        at = list(ask.at or [])
+        if not at:
+            return [f"“{s.name}”" for s in steps[ask.index + 1:]]
+        # levels: (the list, the index in it, the block holding it, its key)
+        levels: list[tuple[list, int, Any, str]] = [(steps, int(at[0]), None, "")]
+        cur, idx, key = steps, int(at[0]), steps[int(at[0])].name
+        k = 1
+        while k + 1 < len(at):
+            block = cur[idx]
+            seg, nxt = str(at[k]), int(at[k + 1])
+            cur = list(getattr(block, seg) or [])
+            if block.kind == "for_each":
+                rest = ask.step[len(key) + 1:] if ask.step.startswith(key + "/") else ""
+                lane = rest.split("/", 1)[0]
+            else:
+                lane = "then" if seg == "steps" else "else"
+            levels.append((cur, nxt, block, key))
+            key = f"{key}/{lane}/{cur[nxt].name}"
+            idx = nxt
+            k += 2
+        words: list[str] = []
+        for lst, i, block, bkey in reversed(levels):
+            words.extend(f"“{s.name}”" for s in lst[i + 1:])
+            if block is not None and block.kind == "for_each":
+                held = outputs.get(bkey) if isinstance(outputs.get(bkey), dict) else {}
+                items = held.get("list") if isinstance(held.get("list"), list) else None
+                rest = ask.step[len(bkey) + 1:] if ask.step.startswith(bkey + "/") else ""
+                lane = rest.split("/", 1)[0]
+                if items is not None and lane.isdigit():
+                    left = len(items) - int(lane)
+                    if left > 0:
+                        words.append(f"{left} more item{'s' if left != 1 else ''} of “{block.name}”")
+        return words
+    except Exception:  # noqa: BLE001 — the row still says the question
+        return [f"“{s.name}”" for s in steps[ask.index + 1:]]
+
+
 def settle_open_blocks(outputs: dict, final_status: str) -> bool:
     """A run that ENDED with a block still open (stopped while it worked, or
     while it waited on an ask inside it): the block reads "cancelled" (or
@@ -990,6 +1042,26 @@ class WorkflowEngine:
         self.orchestrator = orchestrator
         #: Idea 09: step runs taken so far, per run id (:data:`MAX_STEP_RUNS`).
         self._step_runs: dict[str, int] = {}
+        #: Leap 06-b: the rehearsal each run this engine drives belongs to,
+        #: by run id, read from the RECORD when its drive starts
+        #: (:meth:`run_record`); absent for a real run.
+        self._rehearsals: dict[str, str] = {}
+        #: Leap 06-b: the scratch folder a rehearsal's tool steps were given
+        #: (no project folder), removed when its run ends.
+        self._rehearsal_dirs: dict[str, str] = {}
+
+    def rehearsal_of(self, run_id: str) -> str:
+        """The rehearsal the run ``run_id`` belongs to ("" for a real run)."""
+        return self._rehearsals.get(str(run_id or ""), "")
+
+    async def _publish(self, run_id: str, etype: Any, payload: dict) -> None:
+        """Publish a workflow event, unless the run is a REHEARSAL (leap
+        06-b): a rehearsal's run publishes nothing, so no bell, phone line,
+        outgoing webhook, rule that starts when a workflow ends, or parked
+        question hears it. Its report is read where it was asked for."""
+        if self.rehearsal_of(run_id):
+            return
+        await self.platform.event_bus.publish(etype, payload)
 
     @staticmethod
     def _has_runnable_steps(workflow: WorkflowDef) -> bool:
@@ -1007,6 +1079,7 @@ class WorkflowEngine:
         *,
         started_by: str = "",
         chat_thread_id: str = "",
+        rehearsal_id: str = "",
     ) -> WorkflowRunRecord:
         """Persist a fresh ``running`` record for *workflow* and return it.
 
@@ -1021,6 +1094,13 @@ class WorkflowEngine:
         Run — the record carries it, so the run's agent steps (and a resume
         of it) are admitted under Emergency stop. Every other door leaves it
         ``""``.
+
+        ``rehearsal_id`` (leap 06-b): this run is a REHEARSAL
+        (``tools/rehearsal_runs``, the only caller that passes it). It is
+        stored on the record, and the run reads it from there: a tool step
+        passes it in its ``ToolContext`` (the registry holds every call that
+        would change something), a notify step sends nothing, an ``ask``
+        step ends the run, an agent step's run carries it.
         """
         if not self._has_runnable_steps(workflow):
             raise ValueError("workflow has no steps")
@@ -1060,6 +1140,7 @@ class WorkflowEngine:
             ),
             # Idea 39 (39-a): run from a chat, its end is reported there.
             chat_thread_id=str(chat_thread_id or "").strip(),
+            rehearsal_id=str(rehearsal_id or "").strip(),
         )
         with session_scope(self.platform.engine) as db:
             db.add(record)
@@ -1111,14 +1192,29 @@ class WorkflowEngine:
     ) -> WorkflowRunRecord:
         """Drive *workflow*'s steps (:meth:`_drive_record`); a driver that
         RAISES outside a step ends the run Failed with the reason before the
-        exception goes on (v1.505.0, :meth:`_settled_on_raise`)."""
-        return await self._settled_on_raise(
-            record.id,
-            workflow.name,
-            self._drive_record(
-                record, workflow, start_index, outputs, session_ids, inputs
-            ),
-        )
+        exception goes on (v1.505.0, :meth:`_settled_on_raise`).
+
+        Leap 06-b: whether the run is a REHEARSAL is read from its record
+        here, once."""
+        rehearsal = str(getattr(record, "rehearsal_id", "") or "").strip()
+        if rehearsal:
+            self._rehearsals[record.id] = rehearsal
+        try:
+            return await self._settled_on_raise(
+                record.id,
+                workflow.name,
+                self._drive_record(
+                    record, workflow, start_index, outputs, session_ids, inputs
+                ),
+            )
+        finally:
+            if rehearsal:
+                self._rehearsals.pop(record.id, None)
+                scratch = self._rehearsal_dirs.pop(record.id, "")
+                if scratch:
+                    import shutil
+
+                    await asyncio.to_thread(shutil.rmtree, scratch, True)
 
     async def _settled_on_raise(self, run_id: str, workflow_name: str, coro):
         """Await *coro*; when it raises, end the run's row honestly, then
@@ -1173,7 +1269,8 @@ class WorkflowEngine:
         if not ended:
             return  # the row had already ended (or is parked): it is honest
         try:
-            await self.platform.event_bus.publish(
+            await self._publish(
+                run_id,
                 EventType.WORKFLOW_COMPLETED,
                 {
                     "workflow": workflow_name,
@@ -1282,6 +1379,10 @@ class WorkflowEngine:
                 return workspace_root
             if "d" not in _tool_ws:
                 _tool_ws["d"] = tempfile.mkdtemp(prefix=f"ijwf-{run_id[:12]}-")
+                if self.rehearsal_of(run_id):
+                    # Leap 06-b: a rehearsal's scratch folder goes when its
+                    # run ends (:meth:`run_record`); nothing was written in it.
+                    self._rehearsal_dirs[run_id] = _tool_ws["d"]
             return _tool_ws["d"]
 
         steps = list(workflow.steps)
@@ -1394,6 +1495,12 @@ class WorkflowEngine:
                     for s in (steps[i] for i in range(batch[0], len(steps))):
                         outputs.setdefault(s.name, {"status": "skipped"})
                     break
+                if self.rehearsal_of(run_id):
+                    # Leap 06-b: a REHEARSAL never asks and never parks. It
+                    # ends here; one rehearsed row says the question and the
+                    # steps after it, which were not rehearsed.
+                    await self._rehearse_ask(run_id, steps, ask, outputs)
+                    break
                 # PARK (v1.121.0): the run waits durably for the user. Idea 09:
                 # an ask inside a block adds where its definition is (``at``),
                 # and ``step`` is its path-qualified key.
@@ -1409,7 +1516,8 @@ class WorkflowEngine:
                         }
                     ),
                 )
-                await self.platform.event_bus.publish(
+                await self._publish(
+                    run_id,
                     "workflow.waiting",
                     {
                         "run_id": run_id,
@@ -1471,7 +1579,8 @@ class WorkflowEngine:
             finished_at=utcnow(),
             waiting_json="",
         )
-        await self.platform.event_bus.publish(
+        await self._publish(
+            run_id,
             EventType.WORKFLOW_COMPLETED,
             {
                 "workflow": workflow.name,
@@ -1540,7 +1649,8 @@ class WorkflowEngine:
         """Idea 39 (39-a): a workflow run from a chat writes ONE report there
         when it ends: how it ended (the run's own status), the step that ended
         a failed run, else the last step's summary. A run the user stopped
-        writes nothing. Never raises."""
+        writes nothing. Never raises. (Leap 06-b: a rehearsal's run is
+        never set up from a chat, so it reports nowhere.)"""
         try:
             from ..agents import chat_delivery as _cd
             from ..agents import outcome as _oc
@@ -1683,7 +1793,8 @@ class WorkflowEngine:
                             }
                         ),
                     )
-                    await self.platform.event_bus.publish(
+                    await self._publish(
+                        record.id,
                         "workflow.waiting",
                         {
                             "run_id": record.id,
@@ -1714,7 +1825,8 @@ class WorkflowEngine:
             # asks again) and routes it by the ask's own "if this fails".
             folded["folded"] = True
         outputs[name] = folded
-        await self.platform.event_bus.publish(
+        await self._publish(
+            record.id,
             EventType.WORKFLOW_STEP_COMPLETED,
             {
                 "run_id": record.id,
@@ -1749,7 +1861,8 @@ class WorkflowEngine:
                 finished_at=utcnow(),
                 waiting_json="",
             )
-            await self.platform.event_bus.publish(
+            await self._publish(
+                record.id,
                 EventType.WORKFLOW_COMPLETED,
                 {
                     "workflow": record.workflow_name,
@@ -1897,7 +2010,8 @@ class WorkflowEngine:
         key = key or step.name
         scope = view if view is not None else outputs
         in_block = {"block": block} if block else {}
-        await self.platform.event_bus.publish(
+        await self._publish(
+            run_id,
             EventType.WORKFLOW_STEP_STARTED,
             {
                 "run_id": run_id,
@@ -1962,7 +2076,7 @@ class WorkflowEngine:
                 # v1.226.0: delivery is a serial Slack/Telegram/SMTP round-trip
                 # (15s timeout per channel) — off the loop, or a slow webhook
                 # parks the whole daemon (/health included) for the duration.
-                out = await asyncio.to_thread(self._run_notify_step, step, scope)
+                out = await asyncio.to_thread(self._run_notify_step, step, scope, run_id)
             else:
                 out = await self._run_agent_step(
                     orch, run_id, workflow, step, outputs, completed,
@@ -1974,7 +2088,9 @@ class WorkflowEngine:
             # the attempt loop so a failed expectation routes through
             # on_failure exactly like any other failure (retry re-attempts,
             # skip continues, halt stops the run).
-            if out.get("status") == "completed" and step.expect:
+            # Leap 06-b: a step a rehearsal HELD made nothing to check; its
+            # expectation is not judged (never a failed step, never a pass).
+            if out.get("status") == "completed" and step.expect and not out.get("rehearsed"):
                 problem = self._expect_failure(step, out)
                 await self._note_expect_check(run_id, step.name, problem)  # release 5: the record of checks
                 if problem is not None:
@@ -2002,7 +2118,8 @@ class WorkflowEngine:
         outputs[key] = out
         await self._persist(run_id, session_ids=session_ids, outputs=outputs)
 
-        await self.platform.event_bus.publish(
+        await self._publish(
+            run_id,
             EventType.WORKFLOW_STEP_COMPLETED,
             {
                 "run_id": run_id,
@@ -2132,7 +2249,8 @@ class WorkflowEngine:
         top_name = frame.top_name or step.name
         at = [*frame.at, i]
         in_block = {"block": frame.top_name} if frame.top_name else {}
-        await self.platform.event_bus.publish(
+        await self._publish(
+            ctx.run_id,
             EventType.WORKFLOW_STEP_STARTED,
             {
                 "run_id": ctx.run_id, "workflow": ctx.workflow.name, "step": key,
@@ -2153,7 +2271,8 @@ class WorkflowEngine:
             out["handled"] = "skipped"
         ctx.outputs[key] = out
         await self._persist(ctx.run_id, session_ids=ctx.session_ids, outputs=ctx.outputs)
-        await self.platform.event_bus.publish(
+        await self._publish(
+            ctx.run_id,
             EventType.WORKFLOW_STEP_COMPLETED,
             {
                 "run_id": ctx.run_id, "workflow": ctx.workflow.name, "step": key,
@@ -2610,6 +2729,13 @@ class WorkflowEngine:
             **({"started_by_person": True} if person_started else {}),
             # v1.502.0: passed ONLY for a signal the router marked low.
             **signal_trust(scope),
+            # Leap 06-b: a rehearsal's agent step runs as a rehearsal (the
+            # same agent, model and account; every change it would make is
+            # held). Passed ONLY then, so every other call is as before.
+            **(
+                {"options": {_rehearsal_option(): self.rehearsal_of(run_id)}}
+                if self.rehearsal_of(run_id) else {}
+            ),
         )
         session_ids.append(session.id)
         # Record the live session id BEFORE running, so a cancel arriving
@@ -2684,6 +2810,8 @@ class WorkflowEngine:
             "kind": "agent",
             # Additive: the verdict itself (None for a run with none).
             "outcome": ending.outcome,
+            # Leap 06-b: a rehearsal's agent step made none of its changes.
+            **({"rehearsed": True} if self.rehearsal_of(run_id) else {}),
         }
 
     async def _failed_run_words(self, orch, session, exc: BaseException) -> str:
@@ -2760,8 +2888,10 @@ class WorkflowEngine:
         # by perm_key, the lesson chat already learned (grouped tools share
         # one key; a name-keyed grant silently denies them); everything else
         # refuses with the honest next step.
+        rehearsal = self.rehearsal_of(run_id)
         base = self.platform.permissions.authorize(tool_impl.perm_key(), rendered, None)
         grant = None
+        refused_by_tier = ""
         if not base.allowed:
             if getattr(tool_impl, "reversibility", None) is Reversibility.READONLY:
                 grant = [tool_impl.perm_key()]
@@ -2769,12 +2899,14 @@ class WorkflowEngine:
                 # Third plan PG2 (step 3): in the app's words. Never "set the
                 # tool to auto-approve": a floor tool cannot be, and a stored
                 # workflow is not the place to lift a tool's ask.
-                return {
-                    "status": "failed",
-                    "summary": tier_refusal_words(step, base),
-                    "tool": step.tool,
-                    "kind": "tool",
-                }
+                refused_by_tier = tier_refusal_words(step, base)
+                if not rehearsal:
+                    return {
+                        "status": "failed",
+                        "summary": refused_by_tier,
+                        "tool": step.tool,
+                        "kind": "tool",
+                    }
         ctx = ToolContext(
             workspace=Path(workspace_root)
             if workspace_root
@@ -2784,7 +2916,28 @@ class WorkflowEngine:
             config=self.platform.config,
             event_bus=self.platform.event_bus,
             engine=self.platform.engine,
+            # Leap 06-b: set ONLY from the run's own record (never a step's
+            # arguments): the registry holds every call that would change
+            # something and writes what it would have done.
+            **({"rehearsal_id": rehearsal} if rehearsal else {}),
         )
+        if refused_by_tier:
+            # Leap 06-b: in a rehearsal the real run's refusal is RECORDED
+            # through the registry's deny seam (one rehearsed row, "would be
+            # refused"), so the report lists it; the step fails as it would.
+            try:
+                await self.platform.registry.invoke(
+                    step.tool, rendered, ctx, self.platform.permissions, None,
+                    deny_reason=refused_by_tier,
+                )
+            except Exception:  # noqa: BLE001 — the ledger row is best effort; the step still fails
+                log.warning("workflow tool step %s: could not record the refusal", step.name, exc_info=True)
+            return {
+                "status": "failed",
+                "summary": refused_by_tier,
+                "tool": step.tool,
+                "kind": "tool",
+            }
         # THE TOOL'S OWN CHECK (third plan PG2, decision K2). The tier above
         # is not the whole gate: a tool may ask about THIS call every time
         # (an outbound webhook, a memory save the profile wants asked, a
@@ -2866,6 +3019,9 @@ class WorkflowEngine:
             "tool": step.tool,
             "kind": "tool",
         }
+        if rehearsal and isinstance(result.data, dict) and result.data.get("rehearsed"):
+            # Leap 06-b: the registry HELD this call (nothing was done).
+            out["rehearsed"] = True
         # Idea 09 (09-a review 4): what a tool read from a file, a page or a
         # program (``returns_untrusted_content``: read_file, read_document,
         # extract_pdf, shell…) is outside words, as ``{{Trigger}}`` is, unless
@@ -2922,7 +3078,7 @@ class WorkflowEngine:
             return ""
         return own_check_refusal_words(step, check)
 
-    def _run_notify_step(self, step: Step, outputs: dict) -> dict:
+    def _run_notify_step(self, step: Step, outputs: dict, run_id: str = "") -> dict:
         message = render_template(step.message or step.task, outputs).strip()
         if not message:
             return {
@@ -2930,6 +3086,10 @@ class WorkflowEngine:
                 "summary": "notify step has no message",
                 "kind": "notify",
             }
+        if self.rehearsal_of(run_id):
+            # Leap 06-b (a side door): a rehearsal sends nothing. ONE
+            # rehearsed row says what would have been sent, and where.
+            return self._rehearse_notify(run_id, message)
         ok, detail = self._deliver(message)
         # A notify step's ENTIRE job is delivery — a swallowed failure would
         # show a green run whose message never arrived (and on_failure could
@@ -2946,6 +3106,65 @@ class WorkflowEngine:
         if _reads_outside([step.message or step.task], outputs):
             out["outside"] = True
         return out
+
+    # ------------------------------------------------------------------ #
+    # rehearsals (leap 06-b)
+    # ------------------------------------------------------------------ #
+
+    def _rehearse_notify(self, run_id: str, message: str) -> dict:
+        """A notify step in a REHEARSAL: nothing is sent; one rehearsed row
+        (``SIDE_DOORS["workflow_notify"]``) says the message and where it
+        would go. BLOCKING (one insert): called off the loop."""
+        from ..tools import rehearsal as _rehearsal
+        from ..tools.rehearsal_runs import destination_names
+
+        quoted = " ".join(message.split())
+        quoted = quoted if len(quoted) <= 80 else quoted[:79] + "…"
+        where = destination_names(self.platform)
+        words = f"send the message “{quoted}”" + (f" to {where}" if where else "")
+        _rehearsal.record_side_door(
+            self.platform.engine, session_id=run_id, run_id=run_id,
+            door="workflow_notify", words=words,
+        )
+        return {
+            "status": "completed",
+            "summary": f"Rehearsal: not sent. Would {words}.",
+            "kind": "notify",
+            "rehearsed": True,
+        }
+
+    async def _rehearse_ask(
+        self, run_id: str, steps: "list[Step]", ask: _AskPark, outputs: dict
+    ) -> None:
+        """An ``ask`` step in a REHEARSAL: the rehearsal ENDS here. Nothing is
+        asked, parked or delivered; one rehearsed row
+        (``SIDE_DOORS["workflow_ask"]``) says "ask you: <question>" and
+        names, in ``after``, what comes after it and so was not rehearsed:
+        the rest of the block it sits in (the steps after it there, and the
+        items a For each had left), then the workflow's own later steps."""
+        from ..tools import rehearsal as _rehearsal
+
+        after = _after_ask(steps, ask, outputs)
+        question = " ".join(str(ask.question or "").split())
+        await asyncio.to_thread(
+            lambda: _rehearsal.record_side_door(
+                self.platform.engine, session_id=run_id, run_id=run_id,
+                door="workflow_ask", words=f"ask you: {question}",
+                extra={"after": after},
+            )
+        )
+        outputs[ask.step] = {
+            "status": "completed",
+            "kind": "ask",
+            "summary": f"Rehearsal: stopped here. Would ask you: {question}"[:_MAX_STEP_SUMMARY],
+            "rehearsed": True,
+        }
+        for s in steps[ask.index + 1:]:
+            outputs.setdefault(s.name, {
+                "status": "skipped", "kind": s.kind,
+                "summary": "Not rehearsed: the rehearsal stopped at the question before it.",
+            })
+        await self._persist(run_id, outputs=outputs)
 
     # ------------------------------------------------------------------ #
     # verified steps (v1.170.0, contract 8)
@@ -3017,7 +3236,9 @@ class WorkflowEngine:
         ONE row of the record of checks (``checks/existing.workflow_check``:
         held, did not hold, or could not be looked for), under the workflow
         run. What the step and the run do with ``problem`` is unchanged. Off
-        the loop; never raises."""
+        the loop; never raises. A rehearsal's run writes none (leap 06-b)."""
+        if self.rehearsal_of(str(run_id or "")):
+            return
         try:
             from ..checks import existing as _existing
             from ..checks import record as _checks

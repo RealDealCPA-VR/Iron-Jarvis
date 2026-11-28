@@ -363,8 +363,14 @@ class GoalEngine:
             log.warning("could not read whether goal %s's chat is Local only", goal.id, exc_info=True)
         return {"options": options}
 
-    async def run_iteration(self, goal_id: str) -> dict[str, Any]:
+    async def run_iteration(self, goal_id: str, rehearsal: str = "") -> dict[str, Any]:
         """ONE iteration: gate → spawn → account → verify → checkpoint.
+
+        ``rehearsal`` (leap 06-b): a REHEARSAL's id. The try runs once as a
+        rehearsal (:meth:`_rehearse_try`): every change it would make is
+        held, and it settles no spend against the budget, moves no
+        checkpoint and strikes no breaker. Only ``tools/rehearsal_runs``
+        passes it.
 
         Returns an honest result dict ``{ok, goal_id, state, reason?/status?,
         session_id?, iteration?, spent?, satisfied?, unmet?, note?}`` —
@@ -378,6 +384,8 @@ class GoalEngine:
         goal = self.store.get(goal_id)
         if goal is None:
             return {"ok": False, "goal_id": goal_id, "reason": f"unknown goal '{goal_id}'"}
+        if str(rehearsal or "").strip():
+            return await self._rehearse_try(goal, str(rehearsal).strip())
 
         if goal.state != "active":
             reason = f"goal is {goal.state}"
@@ -434,6 +442,85 @@ class GoalEngine:
         # ONCE, after its checks (its run writes nothing itself).
         await self._report_try(goal, result)
         return result
+
+    async def _rehearse_try(self, goal: GoalContractRecord, rehearsal: str) -> dict[str, Any]:
+        """Leap 06-b: ONE try of ``goal`` as a REHEARSAL. The same gates a
+        real try meets refuse it in the same words (a goal that is finished,
+        stopped or tripped, a budget reached, tools it may not run,
+        Emergency stop), but a refusal here publishes nothing and reports
+        nowhere: the rehearsal's report says it. A paused goal can be
+        rehearsed (a goal that is not live yet is what a rehearsal is for).
+
+        The try runs the goal's own task, agent, tools and project, with the
+        rehearsal on its run (every change it would make is held), Local
+        only when the goal's chat is. It touches none of the goal's books:
+        no spend is settled against the budget, no checkpoint (not even the
+        running marker) is written, no breaker is struck or reset, no state
+        moves, no goal event is published, and the checks or the judge are
+        not run (a held change has nothing to check, and the judge would be
+        a second model call). When the goal reports to a chat, one rehearsed
+        row says the report it would write there. Returns ``{ok, goal_id,
+        session_id?, status?, reason?, refused?}``; never raises but for a
+        cancellation of the caller itself."""
+        from ..tools import rehearsal as _rehearsal
+
+        def refused(reason: str) -> dict[str, Any]:
+            return {"ok": False, "refused": True, "goal_id": goal.id, "state": goal.state, "reason": reason}
+
+        if goal.state not in ("active", "paused"):
+            if goal.state == "tripped":
+                why = str(goal.decoded_breaker().get("last_reason") or "").strip()
+                return refused(
+                    "goal is tripped (circuit breaker" + (f": {why}" if why else "")
+                    + ") — reopen it explicitly to continue"
+                )
+            return refused(f"goal is {goal.state}")
+        floor_problem = grants_violation(goal.decoded_grants())
+        if floor_problem:
+            return refused(f"allowed_grants are not runnable: {floor_problem}")
+        exhausted = budget_exceeded(goal.decoded_budget(), goal.decoded_spent())
+        if exhausted:
+            return refused(exhausted)
+        _stop = getattr(self.orch, "emergency_stop_reason", None)
+        _why = _stop(_goal_origin(goal.id)) if callable(_stop) else ""
+        if _why:
+            return refused(_why)
+        from ..agents import chat_delivery as _cd
+
+        report_kw = await asyncio.to_thread(self._report_options, goal)
+        options: dict[str, Any] = {_rehearsal.REHEARSAL_OPTION: rehearsal}
+        if (report_kw.get("options") or {}).get("local_only"):
+            options["local_only"] = True  # Local only stays local
+        if await asyncio.to_thread(_cd.report_target_of, self.p.engine, "goal", goal.id):
+            # A side door: the real try writes one report into the goal's chat.
+            await asyncio.to_thread(
+                lambda: _rehearsal.record_side_door(
+                    self.p.engine, session_id=rehearsal, door="chat_delivery",
+                    words="report this try in the chat the goal was set up from",
+                )
+            )
+        session = await self.orch.create_session(
+            self._compose_task(goal),
+            _agent_type(goal.agent_type),
+            project_id=goal.project_id,
+            allow_tools=goal.decoded_grants(),
+            origin=_goal_origin(goal.id),
+            options=options,
+        )
+        try:
+            session = await self._run_session(session)
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            if me is not None and me.cancelling():
+                raise  # the rehearsal itself is being stopped
+            return {"ok": False, "goal_id": goal.id, "session_id": session.id, "status": "cancelled"}
+        except Exception as exc:  # noqa: BLE001 — a crashed try is a failed rehearsal
+            row = self._session_row(session.id) or session
+            return {"ok": False, "goal_id": goal.id, "session_id": session.id, "status": "failed",
+                    "reason": _breaker_reason(exc, row, self.p)}
+        completed = session.status is SessionStatus.COMPLETED
+        return {"ok": completed, "goal_id": goal.id, "session_id": session.id,
+                "status": "completed" if completed else "failed"}
 
     async def _report_try(self, goal: GoalContractRecord, result: dict[str, Any]) -> None:
         """Write ONE report of a try into the chat the goal was set up from:

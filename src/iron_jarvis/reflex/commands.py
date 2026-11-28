@@ -119,6 +119,11 @@ class CommandInterpreter:
             rows = list(
                 db.exec(
                     select(WorkflowRunRecord)
+                    # Leap 06-b: a rehearsal's run is not a run of the workflow.
+                    .where(
+                        (WorkflowRunRecord.rehearsal_id == "")
+                        | (WorkflowRunRecord.rehearsal_id.is_(None))  # type: ignore[union-attr]
+                    )
                     .order_by(WorkflowRunRecord.started_at.desc())  # type: ignore[attr-defined]
                     .limit(8)
                 )

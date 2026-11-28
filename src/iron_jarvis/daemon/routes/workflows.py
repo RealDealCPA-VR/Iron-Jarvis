@@ -211,6 +211,11 @@ def register(app: FastAPI, d) -> None:
             )
             if status:
                 stmt = stmt.where(WorkflowRunRecord.status == status)
+            # Leap 06-b: a rehearsal's run is not a run of the workflow; its
+            # report is the rehearsal's card (GET /rehearsals/{id}).
+            stmt = stmt.where(
+                (WorkflowRunRecord.rehearsal_id == "") | (WorkflowRunRecord.rehearsal_id.is_(None))  # type: ignore[union-attr]
+            )
             if offset:
                 stmt = stmt.offset(offset)
             rows = list(db.exec(stmt))
@@ -391,6 +396,13 @@ def register(app: FastAPI, d) -> None:
                 rec = db.get(WorkflowRunRecord, run_id)
                 if rec is None:
                     raise HTTPException(status_code=404, detail="no such run")
+                if getattr(rec, "rehearsal_id", ""):
+                    # Leap 06-b: a rehearsal is never picked up again (its
+                    # report said it stopped); rehearse the workflow again.
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This run was a rehearsal, so it is not picked up again. Rehearse the workflow again.",
+                    )
                 # Pre-validate BEFORE claiming (coordinator, v1.170.0): an
                 # unreconstructable record (corrupt steps_json) that we claimed
                 # first would sit in 'resuming' until the next boot's reconcile.

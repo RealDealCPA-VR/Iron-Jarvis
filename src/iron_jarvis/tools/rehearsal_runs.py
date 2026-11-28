@@ -1,4 +1,6 @@
 """Leap 06-a: start a rehearsal of a rule or a schedule, and read its report.
+Leap 06-b: and of a workflow (``WorkflowEngine`` with the rehearsal on its
+run record) or a goal (``GoalEngine.run_iteration(…, rehearsal=)``).
 
 One door for the page (``daemon/routes/rehearsals.py``) and for chat (the
 ``rehearse`` tool below): :func:`start` runs the subject through ITS OWN door
@@ -43,7 +45,15 @@ _ACTIVE = ("active", "queued")
 _KIND_ALIASES = {"rule": "rule", "reflex": "rule", "rules": "rule", "schedule": "schedule", "schedules": "schedule",
                  # Next leaps 19-b: a schedule Iron Jarvis offers (Improvements),
                  # rehearsed through the schedule's own door before it is made.
-                 "offer": "offer"}
+                 "offer": "offer",
+                 # Leap 06-b: a saved workflow and a goal.
+                 "workflow": "workflow", "workflows": "workflow", "goal": "goal", "goals": "goal"}
+#: The refusal when the kind is not one of these.
+UNKNOWN_KIND_WORDS = "Only a rule, a schedule, a workflow or a goal can be rehearsed."
+#: The finish a workflow's real run announces (an outgoing webhook may hear it).
+_WORKFLOW_FINISH_EVENTS = (
+    "workflow.completed", "workflow.step_started", "workflow.step_completed", "workflow.waiting",
+)
 
 
 class RehearsalRefused(Exception):
@@ -93,13 +103,53 @@ def _find_schedule(platform: Any, ident: str) -> Any:
     return None
 
 
+def _find_workflow(platform: Any, ident: str) -> Any:
+    """A saved workflow by its name (exactly, then ignoring case and spaces)
+    or its id. BLOCKING."""
+    from ..workflows.store import WorkflowStore
+
+    store = WorkflowStore(platform.engine)
+    found = store.get(ident)
+    if found is not None:
+        return found
+    want = " ".join(str(ident or "").split()).lower()
+    for w in store.list():
+        if w.id == ident or " ".join(str(w.name or "").split()).lower() == want:
+            return w
+    return None
+
+
+def _find_goal(platform: Any, ident: str) -> Any:
+    """A goal by its id or its name (ignoring case and spaces). BLOCKING."""
+    goals = getattr(platform, "goal_engine", None)
+    if goals is None:
+        return None
+    found = goals.store.get(ident)
+    if found is not None:
+        return found
+    want = " ".join(str(ident or "").split()).lower()
+    for g in goals.store.list():
+        if " ".join(str(g.name or "").split()).lower() == want:
+            return g
+    return None
+
+
 def _names(platform: Any, kind: str) -> list[str]:
     try:
         if kind == "rule":
             return [r.name for r in platform.reflex.list() if r.name][:20]
+        if kind == "workflow":
+            from ..workflows.store import WorkflowStore
+
+            return [w.name for w in WorkflowStore(platform.engine).list()][:20]
+        if kind == "goal":
+            return [g.name for g in platform.goal_engine.store.list() if g.name][:20]
         return [t.name for t in platform.scheduler.list()][:20]
     except Exception:  # noqa: BLE001
         return []
+
+
+_PLURAL_KIND = {"rule": "rules", "schedule": "schedules", "workflow": "workflows", "goal": "goals"}
 
 
 def _destinations_words(platform: Any, payload: dict) -> str:
@@ -107,7 +157,14 @@ def _destinations_words(platform: Any, payload: dict) -> str:
     when it notifies nobody."""
     if payload.get("notify") is False:
         return ""
-    names = payload.get("notify_channels")
+    where = destination_names(platform, payload.get("notify_channels"))
+    return f"send the result to {where}" if where else ""
+
+
+def destination_names(platform: Any, names: Any = None) -> str:
+    """Where a message goes, in words ("this PC and Slack"): ``names``, or
+    every destination the notifier sends to; "" when there is none. Never
+    raises. (Leap 06-b: a workflow's notify step in a rehearsal says it.)"""
     if not isinstance(names, list) or not names:
         try:
             names = list(platform.notifier.channels())
@@ -118,11 +175,10 @@ def _destinations_words(platform: Any, payload: dict) -> str:
         n = str(n or "").strip()
         if not n:
             continue
-        said.append("this PC" if n.lower() in ("desktop", "this_pc") else n[:1].upper() + n[1:])
+        said.append("this PC" if n.lower() in ("desktop", "this_pc", "this-pc") else n[:1].upper() + n[1:])
     if not said:
         return ""
-    where = said[0] if len(said) == 1 else ", ".join(said[:-1]) + " and " + said[-1]
-    return f"send the result to {where}"
+    return said[0] if len(said) == 1 else ", ".join(said[:-1]) + " and " + said[-1]
 
 
 # --------------------------------------------------------------------------- #
@@ -137,23 +193,27 @@ async def start(platform: Any, kind: str, ident: str) -> dict[str, Any]:
     Raises :class:`RehearsalRefused` for an unknown kind or subject."""
     k = _KIND_ALIASES.get(str(kind or "").strip().lower(), "")
     if not k:
-        raise RehearsalRefused("Only a rule or a schedule can be rehearsed for now.")
+        raise RehearsalRefused(UNKNOWN_KIND_WORDS)
     ident = " ".join(str(ident or "").split())
     if k == "offer":
         return await start_offer(platform, ident)
     if not ident:
         raise RehearsalRefused(f"Say which {k} to rehearse.")
-    finder = _find_rule if k == "rule" else _find_schedule
+    finder = {"rule": _find_rule, "workflow": _find_workflow, "goal": _find_goal}.get(k, _find_schedule)
     subject = await asyncio.to_thread(finder, platform, ident)
     if subject is None:
         names = await asyncio.to_thread(_names, platform, k)
         listed = ", ".join(f"“{n}”" for n in names)
-        what = "rules" if k == "rule" else "schedules"
+        what = _PLURAL_KIND.get(k, k + "s")
         raise RehearsalRefused(
             f"There is no {k} called “{ident}”." + (f" Your {what}: {listed}." if listed else ""),
             status=404,
         )
     store = _store(platform)
+    if k == "workflow":
+        return await _start_workflow(platform, store, subject)
+    if k == "goal":
+        return await _start_goal(platform, store, subject)
     if k == "rule":
         router = getattr(platform, "reflex_router", None)
         if router is None:
@@ -275,25 +335,208 @@ async def start_offer(platform: Any, offer_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(report, platform, rec.id)
 
 
-def _record_webhooks(platform: Any, rid: str) -> None:
+def _record_webhooks(
+    platform: Any, rid: str, events: "tuple[str, ...]" = _FINISH_EVENTS, what: str = "task"
+) -> None:
     """A SIDE DOOR (``rehearsal.SIDE_DOORS["outbound_webhook"]``): every
-    outgoing webhook that would hear the task finish is one rehearsed row,
-    written BEFORE the run so the report never grows after it is ready.
-    The delivery itself skips every event of a rehearsal's run
-    (``webhooks/outbound.on_event``). BLOCKING. Never raises."""
+    outgoing webhook that would hear the task finish (or, ``what`` workflow,
+    any of the workflow's own events) is one rehearsed row, written BEFORE the run so the report never
+    grows after it is ready. The delivery itself skips every event of a
+    rehearsal's run (``webhooks/outbound.on_event``), and a workflow's
+    rehearsal publishes no workflow event at all. BLOCKING. Never raises."""
     hooks = getattr(platform, "outbound_webhooks", None)
     if hooks is None:
         return
     try:
-        slugs = list(hooks.subscribed_to(_FINISH_EVENTS))[:_WEBHOOKS_MAX]
+        slugs = list(hooks.subscribed_to(events))[:_WEBHOOKS_MAX]
     except Exception:  # noqa: BLE001
         return
     for slug in slugs:
+        said = (
+            f"tell another app through the webhook “{slug}” how the workflow's run went"
+            if what == "workflow" else
+            f"tell another app through the webhook “{slug}” that the {what} finished"
+        )
         R.record_side_door(
             platform.engine, session_id=rid, door="outbound_webhook",
-            words=f"tell another app through the webhook “{slug}” that the task finished",
+            words=said,
             target=slug,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Leap 06-b: a workflow and a goal
+# --------------------------------------------------------------------------- #
+
+#: Run statuses of a workflow run that has not ended.
+_WORKFLOW_LIVE = ("running", "resuming", "cancelling", "waiting")
+
+
+async def _start_workflow(platform: Any, store: RehearsalStore, subject: Any) -> dict[str, Any]:
+    """Rehearse the saved workflow ``subject`` through the workflow engine's
+    own door: its run record is made with the rehearsal on it
+    (``WorkflowEngine.create_record(…, rehearsal_id=)``), the same checks a
+    real run meets refuse it first, and its steps run in the background
+    exactly as a real run's would, blocks (If, For each) included. A workflow
+    of fixed steps (tools, notify, ask) is rehearsed with no model call."""
+    from ..workflows.engine import STARTED_BY_PERSON, WorkflowEngine
+
+    rec = await asyncio.to_thread(
+        lambda: store.create(kind="workflow", subject_id=subject.id, name=subject.name, sample={})
+    )
+
+    def _failed(words: str) -> None:
+        store.update(rec.id, status="failed", finished_at=utcnow(), summary={"error": words})
+
+    try:
+        from ..workflows.store import WorkflowStore
+
+        wf = await asyncio.to_thread(WorkflowStore(platform.engine).load_def, subject.name)
+    except ValueError as exc:  # a step of a kind this version does not know
+        await asyncio.to_thread(_failed, str(exc) or "This workflow cannot run.")
+        return await asyncio.to_thread(report, platform, rec.id)
+    if wf is None:
+        await asyncio.to_thread(_failed, "The workflow it rehearses is no longer there.")
+        return await asyncio.to_thread(report, platform, rec.id)
+    engine = WorkflowEngine(platform, getattr(platform, "orchestrator", None))
+    try:
+        run = await asyncio.to_thread(
+            lambda: engine.create_record(wf, started_by=STARTED_BY_PERSON, rehearsal_id=rec.id)
+        )
+    except ValueError as exc:  # no steps, a block that cannot run: the real run's own refusal
+        await asyncio.to_thread(_failed, " ".join(str(exc).split()) or "This workflow cannot run.")
+        return await asyncio.to_thread(report, platform, rec.id)
+    await asyncio.to_thread(lambda: store.update(rec.id, run_id=run.id))
+    events = _WORKFLOW_FINISH_EVENTS + (_FINISH_EVENTS if any(_has_agent_step(s) for s in wf.steps) else ())
+    await asyncio.to_thread(_record_webhooks, platform, rec.id, events, "workflow")
+    _DRIVERS[rec.id] = asyncio.ensure_future(_drive_workflow(platform, store, rec.id, engine, run, wf))
+    return await asyncio.to_thread(report, platform, rec.id)
+
+
+def _has_agent_step(step: Any) -> bool:
+    if getattr(step, "kind", "") == "agent":
+        return True
+    return any(_has_agent_step(s) for s in [*(getattr(step, "steps", None) or []),
+                                             *(getattr(step, "else_steps", None) or [])])
+
+
+def _end_workflow_run(platform: Any, run_id: str) -> None:
+    """A stopped rehearsal's workflow run ends ``cancelled`` (never left
+    "running"). BLOCKING. Never raises."""
+    try:
+        from ..workflows.models import WorkflowRunRecord
+
+        with session_scope(platform.engine) as db:
+            row = db.get(WorkflowRunRecord, run_id)
+            if row is not None and row.status in _WORKFLOW_LIVE:
+                row.status = "cancelled"
+                row.current_session_id = None
+                row.finished_at = row.finished_at or utcnow()
+                db.add(row)
+                db.commit()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _drive_workflow(
+    platform: Any, store: RehearsalStore, rid: str, engine: Any, run: Any, wf: Any
+) -> None:
+    """The workflow's rehearsal, run in the background. Its run record
+    settles the report (:func:`_settle_workflow`). A Stop cancels this task;
+    the run then ends Stopped."""
+    try:
+        await engine.run_record(run, wf)
+    except asyncio.CancelledError:
+        await asyncio.shield(asyncio.to_thread(_end_workflow_run, platform, run.id))
+        await asyncio.shield(asyncio.to_thread(
+            lambda: store.update(rid, status="stopped", finished_at=utcnow())
+        ))
+        raise
+    except Exception:  # noqa: BLE001 — a step that raises is a failed step
+        await asyncio.to_thread(
+            lambda: store.update(rid, status="failed", finished_at=utcnow(),
+                                 summary={"error": "The rehearsal stopped with an error."})
+        )
+    finally:
+        _DRIVERS.pop(rid, None)
+
+
+def _settle_workflow(platform: Any, store: RehearsalStore, rec: RehearsalRecord) -> RehearsalRecord:
+    """A workflow's rehearsal settles from its RUN RECORD: finished →
+    ``ready`` (a step that failed and was gone past is said in ``detail``),
+    a step that stopped it → ``failed`` with that step's own words, cancelled
+    → ``stopped``. A run left unfinished with no driver (Iron Jarvis
+    restarted) → ``failed``. BLOCKING."""
+    from ..workflows.models import WorkflowRunRecord
+    from ..workflows.step_outcome import step_failures
+
+    if rec.id in _DRIVERS:
+        return rec
+    run = None
+    if rec.run_id:
+        with session_scope(platform.engine) as db:
+            run = db.get(WorkflowRunRecord, rec.run_id)
+            if run is not None:
+                db.expunge(run)
+    if run is None:
+        if rec.created_at and utcnow().replace(tzinfo=None) - rec.created_at.replace(tzinfo=None) > NEVER_STARTED_AFTER:
+            return store.update(rec.id, status="failed", finished_at=utcnow(),
+                                summary={"error": "The rehearsal did not start."}) or rec
+        return rec
+    status = str(run.status or "")
+    if status == "cancelled":
+        return store.update(rec.id, status="stopped", finished_at=utcnow()) or rec
+    if status in _WORKFLOW_LIVE or status == "interrupted":
+        return store.update(rec.id, status="failed", finished_at=utcnow(), summary={
+            "error": "The rehearsal stopped before it finished, when Iron Jarvis restarted."
+        }) or rec
+    try:
+        steps = [str(s.get("name") or "") for s in json.loads(run.steps_json or "[]") if isinstance(s, dict)]
+        outputs = json.loads(run.outputs_json or "{}")
+    except (TypeError, ValueError):
+        steps, outputs = [], {}
+    halted, skipped = step_failures(steps, outputs if isinstance(outputs, dict) else {})
+    if status == "failed":
+        if halted is not None:
+            words = f"The step “{halted[0]}” failed: {halted[1].get('summary') or 'it failed'}"
+        else:
+            words = "Its run could not finish."
+        return store.update(rec.id, status="failed", finished_at=utcnow(), summary={"error": words}) or rec
+    detail = ""
+    if skipped:
+        names = ", ".join(f"“{n}”" for n, _ in skipped[:5])
+        detail = f"These steps failed and the run went on past them: {names}"
+    return store.update(rec.id, status="ready", finished_at=utcnow(), summary={"detail": detail}) or rec
+
+
+async def _start_goal(platform: Any, store: RehearsalStore, goal: Any) -> dict[str, Any]:
+    """Rehearse one try of the goal ``goal`` (``GoalEngine.run_iteration(…,
+    rehearsal=)``) in the background: its books are not touched."""
+    engine = getattr(platform, "goal_engine", None)
+    rec = await asyncio.to_thread(
+        lambda: store.create(kind="goal", subject_id=goal.id, name=goal.name or goal.id, sample={})
+    )
+    if engine is None:
+        await asyncio.to_thread(
+            lambda: store.update(rec.id, status="failed", finished_at=utcnow(),
+                                 summary={"error": "Goals are not running in this copy of Iron Jarvis."})
+        )
+        return await asyncio.to_thread(report, platform, rec.id)
+    # A side door: an outgoing webhook would hear the try's run finish.
+    await asyncio.to_thread(_record_webhooks, platform, rec.id)
+
+    async def _one_try() -> dict[str, Any]:
+        res = await engine.run_iteration(goal.id, rehearsal=rec.id)
+        sid = str(res.get("session_id") or "")
+        if res.get("refused"):
+            reason = " ".join(str(res.get("reason") or "").split())
+            return {"ok": False, "session_id": "", "error": f"A real try would not run: {reason}".rstrip(": ")}
+        if not sid:
+            return {"ok": False, "session_id": "", "error": str(res.get("reason") or "It could not run.")}
+        return {"ok": True, "session_id": sid, "detail": ""}
+
+    _DRIVERS[rec.id] = asyncio.ensure_future(_drive(store, rec.id, _one_try()))
+    return await asyncio.to_thread(report, platform, rec.id)
 
 
 def renew_in(engine: Any, options: dict[str, Any]) -> str:
@@ -333,8 +576,15 @@ def _settle_start(store: RehearsalStore, rid: str, res: dict[str, Any]) -> None:
 async def _drive_schedule(platform: Any, store: RehearsalStore, rid: str, task: Any) -> None:
     """The schedule's rehearsal, run in the background (its fire awaits the
     run); its result settles the record. A Stop cancels this task."""
+    await _drive(store, rid, platform.rehearse_scheduled(task, rid))
+
+
+async def _drive(store: RehearsalStore, rid: str, work: Any) -> None:
+    """Await ``work`` (``{"ok", "session_id", "detail"}`` or ``{"ok": False,
+    "error"}``) in the background; its result settles the record (a run it
+    started settles the report when it ends). A Stop cancels this task."""
     try:
-        res = await platform.rehearse_scheduled(task, rid)
+        res = await work
         sid = str(res.get("session_id") or "")
         if sid:
             await asyncio.to_thread(lambda: store.update(rid, session_ids=[sid]))
@@ -402,7 +652,7 @@ async def keep(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     when = utcnow()
     stamped = await asyncio.to_thread(store.stamp_subject, rec, when)
     if not stamped:
-        what = "rule" if rec.subject_kind == "rule" else "schedule"
+        what = rec.subject_kind if rec.subject_kind in ("rule", "workflow", "goal") else "schedule"
         raise RehearsalRefused(f"The {what} it rehearsed is no longer there.", status=404)
     await asyncio.to_thread(lambda: store.update(rec.id, kept_at=when))
     return await asyncio.to_thread(report, platform, rec.id)
@@ -424,7 +674,7 @@ def open_reports(platform: Any, kind: str) -> list[dict[str, Any]]:
     unknown kind."""
     k = _KIND_ALIASES.get(str(kind or "").strip().lower(), "")
     if not k:
-        raise RehearsalRefused("Only a rule or a schedule can be rehearsed for now.")
+        raise RehearsalRefused(UNKNOWN_KIND_WORDS)
     since = utcnow().replace(tzinfo=None) - REOPEN_FOR
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
@@ -488,6 +738,8 @@ def _settle(platform: Any, store: RehearsalStore, rec: RehearsalRecord) -> Rehea
     ``failed`` (one failed: its own words) or ``stopped``. BLOCKING."""
     if rec.status != "running":
         return rec
+    if rec.subject_kind == "workflow":
+        return _settle_workflow(platform, store, rec)
     states = _session_states(platform, rec)
     if not states:
         if rec.id in _DRIVERS:
@@ -585,10 +837,13 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         raise RehearsalRefused("There is no such rehearsal.", status=404)
     rec = _settle(platform, store, rec)
     sessions = sessions_of(platform, rec)
+    # Leap 06-b: a workflow's tool steps, notify and ask are recorded under
+    # its RUN's id (their ``ToolContext.session_id``).
+    run_ids = [rec.run_id] if rec.subject_kind == "workflow" and rec.run_id else []
     with session_scope(platform.engine) as db:
         rows = list(db.exec(
             select(ToolInvocation)
-            .where(ToolInvocation.session_id.in_([*sessions, rec.id]))  # type: ignore[union-attr]
+            .where(ToolInvocation.session_id.in_([*sessions, *run_ids, rec.id]))  # type: ignore[union-attr]
             .order_by(ToolInvocation.created_at)  # type: ignore[arg-type]
         ).all())
         for r in rows:
@@ -600,19 +855,34 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     reads = 0
     # No run of its own started (a schedule whose fire had nothing to run, a
     # rule that could not start): no task finished, so no webhook heard one.
-    ran = bool(sessions)
+    ran = bool(sessions) or bool(run_ids)
+    # Leap 06-b: the order of reads and held changes, for ``guessed_after``.
+    order: list[tuple[str, bool]] = []
+    stopped_at: dict[str, Any] | None = None
     for row in rows:
         if not ran and row.session_id == rec.id and row.tool == "outbound_webhook":
             continue
         if not row.rehearsed:
-            if row.ok and not row.undo_of and _is_read(platform, row.tool):
-                reads += 1
+            if not row.undo_of and _is_read(platform, row.tool):
+                if row.ok:
+                    reads += 1
+                # A read that failed (a file a held write would have made)
+                # was a read all the same.
+                order.append(("read", False))
             continue
         try:
             args = json.loads(row.args_json or "{}")
         except (TypeError, ValueError):
             args = {}
         effect = R.effect_of(row.tool, args, platform.registry.get(row.tool) if row.tool else None)
+        if (row.would or "run") != "refuse":
+            order.append((row.tool if row.tool in R.AFTER_THE_RUN else effect.kind, True))
+        if row.tool == "workflow_ask" and stopped_at is None:
+            after = args.get("after") if isinstance(args.get("after"), list) else []
+            stopped_at = {
+                "question": _mask(str(effect.words or "").removeprefix("ask you: ")),
+                "not_rehearsed": [_mask(str(a)) for a in after if str(a).strip()][:20],
+            }
         # An item quotes a command or a message: every secret-looking value
         # in it is masked (the shared mask), on the card and on the phone.
         item = {"kind": effect.kind, "words": _mask(effect.words), "target": _mask(effect.target),
@@ -629,6 +899,7 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     summary = RehearsalStore.summary(rec)
     made_up = RehearsalStore.sample_is_made_up(rec)
     status = rec.status
+    guessed = R.guessed_after(order)
     if status == "ready":
         said = R.sentence(counted)
     elif status == "stopped":
@@ -647,12 +918,21 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         "would_total": len(counted),
         "refused": refused,
         "reads": reads,
-        # 06-b says when steps after a held change were worked out without it.
-        "guessed_after": False,
+        # Leap 06-b: a step that read came after a held change, so it read
+        # what the change would have changed, unchanged.
+        "guessed_after": guessed,
+        "guessed_words": R.GUESSED_AFTER_WORDS if guessed else "",
+        # Leap 06-b: a workflow's rehearsal that ended at its question, and
+        # what came after it (not rehearsed).
+        "stopped_at": stopped_at,
+        "stopped_words": _stopped_words(stopped_at),
         "error": _mask(str(summary.get("error") or "")),
         # Why no run started, in the schedule row's own words ("nothing new
-        # to review"): only for a finished rehearsal that started none.
-        "detail": _mask(_sentence_case(str(summary.get("detail") or ""))) if status == "ready" and not ran else "",
+        # to review"): only for a finished rehearsal that started none. A
+        # workflow's: the steps that failed and were gone past.
+        "detail": _mask(_sentence_case(str(summary.get("detail") or ""))) if status == "ready" and (
+            not ran or rec.subject_kind == "workflow"
+        ) else "",
         "sample": "" if rec.subject_kind != "rule" else (
             "a made-up signal" if made_up else "the last signal it matched"
         ),
@@ -660,6 +940,17 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         "created_at": _iso(rec.created_at),
         "finished_at": _iso(rec.finished_at),
     }
+
+
+def _stopped_words(stopped_at: "dict[str, Any] | None") -> str:
+    """The line under a workflow's report that ended at its question."""
+    if not stopped_at:
+        return ""
+    after = list(stopped_at.get("not_rehearsed") or [])
+    if not after:
+        return "It stopped where it would ask you. Nothing comes after the question."
+    listed = after[0] if len(after) == 1 else ", ".join(after[:-1]) + " and " + after[-1]
+    return f"It stopped where it would ask you, so what comes after was not rehearsed: {listed}."
 
 
 # --------------------------------------------------------------------------- #
@@ -675,12 +966,14 @@ class RehearseTool(Tool):
 
     name = "rehearse"
     description = (
-        "Rehearse one of the user's rules or schedules: run it once for real "
-        "reading, but change nothing — every file it would write, move or "
-        "change, every message it would send and every command it would run "
-        "is listed instead of done. Use when the user asks to rehearse, try "
-        "out, dry-run or test a rule or a schedule without it doing anything. "
-        "`kind` is rule or schedule; `name` is its name as the user said it. "
+        "Rehearse one of the user's rules, schedules, workflows or goals: run "
+        "it once for real reading, but change nothing — every file it would "
+        "write, move or change, every message it would send and every command "
+        "it would run is listed instead of done (a goal's try spends nothing "
+        "of its budget). Use when the user asks to rehearse, try out, dry-run "
+        "or test one of them without it doing anything. "
+        "`kind` is rule, schedule, workflow or goal; `name` is its name as the "
+        "user said it. "
         "A schedule Iron Jarvis OFFERS to run by itself (an Improvements suggestion "
         "whose id starts with schedule_offer:) is rehearsed with `kind` offer and "
         "`name` that id. "
@@ -696,8 +989,8 @@ class RehearseTool(Tool):
     input_schema = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ["rule", "schedule", "offer"]},
-            "name": {"type": "string", "description": "The rule's or schedule's name."},
+            "kind": {"type": "string", "enum": ["rule", "schedule", "workflow", "goal", "offer"]},
+            "name": {"type": "string", "description": "The rule's, schedule's, workflow's or goal's name."},
         },
         "required": ["kind", "name"],
     }
@@ -715,7 +1008,7 @@ class RehearseTool(Tool):
         except RehearsalRefused as exc:
             return ToolResult(ok=False, error=exc.words)
         subject = view["subject"]["name"] or name
-        what = "rule" if view["subject"]["kind"] == "rule" else "schedule"
+        what = _subject_word(view["subject"]["kind"])
         gave_up = False
         if getattr(ctx, "cannot_ask", False) and view["status"] == "running":
             # The phone (the POST lane) draws no card and a rehearsal sends
@@ -769,9 +1062,18 @@ async def _wait_for_report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     return view
 
 
+def _subject_word(kind: str) -> str:
+    """The word a reply uses for what was rehearsed."""
+    return kind if kind in ("rule", "workflow", "goal") else "schedule"
+
+
+#: The page each kind is rehearsed on (the phone's reply names it).
+_PAGE_OF = {"rule": "Rules", "workflow": "Workflows", "goal": "Autonomy", "offer": "Improvements"}
+
+
 def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool = False) -> str:
     """The report as a reply's words (the phone has no card)."""
-    page = "Rules" if what == "rule" else "Improvements" if view.get("subject", {}).get("kind") == "offer" else "Schedules"
+    page = _PAGE_OF.get(str(view.get("subject", {}).get("kind") or ""), "Schedules")
     status = view["status"]
     if gave_up:
         return (
@@ -794,6 +1096,10 @@ def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool =
     refused = list(view.get("refused") or [])
     if refused:
         lines.append("Would be refused: " + "; ".join(r["words"] for r in refused[:PHONE_ITEMS]) + ".")
+    if view.get("stopped_words"):
+        lines.append(str(view["stopped_words"]))
+    if view.get("guessed_words"):
+        lines.append(str(view["guessed_words"]))
     return "\n".join(lines)
 
 

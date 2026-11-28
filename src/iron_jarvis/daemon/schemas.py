@@ -1847,8 +1847,8 @@ class ReflexToggleBody(BaseModel):
 
 class RehearsalBody(BaseModel):
     """``POST /rehearsals`` (leap 06-a): what to rehearse — ``kind`` is
-    ``rule`` or ``schedule``; ``id`` the rule's id or name, the schedule's
-    name or id."""
+    ``rule``, ``schedule``, ``workflow`` or ``goal`` (leap 06-b); ``id`` its
+    id or its name."""
 
     kind: str
     id: str

@@ -528,7 +528,9 @@ async def test_a_page_offers_its_open_reports_again(daemon, tmp_path, monkeypatc
     assert built == [other["id"]], "a kept report's card was built"
     assert await asyncio.to_thread(RR.open_reports, p, "rule") == []
     with pytest.raises(RR.RehearsalRefused):
-        RR.open_reports(p, "workflow")
+        RR.open_reports(p, "recipe")
+    # Leap 06-b: a workflow's and a goal's are offered again too.
+    assert await asyncio.to_thread(RR.open_reports, p, "workflow") == []
 
 
 def test_the_pages_read_their_open_reports_through_the_route(tmp_path):
@@ -539,8 +541,8 @@ def test_the_pages_read_their_open_reports_through_the_route(tmp_path):
     client = TestClient(create_app(str(tmp_path / "home")))
     r = client.get("/rehearsals", params={"kind": "schedule"})
     assert r.status_code == 200 and r.json() == {"rehearsals": []}, r.text
-    r = client.get("/rehearsals", params={"kind": "workflow"})
-    assert r.status_code == 400 and "rule or a schedule" in r.text, r.text
+    r = client.get("/rehearsals", params={"kind": "recipe"})
+    assert r.status_code == 400 and "a rule, a schedule, a workflow or a goal" in r.text, r.text
 
 
 async def test_run_again_on_a_real_run_is_no_rehearsal(daemon, tmp_path):

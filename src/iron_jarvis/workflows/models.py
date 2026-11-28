@@ -67,6 +67,13 @@ class WorkflowRunRecord(SQLModel, table=True):
     #: Additive; NULL on an older table reads as "". Indexed (the plan;
     #: ``core.db._HOT_INDEXES`` gives an older table the same index).
     chat_thread_id: str = Field(default="", index=True)
+    #: Leap 06-b: the REHEARSAL this run is (``tools/rehearsal``), "" for a
+    #: real run. Set only by ``WorkflowEngine.create_record``'s caller (the
+    #: rehearsal's own door), never from a step or a model. A rehearsal's run
+    #: holds every step that would change something, publishes no workflow
+    #: event, and is left out of the Workflows page's run history. Additive;
+    #: NULL on an older table reads as "".
+    rehearsal_id: str = ""
     started_at: datetime = Field(default_factory=utcnow)
     finished_at: datetime | None = None
 
@@ -115,3 +122,6 @@ class WorkflowRecord(SQLModel, table=True):
     steps_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    #: Leap 06-b: when the user pressed Keep it on a rehearsal of this
+    #: workflow (None = never). Additive column (auto-reconciled).
+    rehearsed_at: datetime | None = None

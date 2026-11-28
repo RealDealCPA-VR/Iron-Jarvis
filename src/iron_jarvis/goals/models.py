@@ -178,6 +178,9 @@ class GoalContractRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
     last_run_at: datetime | None = None
+    #: Leap 06-b: when the user pressed Keep it on a rehearsal of this goal
+    #: (None = never). Additive column (auto-reconciled).
+    rehearsed_at: datetime | None = None
 
     # -- never-raising decoded views ---------------------------------------
     # (the store's loads must not die on a hand-edited or half-written row)

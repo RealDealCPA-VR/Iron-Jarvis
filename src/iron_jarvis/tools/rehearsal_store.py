@@ -194,11 +194,16 @@ class RehearsalStore:
         return sample_record(kept).get("made_up", True) is not False
 
     def stamp_subject(self, rec: RehearsalRecord, when: datetime) -> bool:
-        """Keep it: stamp ``rehearsed_at`` on the rule or schedule."""
+        """Keep it: stamp ``rehearsed_at`` on the rule, schedule, workflow
+        (leap 06-b: the saved definition, by its id) or goal."""
         if rec.subject_kind == "rule":
             from ..reflex.models import ReflexRule as model
         elif rec.subject_kind == "schedule":
             from ..scheduling.models import ScheduledTaskRecord as model
+        elif rec.subject_kind == "workflow":
+            from ..workflows.models import WorkflowRecord as model
+        elif rec.subject_kind == "goal":
+            from ..goals.models import GoalContractRecord as model
         else:
             return False
         with session_scope(self.engine) as db:

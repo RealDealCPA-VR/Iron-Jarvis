@@ -147,7 +147,9 @@ def event_is_rehearsal(event: Any, engine: Any = None) -> bool:
 
 def session_is_rehearsal(engine: Any, session_id: str) -> bool:
     """Does the session ``session_id`` carry a rehearsal in its OWN options?
-    BLOCKING (one indexed read): call it off the loop. Never raises."""
+    Leap 06-b: a workflow's tool steps record and publish under the RUN's id
+    (no session row): a run whose record carries a rehearsal is one too.
+    BLOCKING (one or two indexed reads): call it off the loop. Never raises."""
     try:
         sid = str(session_id or "").strip()
         if engine is None or not sid:
@@ -159,6 +161,13 @@ def session_is_rehearsal(engine: Any, session_id: str) -> bool:
 
         with session_scope(engine) as db:
             raw = db.exec(select(Session.options_json).where(Session.id == sid)).first()
+            if raw is None:
+                from ..workflows.models import WorkflowRunRecord
+
+                run = db.exec(
+                    select(WorkflowRunRecord.rehearsal_id).where(WorkflowRunRecord.id == sid)
+                ).first()
+                return bool(str(run or "").strip())
         opts = json.loads(raw) if isinstance(raw, str) and raw else {}
         return isinstance(opts, dict) and bool(str(opts.get(REHEARSAL_OPTION) or "").strip())
     except Exception:  # noqa: BLE001
@@ -187,7 +196,7 @@ def holds(tool: Any) -> bool:
 # --------------------------------------------------------------------------- #
 
 #: The kinds of effect a report counts.
-KINDS = ("write", "change", "move", "remove", "send", "run", "app", "page")
+KINDS = ("write", "change", "move", "remove", "send", "run", "app", "page", "ask")
 
 
 @dataclass(frozen=True)
@@ -414,7 +423,47 @@ SIDE_DOORS: dict[str, SideDoor] = {
     "excel_show": SideDoor(
         "change", "show a range selected in Excel", "show", "range in Excel", "documents/excel_live.py"
     ),
+    # Leap 06-b: a workflow's notify step sends its message to every
+    # destination (``WorkflowEngine._run_notify_step``); in a rehearsal it
+    # sends nothing and this row lists the message.
+    "workflow_notify": SideDoor(
+        "send", "send a message", "send", "message", "workflows/engine.py"
+    ),
+    # Leap 06-b: a workflow's ``ask`` step parks the run and asks the user.
+    # A rehearsal never asks: it ENDS there, and this row says the question
+    # and names the steps after it, which were not rehearsed (``after``).
+    "workflow_ask": SideDoor(
+        "ask", "ask you a question", "ask you", "question", "workflows/engine.py"
+    ),
 }
+
+#: Side doors that act only AFTER the run ends (its delivery, a webhook that
+#: hears it finish, a lesson kept from it). A rehearsal writes some of these
+#: rows before its run starts, so they never make a later read a guess
+#: (:func:`guessed_after`).
+AFTER_THE_RUN = frozenset({"schedule_delivery", "outbound_webhook", "post_run_learning", "chat_delivery"})
+
+#: The report's line when a step that RAN read after a held change (leap
+#: 06-b): what it read was not changed by the step before it, as it would be.
+GUESSED_AFTER_WORDS = (
+    "Steps after the first change were worked out without it, so the real run may differ."
+)
+
+
+def guessed_after(rows: "list[tuple[str, bool]]") -> bool:
+    """Leap 06-b: did any held call come BEFORE a later read? ``rows`` are
+    ``(kind, held)`` in the order they happened: ``kind`` is ``"read"`` for
+    a call that ran and only read, an effect kind (or the side door's name
+    in :data:`AFTER_THE_RUN`, never counted) for a held one. A question
+    (``ask``) changes nothing a read could see."""
+    seen_change = False
+    for kind, held in rows:
+        if held:
+            if kind != "ask" and kind not in AFTER_THE_RUN:
+                seen_change = True
+        elif kind == "read" and seen_change:
+            return True
+    return False
 
 
 def record_side_door(
@@ -425,10 +474,13 @@ def record_side_door(
     door: str,
     words: str = "",
     target: str = "",
+    extra: "dict[str, Any] | None" = None,
 ) -> str:
     """Write ONE rehearsed row for a side door that did nothing. BLOCKING
     (one insert) — call it off the loop. Returns the row id ("" on failure;
-    never raises)."""
+    never raises). ``extra`` (leap 06-b) adds keys to the row's arguments,
+    for the report to read (``workflow_ask``'s ``after``); never ``words``
+    or ``target``."""
     try:
         from ..core.db import row_values
         from ..core.ids import new_id
@@ -442,7 +494,10 @@ def record_side_door(
             session_id=str(session_id or ""),
             agent_run_id=str(run_id or ""),
             tool=door,
-            args_json=json.dumps({"words": said, "target": _one_line(target, 160)}),
+            args_json=json.dumps({
+                **{k: v for k, v in (extra or {}).items() if k not in ("words", "target")},
+                "words": said, "target": _one_line(target, 160),
+            }),
             verdict=PermissionMode.ALLOW,
             ok=True,
             output=held_output(Effect(spec.kind, target, said, spec.verb, spec.noun), "run"),
