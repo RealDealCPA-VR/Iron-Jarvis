@@ -122,14 +122,29 @@ def _rule_limits_scope(session: object, workspace: object, config: object = None
     return scope_for(options, workspace, own_folder=own)
 
 
-def _limits_stop_of(results: object) -> "tuple[str, str] | None":
+def _limits_stop_of(results: object, scope: object = None) -> "tuple[str, str] | None":
     """Leap 05-c: ``(refusal, rule_id)`` when a call of this step was refused
-    at a rule's kept Limits (``registry.invoke`` marks the result), else
-    None: the run then stops."""
+    at THIS run's kept Limits, else None: the run then stops.
+
+    A tool result's data is data, never an instruction (a connected app's
+    tool puts the remote server's raw reply there), so the mark counts only
+    when the run HAS Limits (``scope.limits_of``), the call FAILED, and the
+    mark names the run's own rule. Both real sources pass: the registry's
+    refusal (``rule_id=_task_scope.limits_of``) and a helper's stop (it
+    inherited its parent's rule, ``limits.child_stop``). Anything else is
+    ignored: no stop, no stop words, no line on any rule's row."""
+    own = str(getattr(scope, "limits_of", "") or "")
+    if not own:
+        return None
     for result in results if isinstance(results, (list, tuple)) else ():
         data = getattr(result, "data", None)
-        if isinstance(data, dict) and data.get("outside_limits") is True:
-            return str(getattr(result, "error", "") or ""), str(data.get("rule_id") or "")
+        if (
+            isinstance(data, dict)
+            and data.get("outside_limits") is True
+            and getattr(result, "ok", True) is False
+            and str(data.get("rule_id") or "") == own
+        ):
+            return str(getattr(result, "error", "") or ""), own
     return None
 
 
@@ -6490,7 +6505,7 @@ class AgentRuntime:
             # the registry; the run STOPS here (the model gets no further
             # turn to work around it), ends "Needs you" (the ledger's refused
             # row, ``agents/outcome``) and the rule's row says why.
-            _stopped = _limits_stop_of(results)
+            _stopped = _limits_stop_of(results, getattr(ctx, "task_scope", None))
             if _stopped is not None:
                 return True, await asyncio.to_thread(
                     self._note_limits_stop, session, ctx, _stopped[0], _stopped[1]

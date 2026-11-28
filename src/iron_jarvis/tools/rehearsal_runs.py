@@ -824,6 +824,10 @@ def _report_words(view: dict[str, Any], what: str, subject: str, gave_up: bool =
     refused = list(view.get("refused") or [])
     if refused:
         lines.append("Would be refused: " + "; ".join(r["words"] for r in refused[:PHONE_ITEMS]) + ".")
+    limits = view.get("limits") if isinstance(view.get("limits"), dict) else None
+    if limits and limits.get("words"):
+        # Leap 05-c: what Keep it would set (Keep it is on the page, not here).
+        lines.append(f"On the Rules page, Keep it sets its limits: {limits['words']}")
     return "\n".join(lines)
 
 

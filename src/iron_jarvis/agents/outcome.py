@@ -209,6 +209,18 @@ class RunEnding(NamedTuple):
     reason: str
 
 
+def _has_limits(session: Any) -> bool:
+    """Leap 05-c: does the run's OWN options carry a rule's Limits
+    (``reflex/limits.LIMITS_OPTION``)? Pure; never raises."""
+    try:
+        from ..reflex.limits import LIMITS_OPTION
+        from ..scheduling.knobs import session_options
+
+        return isinstance(session_options(session).get(LIMITS_OPTION), dict)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _stopped_at_limits(session: Any) -> bool:
     """Leap 05-c: did this run STOP at its rule's kept Limits? Its OWN
     options carry the Limits (``reflex/limits.LIMITS_OPTION``, written by the
@@ -735,6 +747,10 @@ def session_result(
             already_reverted = 0
             mutating_failed = 0
             outside_limits = 0
+            # Leap 05-c review: only a run that HAS Limits can be refused at
+            # them; in any other run a failed call whose words merely begin
+            # so (an app's own error text is data) is an ordinary failure.
+            has_limits = _has_limits(session)
             # v1.465.0: whether the LAST call that changes something failed
             # (None = the run made no such call). A coding helper's verdict
             # reads this: see Orchestrator._settle_finished_run.
@@ -767,7 +783,7 @@ def session_result(
                         mutating_failed += 1
                     # Leap 05-c: refused at a rule's kept Limits (the
                     # registry's own words begin so): the job needs the user.
-                    if str(inv.output or "").startswith(_LIMITS_LEAD):
+                    if has_limits and str(inv.output or "").startswith(_LIMITS_LEAD):
                         outside_limits += 1
                     if len(errors) < _LIST_CAP:
                         errors.append(

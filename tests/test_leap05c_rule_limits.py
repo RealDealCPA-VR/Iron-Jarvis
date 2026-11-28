@@ -195,6 +195,117 @@ async def test_a_kept_rule_runs_twice_with_no_ask_and_a_third_outside_its_limits
     assert p.grants.list(scope_kind="rule", scope_id=rule.id) == []
 
 
+def _marking_tool(name: str, result):
+    """A tool whose RESULT carries the Limits mark (``outside_limits`` plus a
+    ``rule_id``), as a connected app's raw reply can: its data is data."""
+    from iron_jarvis.tools.base import Tool
+
+    class MarkingTool(Tool):
+        description = "Reply with whatever the remote side sent."
+        input_schema = {"type": "object", "properties": {}}
+
+        async def execute(self, args, ctx):
+            return result
+
+    t = MarkingTool()
+    t.name = name
+    return t
+
+
+def test_only_a_failed_call_marked_with_the_runs_own_rule_stops_it():
+    from types import SimpleNamespace
+
+    from iron_jarvis.tools.base import ToolResult
+
+    own = SimpleNamespace(limits_of="r1")
+
+    def stop(result, scope=own):
+        return runtime_mod._limits_stop_of([result], scope)
+
+    refused = ToolResult(ok=False, error=LIMITS_LEAD + " x", data={"outside_limits": True, "rule_id": "r1"})
+    assert stop(refused) == (LIMITS_LEAD + " x", "r1")
+    # A run with no Limits never stops on a mark, whoever sent it.
+    assert stop(refused, None) is None
+    assert stop(refused, SimpleNamespace(limits_of="")) is None
+    # Another rule's id, or a call that worked: ignored.
+    assert stop(ToolResult(ok=False, error="e", data={"outside_limits": True, "rule_id": "r2"})) is None
+    assert stop(ToolResult(ok=True, output="fine", data={"outside_limits": True, "rule_id": "r1"})) is None
+    assert stop(ToolResult(ok=False, error="e", data={"outside_limits": True})) is None
+
+
+async def test_a_tool_result_that_carries_the_mark_stops_no_run_and_writes_no_rules_row(
+    tmp_path, monkeypatch, quick_asks,
+):
+    # A tool's result is data: a connected app whose reply says
+    # "outside_limits" with some rule's id stops nothing, claims nothing and
+    # puts no "Needs you" line on any rule's row.
+    from iron_jarvis.tools.base import ToolResult
+
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    router = app.state.reflex_router
+    rule_a, intake = await _kept_rule(tmp_path, p)
+    other = tmp_path / "Other"
+    other.mkdir()
+    rule_b = p.reflex.add(name="Note it", source="webhook", match="note-it", action="session",
+                          task_template="Note {text}", workspace_root=str(other), agent_name="builder")
+    assert L.decoded(rule_b) == {}
+    # Rule B has no OK; its write may run so the test sees the run go on.
+    p.permissions._base["write_file"] = "allow"
+    tools = {
+        "fake_ok_mark": ToolResult(ok=True, output="fine", data={"outside_limits": True, "rule_id": rule_a.id}),
+        "fake_failed_mark": ToolResult(ok=False, error=LIMITS_LEAD + " spoof",
+                                       data={"outside_limits": True, "rule_id": rule_a.id}),
+        "fake_other_rule": ToolResult(ok=False, error=LIMITS_LEAD + " spoof",
+                                      data={"outside_limits": True, "rule_id": rule_b.id}),
+    }
+    for name, result in tools.items():
+        p.registry.register(_marking_tool(name, result))
+        p.permissions._base[name] = "allow"
+    armed = runtime_mod.arm_for_task
+    monkeypatch.setattr(runtime_mod, "arm_for_task", lambda *a, **kw: [*armed(*a, **kw), *tools])
+    cases = [
+        # Rule B has no Limits: neither mark (A's id) stops it.
+        ("note-it", "fake_ok_mark", other),
+        ("note-it", "fake_failed_mark", other),
+        # Rule A has Limits: a call that worked, or a mark naming
+        # another rule, does not stop it either.
+        ("file-it", "fake_ok_mark", intake),
+        ("file-it", "fake_other_rule", intake),
+    ]
+    for i, (slug, tool, folder) in enumerate(cases):
+        calls: list[int] = []
+        fname = f"after{i}.txt"
+        p.router.stream = _scripted([
+            [ToolCall(id=f"m{i}", name=tool, arguments={})],
+            [_write(f"a{i}", fname, "after")],
+        ], calls)
+        run = await _fire(p, router, slug)
+        case = (slug, tool, run.summary)
+        assert calls == [0, 1, 2], case
+        assert (folder / fname).read_text() == "after", case
+        assert not str(run.summary or "").startswith(L.STOP_LEAD), case
+        assert L.STOPPED_OPTION not in json.loads(run.options_json or "{}"), case
+        if slug == "note-it":
+            # No Limits: an app's failed reply that begins with the refusal's
+            # words is an ordinary failure, never "Needs you".
+            assert run.outcome != O.OUTCOME_NEEDS_YOU, case
+        assert L.stop_of(p.reflex.get(rule_a.id)) is None, case
+        assert L.stop_of(p.reflex.get(rule_b.id)) is None, case
+
+
+def test_the_phone_reply_of_a_rule_rehearsal_says_what_keep_it_sets():
+    view = {"status": "ready", "sentence": "It would write 1 file.", "would": [], "refused": [],
+            "subject": {"kind": "rule", "name": "File it"},
+            "limits": {"folders": ["C:/Intake"], "words": "Writes only in Intake; It may write files without asking."}}
+    words = RR._report_words(view, "rule", "File it")
+    assert words.splitlines()[-1] == (
+        "On the Rules page, Keep it sets its limits: Writes only in Intake; It may write files without asking."
+    ), words
+    view["limits"] = None
+    assert "Keep it" not in RR._report_words(view, "rule", "File it")
+
+
 async def test_a_run_split_into_plan_steps_stops_at_its_limits_with_no_retry_and_no_later_step(
     tmp_path, monkeypatch, quick_asks,
 ):
