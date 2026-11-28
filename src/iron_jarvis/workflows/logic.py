@@ -175,8 +175,23 @@ def _leaf(cond: dict, render: Callable[[str], str]) -> tuple[bool, str]:
         held = right.strip().casefold() in left.casefold() if right.strip() else False
         return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]} “{_shown(right)}”"
     # matches: a wildcard pattern over the whole value (never a regex).
-    held = fnmatch.fnmatchcase(left.strip().casefold(), right.strip().casefold())
+    held = wildcard_match(left.strip().casefold(), right.strip().casefold())
     return held, f"“{_shown(left)}” {words if held else NOT_WORDS[op]} “{_shown(right)}”"
+
+
+def wildcard_match(value: str, pattern: str) -> bool:
+    """Whether *pattern* matches all of *value*, where only ``*`` (any run of
+    characters) and ``?`` (one character) are wildcards. Everything else,
+    square brackets included, is itself: ``*[DRAFT]*`` looks for the text
+    "[DRAFT]", not for one of the letters D, R, A, F, T. Case is the
+    caller's business.
+
+    fnmatch alone would read ``[...]`` as a set of characters, which the If
+    never promised. Its translation is still used (it is linear in the
+    regex engine), with every ``[`` made literal first; the compiled form
+    goes through ``re``'s own small cache, not fnmatch's 32,768-entry one,
+    since the pattern may be text filled in from outside."""
+    return re.match(fnmatch.translate(pattern.replace("[", "[[]")), value) is not None
 
 
 def explain(condition: Any, render: Callable[[str], str]) -> tuple[bool, str]:

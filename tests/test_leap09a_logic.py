@@ -178,6 +178,26 @@ def test_a_pattern_is_never_a_regular_expression():
     assert evaluate(_c("a" * 5000 + "!", "matches", "(a+)+$"), {}) is False
 
 
+@pytest.mark.parametrize(
+    "value, pattern, expected",
+    [
+        # Found in the 09-a review: square brackets are letters like any other,
+        # since only * and ? are promised. fnmatch read "[draft]" as a set.
+        ("Q3 final.pdf", "*[draft]*", False),
+        ("Q3 [DRAFT] memo.pdf", "*[draft]*", True),
+        ("Invoice [2026].pdf", "Invoice [2026].pdf", True),
+        ("Q3 [draft].pdf", "Q3 [draft]*", True),
+        ("Invoice 2.pdf", "Invoice [0-9].pdf", False),
+        ("Invoice [0-9].pdf", "Invoice [0-9].pdf", True),
+        ("a]b", "a]?", True),
+        ("[!x]", "[!x]", True),
+        ("y", "[!x]", False),
+    ],
+)
+def test_square_brackets_in_a_pattern_are_plain_text(value, pattern, expected):
+    assert evaluate(_c(value, "matches", pattern), {}) is expected
+
+
 # --------------------------------------------------------------------------- #
 # {{Step.data.field}}: a dotted path into the step's stored JSON.
 # --------------------------------------------------------------------------- #
