@@ -433,8 +433,15 @@ async def test_allow_after_stop_on_a_waiting_card_never_runs_the_call(tmp_path, 
     from sqlmodel import select
 
     from iron_jarvis.core.models import ToolInvocation
+    from iron_jarvis.daemon.routes import chat as chat_routes
     from tests.test_chat_approvals_v1187 import _drive_stream
     from tests.test_wave4_chat_recovery_v1312 import _one_call_stream, _stub_execute
+
+    # "Inside the same poll" is made true, not hoped for: with the 1 s poll,
+    # a slow runner let the slice end between Stop and Allow, the parked
+    # wait took the Stop first and the Allow answered 404 (it passed only on
+    # CI's retry). A poll far longer than the test keeps both in one slice.
+    monkeypatch.setattr(chat_routes, "_ASK_POLL_S", 60.0)
 
     app = create_app(str(tmp_path))
     engine = app.state.platform.engine
