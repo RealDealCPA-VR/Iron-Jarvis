@@ -1,7 +1,7 @@
 # Iron Jarvis — The Handbook
 
 *The user guide. What this app is, how to work it daily, and the rules it
-holds itself to. Current as of v1.595.0 (2026-11-19).*
+holds itself to. Current as of v1.596.0 (2026-11-19).*
 
 ---
 
@@ -128,6 +128,25 @@ job waiting for an answer — one quiet line appears above the chat box, with
 **Open**.
 
 ---
+
+## A skill suggestion says what was checked (v1.596.0)
+
+When you ask for the same kind of task on three different days within five weeks, in chat or as a task you start yourself, the night review writes one skill draft from that work and it waits in Improvements. Before it reaches you, its text is checked:
+
+- anything shaped like a password, a key, an email address, a phone or account number, or a line that tries to give Iron Jarvis orders, and the draft is never shown;
+- a draft that names one of your clients is never shown either.
+
+A draft that passed every check, and holds none of your clients' names (in any case, with or without accents, or any one distinctive word of a client's name, as your client list spells it), no contact details and no figure from the work it was written from, says so under its title:
+
+> You asked for this 3 times, on 3, 10 and 17 November.
+> Each time Iron Jarvis used: read file, write file.
+> No client names, contact details or figures from your work are in it.
+
+The line does not promise that no other names are in it: a person's name that is not one of your clients can still be in a draft. Read it before you approve it. If your client list holds a name written in an alphabet other than Latin, the line is never shown, because the other ways of spelling that name cannot be checked. When the last line is missing, Iron Jarvis could not promise it: the draft may hold a figure, a client's name or a contact detail from your work, or it may not.
+
+What counts as "you asked": a task you start on the Sessions page, from Spotlight, with a custom agent's Run, or in a project (including one you queued from a project's page; a task an agent queued for another agent does not count). Self-development runs never count. A task a chat handed to an agent is counted once, as that chat's. Schedules, workflows, rules, watchers, the phone, another computer and missions are not "you asked", so they never make a skill draft on their own. One task is no longer enough for a new skill.
+
+**Put an improved skill back.** When you approve an improvement to one of your skills, Iron Jarvis keeps the version before it. To go back, open **Activity › Your day**, find "changed a skill: the skill …" under **In Improvements**, look at **Before and after**, and press **Undo**. The earlier text comes back exactly as it was. If you changed the skill again since, it is not put back, and Your day says why.
 
 ## "If" and "For each" in a workflow (v1.595.0)
 

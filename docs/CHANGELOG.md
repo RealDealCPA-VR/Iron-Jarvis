@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.596.0
+
+**A skill suggestion says what was checked.** When you ask for the same kind of task on three different days within five weeks, in chat or as a task you start yourself, the night review writes one skill draft from that work and it waits in Improvements.
+
 ## v1.595.0
 
 **"If" and "For each" in a workflow.** A workflow can now decide and repeat.
@@ -77,7 +81,3 @@
 ## v1.580.3
 
 **A workflow made in chat is checked like one made on the page.** A workflow that cannot work is now refused when it is saved, whichever way you made it.
-
-## v1.580.0
-
-**What everything cost, by folder, client, automation and agent.** Usage has a new card, **What it cost**, with a **By** switch: **Folder**, **Client**, **Automation** and **Agent**.

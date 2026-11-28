@@ -102,6 +102,9 @@ PR that ships it.
 | Iron Jarvis asking a model that keeps stumbling in a more guided form, said on the reply | **guiding it step by step** | fallback, guided rung, strict JSON |
 | A model's measured tool use, on its card | **Uses tools well** / **Uses tools when guided step by step** / **Does not use tools reliably** | native rung, tool-calling score |
 | The background row while Iron Jarvis tries a model when the PC is idle | **Trying your own models** | probe, battery, benchmark |
+| The line on a skill suggestion whose text passed every check when it was written and holds no client name, contact detail or figure from the work (the intelligence plan, release 10) | **No client names, contact details or figures from your work are in it.** (never "no names": only clients' names are checked) | verified, sanitized, scrubbed, PII-free, redacted, anonymized, no names |
+| Where an improvement approved in Improvements shows in Activity › Your day | **In Improvements**; its row **changed a skill: the skill “name”** | skill_update, proposal approved, refine |
+| Going back to a skill's text before an approved improvement | **put back** (Your day's **Undo**; the note: **The version before is kept: Activity › Your day can put it back.**) | revert, rollback, restore, version history |
 
 Two-way is a per-destination *upgrade*, not a new noun (decided in the
 messaging plan, shipped v1.136.0): the toggle that creates one reads
