@@ -787,6 +787,17 @@ class Config(BaseModel):
     #: "stop this kind" answer). Off: the suggestions still wait in
     #: Improvements; nothing rings.
     night_review_notice: bool = True
+    #: The intelligence plan, 5b: a SECOND MODEL double-checks finished work
+    #: (``checks/second``). ``None`` = NOT ANSWERED: a person with more than
+    #: one model account is offered it ONCE, on a card under a reply that made
+    #: or changed a file; ``""`` = no (Iron Jarvis's own checks only); else
+    #: the exact choice the yes was given for, ``<account id>|<provider>|<model>``
+    #: (one small request per task, to that model, on that account, and on
+    #: nothing else). A value that does not have that shape reads as no.
+    double_check: str | None = None
+    #: When the once-only card was shown ("" = never). Once set, the card is
+    #: never shown again, answered or not; Settings still changes the row.
+    double_check_offered: str = ""
     #: Next leaps 15-a (master plan R2.7, decision D-15.1): the "From memory"
     #: pop-up under a chat reply. "auto" = it appears by itself for about
     #: eight seconds after the newest reply, only when memory shaped that
@@ -1512,6 +1523,20 @@ class Config(BaseModel):
         # R2.15: tolerant — a hand edit never stops a boot; only a real
         # true/false is a choice, anything else is "never chosen" (off).
         return v if isinstance(v, bool) else None
+
+    @field_validator("double_check", mode="before")
+    @classmethod
+    def _clean_double_check(cls, v: Any) -> "str | None":
+        # 5b: a hand edit never stops a boot, and never names a model or an
+        # account the owner did not say yes to in a shape the app can use:
+        # anything but "not answered" or a whole choice reads as no.
+        if v is None:
+            return None
+        text = " ".join(str(v).split()) if isinstance(v, str) else ""
+        parts = text.split("|")
+        if len(parts) == 3 and all(p.strip() for p in parts) and len(text) <= 400:
+            return "|".join(p.strip() for p in parts)
+        return ""
 
     @field_validator("night_review", mode="before")
     @classmethod

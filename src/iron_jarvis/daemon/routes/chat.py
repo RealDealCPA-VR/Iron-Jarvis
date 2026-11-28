@@ -9594,10 +9594,19 @@ async def chat_stream(
         # chat_turn.run_chat_turn makes the same call.
         from ...checks.turn import checked_for_turn as _checked_for_turn
 
+        # 5b of the intelligence plan: where the line goes out, the once-only
+        # offer of a second model's double-check, or that double-check started in
+        # the background (``checks/second``): the conditional key ``double_check``,
+        # right after ``checked``. MIRROR NOTE (lock-step): both chat lanes.
+        # A Build pane's chat draws no card (PaneChat): its reply neither
+        # uses up the once-only offer nor starts a double-check (review 2).
+        _second: dict = {}
         _checked = await _checked_for_turn(
             platform, turn_id=_usage_turn, thread_id=str(getattr(body, "thread_id", "") or ""),
             made_docs=made_docs, reply=_fig_head, until=_until, deliverables=_deliv,
             coding=_harness is not None, escalate=bool(escalate),
+            request=_chat_turn._last_user_text(getattr(body, "messages", None) or []), second=None if str(getattr(body, "pane_id", "") or "").strip() else _second,
+            answered_by=(route_provider, route_model),
         )
         # v1.287.0: present ONLY when a note was left unread (see above).
         # v1.499.3: read as OWED (the notes closed above, handed over once) —
@@ -9649,6 +9658,8 @@ async def chat_stream(
         # conditional key. (Worked out above, before the owed notes are read.)
         if _checked is not None:
             done_frame["checked"] = _checked
+            if _second.get("double_check"):
+                done_frame["double_check"] = _second["double_check"]
         yield _sse("done", done_frame)
 
     # v1.312.0: the prep above ran AS the stream's first frames (the 400/404

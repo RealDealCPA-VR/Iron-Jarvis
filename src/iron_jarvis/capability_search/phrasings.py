@@ -736,6 +736,16 @@ PHRASINGS: dict[str, tuple[str, ...]] = {
         'slow down calendar checking',
         'control how frequently it polls my events',
     ),
+    'double_check': (
+        'have another model check finished work',
+        'use my second account to double-check files',
+        'second opinion from another AI',
+        'turn on the second model check',
+        'stop the second model double-check',
+        'let a different model review what you made',
+        'check my spreadsheets with another account',
+        'which model double-checks my work',
+    ),
     'phone_file_max_mb': (
         'largest file I can send from my phone',
         'size limit for photos sent from telegram',
