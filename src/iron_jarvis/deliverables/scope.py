@@ -178,6 +178,16 @@ class TaskScope:
     #: mtime_ns)``), without the write roots and the scratch folder.
     baseline: dict = field(default_factory=dict, compare=False, repr=False)
     watch_complete: bool = field(default=True, compare=False, repr=False)
+    #: Leap 05-c: the RULE whose kept Limits this is (its id), "" for a chat
+    #: task's scope. Built only from a run's own options
+    #: (``reflex/limits.scope_for``), never from a message: a write outside
+    #: ``write_roots`` is refused in the limits' own words, and a script is
+    #: not refused inside them (the rule's rehearsal approved the folder, not
+    #: a list of files).
+    limits_of: str = ""
+    #: The folders those Limits approved (``write_roots`` may also hold a
+    #: helper's own work folder); what a helper's helper inherits.
+    limits_folders: tuple = ()
 
     @property
     def enforced(self) -> bool:
@@ -707,6 +717,11 @@ WRITE_ARGS: dict[str, tuple[tuple[str, ...], ...]] = {
     "rename_file": (("path",), ("new_path",)),
 }
 
+#: Leap 05-c: how a refusal at a rule's kept Limits begins (the ledger row's
+#: output). ``agents/outcome.session_result`` counts the rows that begin so:
+#: such a run ends "Needs you".
+LIMITS_LEAD = "STOPPED AT THIS RULE'S LIMITS."
+
 #: Tools whose ``command`` is read for writes (redirects, copy, del…).
 COMMAND_TOOLS = frozenset({"shell", "process_start"})
 
@@ -818,6 +833,19 @@ def refusal_for(scope: TaskScope, name: str, target: Path, *, touch: bool = Fals
             )
     if touch or not scope.enforced:
         return ""
+    if scope.limits_of:
+        # Leap 05-c: a rule's kept Limits. Outside them the run STOPS
+        # (``agents/runtime`` reads the result's ``outside_limits``) and ends
+        # "Needs you"; inside them any file may be written, scripts too.
+        if any(_within(target, root) for root in scope.write_roots):
+            return ""
+        folders = ", ".join(str(p) for p in scope.write_roots)
+        return (
+            f"{LIMITS_LEAD} Nothing was written. This rule may write only in {folders} "
+            f"(the limits the person approved after its rehearsal), and `{name}` would write "
+            f"{target}. Stop here: the run ends and the person decides whether to widen "
+            "its limits."
+        )
     if not any(_within(target, root) for root in scope.write_roots):
         return (
             f"NOTHING WAS WRITTEN. This task may write only in "

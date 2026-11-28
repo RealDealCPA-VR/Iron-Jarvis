@@ -42,6 +42,9 @@ export interface RehearsalView {
   detail?: string;
   sample?: string;
   kept_at?: string | null;
+  /** Leap 05-c: what Keep it sets on a rule, in its Limits line's words
+   *  (read from the same rows by the daemon); null for a schedule. */
+  limits?: { folders: string[]; words: string } | null;
 }
 
 /** How often a running rehearsal is asked again, while on screen. */
@@ -85,7 +88,16 @@ export function decodeRehearsal(raw: unknown): RehearsalView | null {
     detail: typeof r.detail === "string" ? r.detail : "",
     sample: typeof r.sample === "string" ? r.sample : "",
     kept_at: typeof r.kept_at === "string" ? r.kept_at : null,
+    limits: decodeLimits(r.limits),
   };
+}
+
+function decodeLimits(raw: unknown): { folders: string[]; words: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const l = raw as Record<string, unknown>;
+  if (typeof l.words !== "string" || !l.words.trim()) return null;
+  const folders = Array.isArray(l.folders) ? l.folders.filter((f): f is string => typeof f === "string") : [];
+  return { folders, words: l.words };
 }
 
 function shortDate(iso: string): string {
@@ -279,6 +291,14 @@ export function RehearsalReport({
         <p className="text-[12px] text-zinc-500">
           {view.reads ? `It read ${view.reads} thing${view.reads === 1 ? "" : "s"} to get there. ` : ""}
           {view.sample ? `It ran on ${view.sample}.` : ""}
+        </p>
+      )}
+
+      {/* Leap 05-c: what Keep it approves, before it is pressed: the rule's
+          Limits (where it may write, what it may do without asking). */}
+      {keepable && view && view.status === "ready" && !view.kept_at && view.limits && (
+        <p data-testid={`rehearsal-limits-${id}`} className="text-[12px] text-zinc-400">
+          <span className="text-zinc-300">Keep it sets its limits:</span> {view.limits.words}
         </p>
       )}
 

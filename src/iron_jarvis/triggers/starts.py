@@ -1356,13 +1356,14 @@ def run_ended_when_words(start: dict) -> str:
 
 
 def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
-             watching: bool = True) -> dict[str, str]:
+             watching: bool = True, live_kinds: Any = None) -> dict[str, str]:
     """The four lines of a rule's card and row, composed by code:
     ``when_words``, ``does_words``, ``where_words``, ``limits_words``.
     ``careful``: does its work start in the careful mode (an outside signal,
     a download; the router's ``_signal_trust``)? ``watching``: for a file
     rule, is folder watching able to run (``IRONJARVIS_SENTINELS`` is not
-    off)? Pure."""
+    off)? ``live_kinds`` (leap 05-c): the kinds of the OKs kept after its
+    rehearsal that are still live (None: the kinds kept). Pure."""
     source = str(getattr(rule, "source", "") or "")
     match = _q(getattr(rule, "match", ""), 60)
     start = rule.decoded_start() if hasattr(rule, "decoded_start") else {}
@@ -1424,6 +1425,12 @@ def describe(rule: Any, *, tick_seconds: int = 300, careful: bool | None = None,
 
     limit = int(getattr(rule, "max_fires_per_hour", 0) or 12)
     limits = f"Starts at most {limit} times an hour, then pauses and tells you. Anything risky asks you first."
+    from ..reflex.limits import words as _kept_limits_words
+
+    kept = _kept_limits_words(rule, live_kinds) if action == "session" else ""
+    if kept:
+        # Leap 05-c: the Limits approved after its rehearsal come first.
+        limits = f"{kept} Anything else asks you first. Starts at most {limit} times an hour, then pauses and tells you."
     if source == "run_ended":
         # Leap 05-b: the loop guard, said where the rule is read; and (review)
         # what a Local only task said stays on this PC.
@@ -1463,4 +1470,9 @@ def describe_for(platform: Any, rule: Any) -> dict[str, str]:
     full = str(getattr(cfg, "comm_trust", "low") or "low").strip().lower() == "full"
     careful = (source in OUTSIDE_SOURCES or watches_downloads(rule)) and not full
     watching = os.environ.get("IRONJARVIS_SENTINELS", "on").strip().lower() not in {"0", "false", "no", "off"}
-    return describe(rule, tick_seconds=tick, careful=careful, watching=watching)
+    # Leap 05-c: only the OKs kept after its rehearsal that are still live
+    # (one removed on the Rules page drops out of the line).
+    from ..reflex.limits import live_kinds as _live_kinds
+
+    return describe(rule, tick_seconds=tick, careful=careful, watching=watching,
+                    live_kinds=_live_kinds(platform, rule))

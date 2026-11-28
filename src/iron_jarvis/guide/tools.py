@@ -100,6 +100,19 @@ def _rule_blurb(platform: Any, rule: Any) -> str:
     error = str(getattr(rule, "last_error", "") or "").strip()
     if error:
         state += f" Its last start failed: {error[:160]}"
+    # Leap 05-c: the Limits kept after its rehearsal, and a run that stopped
+    # at them ("what may my Intake rule do on its own?").
+    try:
+        from ..reflex import limits as _limits
+
+        kept = _limits.words(rule, _limits.live_kinds(platform, rule))
+        if kept:
+            state += f" Its limits (kept after a rehearsal): {kept}"
+        stop = _limits.stop_of(rule)
+        if stop:
+            state += f" Its last run needs you: {stop['words'][:240]}"
+    except Exception:  # noqa: BLE001
+        pass
     return f"{head} {state}"
 
 

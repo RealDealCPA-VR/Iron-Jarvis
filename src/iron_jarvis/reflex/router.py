@@ -934,6 +934,23 @@ class ReflexRouter:
         if rehearsal:
             # Leap 06-a: a REHEARSAL's run carries it.
             options[_rehearsal_option()] = rehearsal
+            # Leap 05-c: and what the rule did when it was rehearsed, so Keep
+            # it never writes Limits for what the rule no longer does.
+            from .limits import SHAPE_OPTION, shape as _limits_shape
+
+            options[SHAPE_OPTION] = _limits_shape(rule)
+        elif not str(rule.name or "").startswith("manual:"):
+            # Leap 05-c: a real run carries the Limits kept after a rehearsal
+            # (the folders it may write in) in its OWN options; the runtime
+            # makes them the calls' write scope. A rehearsal carries none: it
+            # shows what the rule would do, and Keep it approves that.
+            from .limits import LIMITS_OPTION, options_for as _limits_options
+
+            kept = _limits_options(rule)
+            if kept is not None:
+                options[LIMITS_OPTION] = kept
+            if getattr(rule, "limits_stop_json", "") and getattr(self, "store", None) is not None:
+                await _off_loop(functools.partial(self.store.clear_stop, rule.id))
         if rule.source == "run_ended" and str((context or {}).get("local_only") or ""):
             # Leap 05-b (review): the task that ended was Local only, and its
             # words are in this task, so this run is Local only too (refused

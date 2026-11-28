@@ -44,6 +44,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { RehearsalReport, decodeRehearsal, type RehearsalView } from "@/components/RehearsalReport";
+import { HeldOks } from "@/components/workflow/HeldOks";
 import { RowMenu } from "@/components/RowMenu";
 import { ReportsTo } from "@/components/ReportsTo";
 import { RuleLines } from "@/components/RuleLines";
@@ -131,6 +132,12 @@ interface ReflexRule {
   reports_to?: ReportsToRow | null;
   /** A file rule's watcher of its folder. */
   watcher?: { name: string; last_error?: string | null } | null;
+  /** Leap 05-c: the Limits kept after its rehearsal (the folders it may
+   *  write in; its card's Limits line says the rest), the last run that
+   *  stopped at them, and every OK kept on it (each with Remove). */
+  limits?: { folders: string[]; kept_at?: string } | null;
+  limits_stop?: { words: string; href?: string; at?: string } | null;
+  standing_grants?: unknown;
 }
 
 /** POST /reflex/rules/{id}/test result. */
@@ -146,6 +153,15 @@ interface TestResult {
    *  it (an older daemon sends neither: the old line is kept). */
   words?: string;
   href?: string;
+}
+
+/** Leap 05-c: a stopped run's words without their lead ("Stopped at its
+ *  limits: it would have written …" reads "It would have written …" after
+ *  the row's "Needs you:"). */
+function limitsStopWords(words: string): string {
+  const lead = "Stopped at its limits:";
+  const rest = words.startsWith(lead) ? words.slice(lead.length).trim() : words.trim();
+  return rest ? rest[0].toUpperCase() + rest.slice(1) : rest;
 }
 
 /** An address the Rules page may link to: one of the app's own pages only. */
@@ -798,6 +814,24 @@ export default function ReflexPage() {
               {lines ? <RuleLines lines={lines} testId={`reflex-lines-${r.id}`} /> : <RuleSentence r={r} />}
             </div>
             <ReportsTo kind="rule" id={r.id} to={r.reports_to} onChanged={reload} />
+            {/* Leap 05-c: what it may do without asking (kept after its
+                rehearsal, or "Always for this rule"), each with Remove. */}
+            <HeldOks grants={r.standing_grants} place="rule" name={r.name || r.id} onRemoved={reload} />
+            {r.limits_stop?.words && (
+              <p
+                data-testid={`reflex-limits-stop-${r.id}`}
+                className="mt-1.5 min-w-0 break-words text-[12px] text-amber-300"
+              >
+                <span className="font-medium">Needs you:</span>{" "}
+                {ownPage(r.limits_stop.href) ? (
+                  <Link href={ownPage(r.limits_stop.href)} className="underline-offset-2 hover:underline">
+                    {limitsStopWords(r.limits_stop.words)}
+                  </Link>
+                ) : (
+                  limitsStopWords(r.limits_stop.words)
+                )}
+              </p>
+            )}
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600">
               <span>
                 Fired <span className="text-zinc-400">{r.fire_count}×</span>

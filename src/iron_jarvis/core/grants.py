@@ -509,6 +509,19 @@ class GrantStore:
 
     # -- reads ------------------------------------------------------------- #
 
+    def live_ids(self, scope_kind: str, scope_id: str) -> list[str]:
+        """The ids of the LIVE grants kept on one scope, from the in-memory
+        view (leap 05-c: a rule's Limits line names only the OKs still
+        live). No SQL once the view is loaded."""
+        kind, sid = str(scope_kind or ""), str(scope_id or "")
+        now = utcnow()
+        live = self._ensure_loaded()
+        with self._lock:
+            return [
+                r.id for r in live.values()
+                if r.scope_kind == kind and r.scope_id == sid and r.is_live(now)
+            ]
+
     def get(self, grant_id: str) -> StandingGrantRecord | None:
         with session_scope(self.engine) as db:
             rec = db.get(StandingGrantRecord, str(grant_id or ""))

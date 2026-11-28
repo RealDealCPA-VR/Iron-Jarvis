@@ -399,11 +399,29 @@ async def keep(platform: Any, rehearsal_id: str) -> dict[str, Any]:
     view = await asyncio.to_thread(report, platform, rec.id)
     if view["status"] != "ready":
         raise RehearsalRefused("Only a finished rehearsal can be kept.", status=409)
+    if rec.subject_kind == "rule":
+        # Leap 05-c: Keep it approves what THIS rehearsal showed; a rule that
+        # changed since (what it does, what starts it, where it works) keeps
+        # nothing, and is not stamped as rehearsed either.
+        from ..reflex import limits as _limits
+
+        rule = await asyncio.to_thread(platform.reflex.get, rec.subject_id)
+        if rule is not None and str(rule.action or "") == "session" and not await asyncio.to_thread(
+            _limits.unchanged, platform, rec, rule
+        ):
+            raise RehearsalRefused(_limits.STALE_WORDS, status=409)
     when = utcnow()
     stamped = await asyncio.to_thread(store.stamp_subject, rec, when)
     if not stamped:
         what = "rule" if rec.subject_kind == "rule" else "schedule"
         raise RehearsalRefused(f"The {what} it rehearsed is no longer there.", status=404)
+    if rec.subject_kind == "rule":
+        # Leap 05-c: Keep it on a rule's rehearsal writes its LIMITS from
+        # what this rehearsal listed: the folders it may write in and an OK
+        # for each step that would have asked (``reflex/limits.keep``).
+        from ..reflex import limits as _limits
+
+        await asyncio.to_thread(_limits.keep, platform, rec, rec.subject_id)
     await asyncio.to_thread(lambda: store.update(rec.id, kept_at=when))
     return await asyncio.to_thread(report, platform, rec.id)
 
@@ -659,7 +677,19 @@ def report(platform: Any, rehearsal_id: str) -> dict[str, Any]:
         "kept_at": _iso(rec.kept_at),
         "created_at": _iso(rec.created_at),
         "finished_at": _iso(rec.finished_at),
+        # Leap 05-c: what Keep it sets on a rule (its Limits line, read from
+        # these same rows by code), so the person knows what they approve.
+        "limits": _limits_offer(platform, rec) if status == "ready" and rec.subject_kind == "rule" else None,
     }
+
+
+def _limits_offer(platform: Any, rec: RehearsalRecord) -> dict[str, Any] | None:
+    from ..reflex import limits as _limits
+
+    got = _limits.offer(platform, rec)
+    if got is None:
+        return None
+    return {"folders": got["folders"], "words": _mask(got["words"])}
 
 
 # --------------------------------------------------------------------------- #

@@ -3397,6 +3397,18 @@ def build_platform(
 
     _reflex_store.on_removed(engine, _rule_removed)
 
+    # Leap 05-c: an edit of what a rule does or where it works drops the
+    # Limits kept after its rehearsal; the OKs Keep it made go with them
+    # (an "Always for this rule" the user gave on a card stays).
+    def _rule_limits_dropped(rule_id: str, grant_ids: list[str]) -> None:
+        grants = _rule_grants_ref() if _rule_grants_ref is not None else None
+        if grants is not None:
+            from .reflex.limits import drop_kept_grants
+
+            drop_kept_grants(grants, grant_ids)
+
+    _reflex_store.on_limits_dropped(engine, _rule_limits_dropped)
+
     # ImprovementEngine: the consumer of evaluation scores. Built last so it can
     # reach learning/evaluator/intent. record_outcome() is hooked into the
     # orchestrator (cheap, never-raising, runs on every session completion); the

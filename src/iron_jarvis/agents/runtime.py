@@ -99,6 +99,35 @@ ATTENDED_APPROVAL_TIMEOUT_S: float | None = None
 _BATCH_EXAMPLES = 3
 
 
+def _rule_limits_scope(session: object, workspace: object, config: object = None) -> Any:
+    """Leap 05-c: the write scope of a rule's run with kept Limits, read from
+    the run's OWN options (``reflex/limits.scope_for``), or None. A helper's
+    own work folder counts only when Iron Jarvis made it
+    (``orchestrator.is_managed_workspace``; when that cannot be told, it
+    does not count: the narrower direction). Both readers are pure and never
+    raise, so a run that carries Limits always gets its scope."""
+    from ..reflex.limits import scope_for
+    from ..scheduling.knobs import session_options
+    from .orchestrator import is_managed_workspace
+
+    try:
+        own = bool(config is not None and workspace and is_managed_workspace(config, workspace))
+    except Exception:  # noqa: BLE001
+        own = False
+    return scope_for(session_options(session), workspace, own_folder=own)
+
+
+def _limits_stop_of(results: object) -> "tuple[str, str] | None":
+    """Leap 05-c: ``(refusal, rule_id)`` when a call of this step was refused
+    at a rule's kept Limits (``registry.invoke`` marks the result), else
+    None: the run then stops."""
+    for result in results if isinstance(results, (list, tuple)) else ():
+        data = getattr(result, "data", None)
+        if isinstance(data, dict) and data.get("outside_limits") is True:
+            return str(getattr(result, "error", "") or ""), str(data.get("rule_id") or "")
+    return None
+
+
 def _ask_timeout_for(origin: str) -> float | None:
     """How long an ask from a run of ``origin`` waits (v1.247.0): no bound
     for an attended origin, SESSION_APPROVAL_TIMEOUT_S for the rest. Both
@@ -2440,6 +2469,20 @@ class AgentRuntime:
         if not scopes:
             return {}
         return {"grants": store, "scopes": scopes}
+
+    def _note_limits_stop(self, session: Session, ctx: Any, refusal: str, rule_id: str) -> str:
+        """Leap 05-c: the words of a run that stopped at its rule's kept
+        Limits (its closing answer, composed by code from the registry's
+        refusal) — also put on the rule's row as "Needs you" with a link to
+        the run. BLOCKING (one row write)."""
+        from ..reflex import limits as _limits
+
+        scope = getattr(ctx, "task_scope", None)
+        folders = [str(p) for p in (getattr(scope, "limits_folders", ()) or getattr(scope, "write_roots", ()) or ())]
+        words = _limits.stop_words(refusal, folders)
+        if rule_id:
+            _limits.note_stop(self.p, rule_id, words, f"/sessions/{session.id}")
+        return words
 
     def _mint_always(self, session: Session, calls: list) -> list:
         """The "always" answer's second half (blocking — callers hop off the
@@ -5959,6 +6002,10 @@ class AgentRuntime:
                 # OWN options, never a model argument); the registry then
                 # holds every call that would change something.
                 rehearsal_id=_rehearsal_of(session),
+                # Leap 05-c: a rule's run with kept Limits writes only in the
+                # folders they name (from the run's OWN options, written by
+                # the rule's door; None for every other run: unchanged).
+                task_scope=_rule_limits_scope(session, workspace, getattr(self.p, "config", None)),
             )
 
             # Leap 06-a: in a rehearsal a call the registry will HOLD never
@@ -6398,6 +6445,15 @@ class AgentRuntime:
                 await _transcript.save(self.p.engine, run.id, session.id, messages)
             if sink:
                 sink.step_end(run.steps)
+            # LEAP 05-c: a write outside a rule's kept Limits was refused by
+            # the registry; the run STOPS here (the model gets no further
+            # turn to work around it), ends "Needs you" (the ledger's refused
+            # row, ``agents/outcome``) and the rule's row says why.
+            _stopped = _limits_stop_of(results)
+            if _stopped is not None:
+                return True, await asyncio.to_thread(
+                    self._note_limits_stop, session, ctx, _stopped[0], _stopped[1]
+                )
         if transcript:
             # A CLOSING OFFER whose extra work ran out of steps (v1.402.0
             # review): the model had already FINISHED and answered; the nudge

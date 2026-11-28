@@ -37,8 +37,10 @@ export function HeldOks({
   onRemoved,
 }: {
   grants: unknown;
-  /** Whose row this is: the words say "this schedule" / "this workflow". */
-  place: "schedule" | "workflow";
+  /** Whose row this is: the words say "this schedule" / "this workflow" /
+   *  "this rule" (leap 05-c: a rule's OKs, kept after its rehearsal or by
+   *  "Always for this rule"). */
+  place: "schedule" | "workflow" | "rule";
   /** The schedule's / workflow's name (test ids, the Remove title). */
   name: string;
   /** Called once a Remove has landed, so the page re-reads its rows. */

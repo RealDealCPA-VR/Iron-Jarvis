@@ -34,7 +34,12 @@ from sqlmodel import select
 from ..core.db import session_scope
 from ..core.events import EventType
 from ..core.models import AgentRun, EventRecord, Session, ToolInvocation, UndoJournal
+from ..deliverables.scope import LIMITS_LEAD as _LIMITS_LEAD
 from ..tools.base import Reversibility
+
+#: Leap 05-c: how the summary of a run that stopped at its rule's kept Limits
+#: begins (``reflex/limits.STOP_LEAD``; the runtime writes it, by code).
+LIMITS_STOP_LEAD = "Stopped at its limits:"
 
 #: The verdicts ``Session.outcome`` may carry (v1.227.0, audit A5/U1).
 #: ``status`` says how the RUN ended; these say whether the JOB was done.
@@ -143,6 +148,9 @@ def derive_outcome(
         return OUTCOME_NEEDS_YOU
     if status_value != "completed":
         return None
+    if int(result.get("outside_limits") or 0) > 0:
+        # Leap 05-c: it stopped at its rule's kept Limits; the person decides.
+        return OUTCOME_NEEDS_YOU
     if int(result.get("tools_failed_mutating") or 0) > 0:
         return OUTCOME_WITH_FAILURES
     if int(result.get("plan_steps_failed") or 0) > 0:
@@ -201,6 +209,19 @@ class RunEnding(NamedTuple):
     reason: str
 
 
+def _carries_limits(session: Any) -> bool:
+    """Leap 05-c: do this run's OWN options carry a rule's kept Limits
+    (``reflex/limits.LIMITS_OPTION``, written by the rule's door)? Pure;
+    never raises."""
+    try:
+        from ..reflex.limits import LIMITS_OPTION
+        from ..scheduling.knobs import session_options
+
+        return isinstance(session_options(session).get(LIMITS_OPTION), dict)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_ending(status_or_session: Any, outcome: Any = None) -> RunEnding:
     """THE one reading of a finished run (v1.503.0, north-star 3.1): a run's
     status says how the RUN ended, ``Session.outcome`` (the ledger's verdict,
@@ -235,6 +256,15 @@ def run_ending(status_or_session: Any, outcome: Any = None) -> RunEnding:
                 OUTCOME_WITH_FAILURES: PARTIAL_LEAD,
                 OUTCOME_DID_NOTHING: DID_NOTHING_LEAD,
             }[verdict]
+            if verdict == OUTCOME_NEEDS_YOU:
+                # Leap 05-c: a run that stopped at its rule's kept Limits
+                # needs you for that reason, not for an unanswered ask: its
+                # summary is the runtime's own words (by code) and says why.
+                # Read only for a run whose OWN options carry Limits (a
+                # model's closing words never become the reason elsewhere).
+                said = " ".join(str(getattr(status_or_session, "summary", "") or "").split())
+                if said.startswith(LIMITS_STOP_LEAD) and _carries_limits(status_or_session):
+                    reason = said[:400]
             return RunEnding(status_value, verdict, False, _OUTCOME_WORDS[verdict], reason)
         return RunEnding(status_value, verdict, True, WORD_DONE, "")
     words = _STATUS_WORDS.get(status_value) or (status_value.replace("_", " ").capitalize() or WORD_FAILED)
@@ -701,6 +731,7 @@ def session_result(
             revertable = 0
             already_reverted = 0
             mutating_failed = 0
+            outside_limits = 0
             # v1.465.0: whether the LAST call that changes something failed
             # (None = the run made no such call). A coding helper's verdict
             # reads this: see Orchestrator._settle_finished_run.
@@ -731,6 +762,10 @@ def session_result(
                     # direction that never calls a half-done job complete).
                     if (inv.reversibility or "").lower() != Reversibility.READONLY.value:
                         mutating_failed += 1
+                    # Leap 05-c: refused at a rule's kept Limits (the
+                    # registry's own words begin so): the job needs the user.
+                    if str(inv.output or "").startswith(_LIMITS_LEAD):
+                        outside_limits += 1
                     if len(errors) < _LIST_CAP:
                         errors.append(
                             {"tool": name, "error": (inv.output or "")[:_ERROR_CHARS]}
@@ -810,6 +845,9 @@ def session_result(
             out["revertable"] = revertable
             out["reverted"] = already_reverted
             out["tools_failed_mutating"] = mutating_failed
+            if outside_limits:
+                # Leap 05-c: the key is there only for such a run.
+                out["outside_limits"] = outside_limits
             out["ended_on_failed_change"] = last_change_ok is False
             # v1.503.0 (north-star 3.3): the steps of the run's kept PLAN
             # that were attempted and failed their check (a decomposed run;

@@ -1449,6 +1449,14 @@ class ToolRegistry:
                  "risk_class": risk},
                 session_id=ctx.session_id,
             )
+            if scope_error and not fill_error and getattr(_task_scope, "limits_of", ""):
+                # Leap 05-c: a write outside a rule's kept Limits. The run
+                # stops here (``agents/runtime`` reads this mark) and ends
+                # "Needs you" (``agents/outcome`` counts the ledger row).
+                return ToolResult(
+                    ok=False, error=shape_error,
+                    data={"outside_limits": True, "rule_id": _task_scope.limits_of},
+                )
             return ToolResult(ok=False, error=shape_error)
 
         # THE REHEARSAL GATE (leap 06-a). Every real gate above has spoken (the

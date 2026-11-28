@@ -129,6 +129,60 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## A rule works hands-off inside the limits you approved once (v1.600.0)
+
+A rule that starts agent work now runs on its own **inside limits you
+approve once**: rehearse it, read what it would do, and press **Keep it**.
+From then on it writes only in the folders that rehearsal wrote in, and the
+steps that would have asked you first run without asking. A kind of step it
+did not take in its rehearsal still asks you first. Outside its folders it
+stops and says **Needs you**.
+
+**Where.** On **Rules**, press **Rehearse** on the rule (or say "rehearse
+my intake rule" in chat). Before you press **Keep it**, the report says what
+you are approving: "**Keep it sets its limits:** Writes only in Intake;
+anything outside stops it and it needs you. It may write files without
+asking." After Keep it, the rule's **Limits** line on its row and on its
+card in chat says the same, and each step it may take without asking is
+listed under "**Allowed without asking on this rule:**" with **Remove**.
+Ask "what may my intake rule do on its own?" in chat for the same answer.
+
+**What happens outside the limits.** When a run would write a file anywhere
+else, nothing is written, the run stops at once, it ends **Needs you**, and
+the rule's row says "**Needs you:** It would have written … outside the
+folders it may write in (…)" with a link to the run. The next start takes
+that line away. To widen the limits, rehearse it again and press **Keep it**:
+the new limits replace the old ones.
+
+**Good to know.**
+
+- The folders are read from Iron Jarvis's own record of the rehearsal,
+  never from what the model said: the folder the rule works in, plus the
+  folder of each file it wrote outside it. A rule with no folder of its own
+  keeps the folder its rehearsal worked in.
+- Running commands, and the other steps that always ask for your OK, still
+  ask every time; the Limits line says so. A step that costs money still
+  asks every time.
+- An OK kept this way lasts 30 days. **Remove** takes one away at once, and
+  that step asks again from the next run.
+- A helper agent the rule's run hands work to writes only in the same
+  folders (and in its own work folder).
+- Changing what the rule does, what starts it or where it works drops its
+  limits and the OKs Keep it made (an **Always for this rule** you gave on a
+  card stays): rehearse it again to keep new ones. Renaming it, or changing
+  how often it may start, keeps them. Removing the rule removes them all.
+- If you change what the rule does after rehearsing it, **Keep it** on that
+  older report keeps nothing and says so: rehearse it again first.
+- A step a helper agent would have to ask you about cannot ask (nobody can
+  answer a helper), so the rehearsal lists it as refused and Keep it does
+  not allow it.
+- A rule that has no limits kept works exactly as before.
+- Not covered: files a program the run starts writes on its own (a command
+  is read for the files it names), and a rule that starts a workflow or hands
+  work to another computer.
+
+---
+
 ## Iron Jarvis notices things about your work (v1.599.0)
 
 A few times a day Iron Jarvis looks at its own record of your work and may suggest something you probably want to pick up. You do not have to set anything up. It looks for:

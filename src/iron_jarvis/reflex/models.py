@@ -117,6 +117,18 @@ class ReflexRule(SQLModel, table=True):
     paused_reason: str | None = None
     #: When the pause was last SAID (bell): at most once a day per rule.
     pause_told_at: datetime | None = None
+    #: Leap 05-c: the LIMITS the user approved with Keep it on a rehearsal
+    #: (JSON, ``reflex/limits.py``): ``{"folders": [...], "grants": [...],
+    #: "asks": [...], "rehearsal_id", "kept_at"}`` — the folders its runs may
+    #: write in (the registry refuses a write elsewhere) and the standing OKs
+    #: Keep it made for the steps that would have asked. "" = no limits kept
+    #: (writes and asks are exactly as before). Written only by Keep it; an
+    #: edit of what the rule does or where it works clears it.
+    limits_json: str = ""
+    #: Leap 05-c: the last run that STOPPED at those limits (JSON ``{words,
+    #: href, at}``), shown on the row as "Needs you"; cleared by the next
+    #: start and by a new Keep it. "" = none.
+    limits_stop_json: str = ""
 
     def decoded_start(self) -> dict:
         """``start_json`` as a dict (junk reads ``{}``)."""

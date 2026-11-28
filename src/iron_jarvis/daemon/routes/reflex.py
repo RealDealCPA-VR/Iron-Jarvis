@@ -79,8 +79,10 @@ def register(app: FastAPI, d) -> None:
     from ...settings import records as _records
     from ...triggers import starts as _starts
 
-    def _view(rule: Any, titles: dict[str, str], watchers: dict[str, Any]) -> dict[str, Any]:
+    def _view(rule: Any, titles: dict[str, str], watchers: dict[str, Any],
+              held: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
         from ...agents import chat_delivery as _cd
+        from ...reflex import limits as _limits
 
         row = rule.model_dump()
         row.update(_starts.describe_for(d.platform, rule))
@@ -93,13 +95,32 @@ def register(app: FastAPI, d) -> None:
         }
         w = watchers.get(rule.id)
         row["watcher"] = {"name": w.name, "last_error": w.last_error} if w is not None else None
-        for key in ("recent_starts_json", "start_json"):
+        # Leap 05-c: its kept Limits (the folders), the last run that stopped
+        # at them ("Needs you"), and every OK kept on it, each with Remove.
+        kept = _limits.decoded(rule)
+        row["limits"] = {"folders": kept["folders"], "kept_at": kept.get("kept_at") or ""} if kept else None
+        row["limits_stop"] = _limits.stop_of(rule)
+        row["standing_grants"] = (held or {}).get(rule.id, [])
+        for key in ("recent_starts_json", "start_json", "limits_json", "limits_stop_json"):
             row.pop(key, None)
         return row
+
+    def _held_oks() -> dict[str, list[dict[str, Any]]]:
+        store = getattr(d.platform, "grants", None)
+        held: dict[str, list[dict[str, Any]]] = {}
+        if store is None:
+            return held
+        try:
+            for g in store.list("rule"):
+                held.setdefault(g.scope_id, []).append(store.as_dict(g))
+        except Exception:  # noqa: BLE001 — a store fault lists none, never breaks the page
+            return {}
+        return held
 
     def _views(rules: list[Any]) -> list[dict[str, Any]]:
         from ...agents import chat_delivery as _cd
 
+        held = _held_oks()
         titles = _cd.chat_titles(d.platform.engine, [r.chat_thread_id for r in rules if r.chat_thread_id])
         sentinels = getattr(d.platform, "sentinels", None)
         watchers: dict[str, Any] = {}
@@ -107,7 +128,7 @@ def register(app: FastAPI, d) -> None:
             for w in sentinels.list():
                 if getattr(w, "mode", "") == "rule" and w.rule_id:
                     watchers[w.rule_id] = w
-        return [_view(r, titles, watchers) for r in rules]
+        return [_view(r, titles, watchers, held) for r in rules]
 
     def _one(rule_id: str) -> dict[str, Any]:
         rule = d.platform.reflex.get(rule_id)

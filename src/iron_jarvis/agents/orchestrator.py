@@ -1230,6 +1230,11 @@ class Orchestrator:
         _inherited = _rehearsal.current()
         if _inherited and not str(options.get(_rehearsal.REHEARSAL_OPTION) or "").strip():
             options[_rehearsal.REHEARSAL_OPTION] = _inherited
+        # A RULE'S LIMITS (leap 05-c) spread down the same way: a helper a
+        # run with kept Limits starts writes only where that run may.
+        from ..reflex.limits import inherited as _limits_inherited
+
+        _limits_inherited(options)
         # WHO STARTED IT (v1.352.0): only the kwarg writes the marker.
         if started_by_person:
             options[PERSON_STARTED_OPTION] = True

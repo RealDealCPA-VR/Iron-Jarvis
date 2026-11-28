@@ -43,6 +43,19 @@ def on_removed(engine: Engine, callback: "Callable[[str], None]") -> None:
     _ON_REMOVED[engine] = callback
 
 
+#: Leap 05-c: what runs after an edit DROPPED a rule's kept Limits (the
+#: platform registers it: the OKs Keep it made are revoked), per database.
+_ON_LIMITS_DROPPED: "weakref.WeakKeyDictionary[Engine, Callable[[str, list[str]], None]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def on_limits_dropped(engine: Engine, callback: "Callable[[str, list[str]], None]") -> None:
+    """Register what runs after an edit dropped a rule's Limits (its id and
+    the ids of the OKs Keep it made)."""
+    _ON_LIMITS_DROPPED[engine] = callback
+
+
 def pause_words(limit: int) -> str:
     """Leap 05-a (D-05.3): the words a rule that paused itself carries."""
     n = int(limit or MAX_FIRES_PER_HOUR)
@@ -187,10 +200,14 @@ class ReflexStore:
         bad = [k for k in fields if k not in self.EDITABLE]
         if bad:
             raise ValueError(f"not an editable field: {', '.join(sorted(bad))}")
+        from .limits import LIMITS_FIELDS, decoded as _kept_limits
+
+        dropped: list[str] | None = None
         with session_scope(self.engine) as db:
             row = db.get(ReflexRule, rule_id)
             if row is None:
                 return None
+            before = {k: _limits_value(row, k) for k in LIMITS_FIELDS}
             for key, value in fields.items():
                 if key == "project_id":
                     row.project_id = (value or "").strip() or None
@@ -206,9 +223,23 @@ class ReflexStore:
                     setattr(row, key, str(value or ""))
             if not row.name:
                 row.name = row.match or "reflex"
+            # Leap 05-c: the Limits were approved for what the rule did and
+            # where it worked; an edit of either drops them (rehearse it
+            # again to keep new ones). Its name and hourly limit keep them.
+            kept = _kept_limits(row)
+            if kept and any(before[k] != _limits_value(row, k) for k in LIMITS_FIELDS):
+                dropped = list(kept.get("grants") or [])
+                row.limits_json = ""
             db.add(row)
             db.commit()
             db.refresh(row)
+        if dropped is not None:
+            hook = _ON_LIMITS_DROPPED.get(self.engine)
+            if hook is not None:
+                try:
+                    hook(rule_id, dropped)
+                except Exception:  # noqa: BLE001 — the Limits are gone either way
+                    log.warning("could not revoke the kept OKs of the rule %s", rule_id, exc_info=True)
         return row
 
     def set_enabled(self, rule_id: str, enabled: bool) -> ReflexRule | None:
@@ -344,6 +375,19 @@ class ReflexStore:
             db.commit()
             db.refresh(row)
         return row
+
+    def clear_stop(self, rule_id: str) -> None:
+        """Leap 05-c: the row speaks of the LAST run, so a new start takes
+        an earlier run's "Needs you" (it stopped at its Limits) away. Called
+        BEFORE the run is launched, so the new run's own stop is never wiped.
+        BLOCKING."""
+        with session_scope(self.engine) as db:
+            row = db.get(ReflexRule, rule_id)
+            if row is None or not row.limits_stop_json:
+                return
+            row.limits_stop_json = ""
+            db.add(row)
+            db.commit()
 
     def mark_fired(self, rule_id: str) -> None:
         with _GATE_LOCK, session_scope(self.engine) as db:
@@ -505,6 +549,20 @@ def outcome_matches(want: str, verdict: str) -> bool:
 
 def _flat(value: Any) -> str:
     return " ".join(str(value or "").split()).casefold()
+
+
+def _limits_value(row: ReflexRule, key: str) -> Any:
+    """One field as leap 05-c compares it: ``start_json`` by what it says (a
+    re-written dict in another key order is the same start), the rest by
+    their stripped text (None and "" are the same)."""
+    value = getattr(row, key, None)
+    if key == "start_json":
+        try:
+            data = json.loads(value or "{}")
+        except (TypeError, ValueError):
+            return str(value or "")
+        return json.dumps(data, sort_keys=True, default=str) if data else ""
+    return " ".join(str(value or "").split())
 
 
 def _limit(value: Any) -> int:
