@@ -69,6 +69,16 @@ TURN_CAP_S = 3.0
 #: no file waits this long at most on its one row.
 RECORD_WAIT_S = 1.0
 
+#: Finish-check writes still going after the reply stopped waiting for them.
+_LATE_WRITES: "set[asyncio.Future]" = set()
+
+
+async def late_writes_done() -> None:
+    """Wait for the finish-check writes a reply stopped waiting for."""
+    from ..core.tasks import drain_tasks
+
+    await drain_tasks(_LATE_WRITES)
+
 
 async def checked_for_turn(
     platform: Any,
@@ -324,7 +334,16 @@ async def note_finish(platform: Any, finish: Any, *, turn_id: str = "", thread_i
                 await record.note(engine, rows, thread_id=str(thread_id or ""), turn_id=str(turn_id or ""),
                                   session_id=str(session_id or ""), kept_home=home)
 
-            await asyncio.wait_for(write(), RECORD_WAIT_S)
+            # The reply waits RECORD_WAIT_S at most; a write that takes
+            # longer (a busy PC) is NOT cancelled: it finishes on its own,
+            # so a failed test run is never lost from the record.
+            task = asyncio.ensure_future(write())
+            _LATE_WRITES.add(task)
+            task.add_done_callback(_LATE_WRITES.discard)
+            try:
+                await asyncio.wait_for(asyncio.shield(task), RECORD_WAIT_S)
+            except TimeoutError:
+                log.debug("a coding reply's finish check is still being recorded")
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — a timeout included: the reply goes on

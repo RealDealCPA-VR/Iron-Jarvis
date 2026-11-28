@@ -501,6 +501,7 @@ async def test_the_finish_checks_tests_and_review_are_rows_from_its_own_record(p
     assert existing.finish_checks({**rec, "after": "failed"}, fc.tests_ended())[0] == Check(R.TESTS, R.FAILED, "they failed")
     await T.note_finish(platform, rec, turn_id="turn_code", thread_id="build_thread", session_id="build_thread",
                         ended=fc.tests_ended())
+    await T.late_writes_done()      # a busy PC: the write outlives the reply's wait
     got = _rows(platform.engine, turn_id="turn_code")
     assert [(r.check, r.result, r.by, r.session_id, r.thread_id) for r in got] == [
         (R.TESTS, R.FAILED, "rule", "build_thread", "build_thread"),
@@ -1868,3 +1869,27 @@ def test_the_result_route_leaves_the_line_off_for_a_run_that_keeps_its_words_hom
         assert line(True, "chat_open") is None, "a Local only run's line reached a chat that is not Local only"
         assert line(True, "") is None and line(True, "no_such_chat") is None
         assert T.line_stays_home(platform.engine, "no_such_run") is False and T.line_stays_home(object(), sid) is True
+
+
+async def test_a_finish_check_write_slower_than_the_reply_s_wait_still_lands(platform, monkeypatch):
+    """The reply waits RECORD_WAIT_S at most; a slower write (a busy PC) is
+    not cancelled, so a failed test run is never lost from the record."""
+    import asyncio
+
+    from iron_jarvis.checks import record as Rec
+
+    gate = asyncio.Event()
+    real = Rec.note
+
+    async def slow(*a, **k):
+        await gate.wait()
+        return await real(*a, **k)
+
+    monkeypatch.setattr(Rec, "note", slow)
+    monkeypatch.setattr(T, "RECORD_WAIT_S", 0.01)
+    rec = {"tests": "failed", "review": {}}
+    await T.note_finish(platform, rec, turn_id="turn_slow", thread_id="t_slow", session_id="t_slow", ended="failed")
+    assert _rows(platform.engine, turn_id="turn_slow") == []     # the reply did not wait for it
+    gate.set()
+    await T.late_writes_done()
+    assert (R.TESTS, R.FAILED) in [(r.check, r.result) for r in _rows(platform.engine, turn_id="turn_slow")]
