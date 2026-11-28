@@ -2065,6 +2065,10 @@ class AgentRuntime:
         #: registry's gate reads them as ``card_allow``.
         self._held_grants: dict[str, set[str]] = {}
         self._held_once: dict[str, set[int]] = {}
+        #: Leap 05-c: session id -> the words of a run that stopped at its
+        #: rule's kept Limits (``_perceive_act_body``), so a run split into
+        #: plan steps ends there too (``limits_stopped``; dropped at the end).
+        self._limits_stops: dict[str, str] = {}
         #: v1.406.0 part 2 follow-ups: session id -> what an Accept edits /
         #: Auto run may have changed (``_note_auto_changes``), so a test run
         #: after a setup file changed is never passed by rule.
@@ -2470,6 +2474,13 @@ class AgentRuntime:
             return {}
         return {"grants": store, "scopes": scopes}
 
+    def limits_stopped(self, session: Any) -> str | None:
+        """Leap 05-c: the words of ``session``'s run when it stopped at its
+        rule's kept Limits, else None. A run split into plan steps
+        (``decompose.execute_plan``) reads it after each step: the whole run
+        ends there, with no retry and no further step. Pure."""
+        return self._limits_stops.get(str(getattr(session, "id", "") or "")) or None
+
     def _note_limits_stop(self, session: Session, ctx: Any, refusal: str, rule_id: str) -> str:
         """Leap 05-c: the words of a run that stopped at its rule's kept
         Limits (its closing answer, composed by code from the registry's
@@ -2480,8 +2491,21 @@ class AgentRuntime:
         scope = getattr(ctx, "task_scope", None)
         folders = [str(p) for p in (getattr(scope, "limits_folders", ()) or getattr(scope, "write_roots", ()) or ())]
         words = _limits.stop_words(refusal, folders)
+        # The run's own record that it stopped here (saved with the session
+        # at finalize): only then is its summary its "Needs you" reason.
+        try:
+            from ..scheduling.knobs import session_options as _opts
+
+            stamped = _opts(session)
+            stamped[_limits.STOPPED_OPTION] = True
+            session.options_json = json.dumps(stamped)
+        except Exception:  # noqa: BLE001 — the reason then falls back to the ledger's
+            logging.getLogger("iron_jarvis.agents.runtime").warning(
+                "limits: the stop could not be stamped on %s", session.id, exc_info=True
+            )
         if rule_id:
             _limits.note_stop(self.p, rule_id, words, f"/sessions/{session.id}")
+        self._limits_stops[session.id] = words
         return words
 
     def _mint_always(self, session: Session, calls: list) -> list:
@@ -3011,6 +3035,7 @@ class AgentRuntime:
             self._run_grants.pop(session.id, None)
             self._held_grants.pop(session.id, None)
             self._held_once.pop(session.id, None)
+            self._limits_stops.pop(session.id, None)  # Leap 05-c
             # v1.570.0: the run's quick check and what it said.
             self._auto_judges.pop(session.id, None)
             self._auto_judged.pop(session.id, None)
@@ -3277,6 +3302,7 @@ class AgentRuntime:
         self._run_grants.pop(session.id, None)
         self._held_grants.pop(session.id, None)
         self._held_once.pop(session.id, None)
+        self._limits_stops.pop(session.id, None)  # Leap 05-c
         self._auto_judges.pop(session.id, None)  # v1.570.0
         self._auto_judged.pop(session.id, None)
         self._auto_kept.pop(session.id, None)
@@ -4141,7 +4167,14 @@ class AgentRuntime:
         # The decomposed lane's assemble() never returns blank (it degrades to
         # a deterministic step summary), so the fallback below is only a guard.
         run.result = final_text or _no_final_text_result([])
-        if plan_answered and _decompose.plan_not_done(plan_results):
+        if (
+            plan_answered
+            and _decompose.plan_not_done(plan_results)
+            # Leap 05-c: a planned run that stopped at its rule's kept Limits
+            # ends like the flat loop's stop: its answer is the stop's words
+            # and the ledger's refused row makes it "Needs you".
+            and self.limits_stopped(session) is None
+        ):
             # v1.503.0 (north-star 3.3): A PLANNED RUN THAT LEFT ITS JOB NOT
             # DONE ENDS FAILED — a step never attempted (its budget ran out:
             # how the flat loop ends at its step limit) or no step that

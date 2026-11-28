@@ -3456,6 +3456,15 @@ class Orchestrator:
                     shared = db.exec(
                         select(Session).where(Session.workspace_path == ws_path)
                     ).first()
+                    if shared is None:
+                        # Leap 05-c: a rule kept after its rehearsal may work
+                        # in the folder that rehearsal ran in (it had none of
+                        # its own); its next runs use it, so it stays.
+                        from ..reflex.models import ReflexRule
+
+                        shared = db.exec(
+                            select(ReflexRule).where(ReflexRule.workspace_root == ws_path)
+                        ).first()
                 if shared is None:
                     import shutil
 

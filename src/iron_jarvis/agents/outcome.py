@@ -209,15 +209,17 @@ class RunEnding(NamedTuple):
     reason: str
 
 
-def _carries_limits(session: Any) -> bool:
-    """Leap 05-c: do this run's OWN options carry a rule's kept Limits
-    (``reflex/limits.LIMITS_OPTION``, written by the rule's door)? Pure;
-    never raises."""
+def _stopped_at_limits(session: Any) -> bool:
+    """Leap 05-c: did this run STOP at its rule's kept Limits? Its OWN
+    options carry the Limits (``reflex/limits.LIMITS_OPTION``, written by the
+    rule's door) AND the runtime's stamp that it stopped there
+    (``STOPPED_OPTION``, by code). Pure; never raises."""
     try:
-        from ..reflex.limits import LIMITS_OPTION
+        from ..reflex.limits import LIMITS_OPTION, STOPPED_OPTION
         from ..scheduling.knobs import session_options
 
-        return isinstance(session_options(session).get(LIMITS_OPTION), dict)
+        opts = session_options(session)
+        return isinstance(opts.get(LIMITS_OPTION), dict) and opts.get(STOPPED_OPTION) is True
     except Exception:  # noqa: BLE001
         return False
 
@@ -260,10 +262,11 @@ def run_ending(status_or_session: Any, outcome: Any = None) -> RunEnding:
                 # Leap 05-c: a run that stopped at its rule's kept Limits
                 # needs you for that reason, not for an unanswered ask: its
                 # summary is the runtime's own words (by code) and says why.
-                # Read only for a run whose OWN options carry Limits (a
-                # model's closing words never become the reason elsewhere).
+                # Read only for a run the runtime stamped as stopped there (a
+                # model's closing words never become the reason otherwise,
+                # not even in a run with Limits that needs you for an ask).
                 said = " ".join(str(getattr(status_or_session, "summary", "") or "").split())
-                if said.startswith(LIMITS_STOP_LEAD) and _carries_limits(status_or_session):
+                if said.startswith(LIMITS_STOP_LEAD) and _stopped_at_limits(status_or_session):
                     reason = said[:400]
             return RunEnding(status_value, verdict, False, _OUTCOME_WORDS[verdict], reason)
         return RunEnding(status_value, verdict, True, WORD_DONE, "")

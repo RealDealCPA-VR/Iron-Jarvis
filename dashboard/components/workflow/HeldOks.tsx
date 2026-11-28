@@ -76,7 +76,12 @@ export function HeldOks({
               data-testid={`held-ok-${g.id}`}
               className="flex flex-wrap items-center gap-2 text-[11px]"
             >
-              <span className="min-w-0 max-w-[260px] truncate font-mono text-zinc-300" title={g.label || g.tool}>
+              {/* Leap 05-c: an OK Keep it made is named in plain words, not
+                  a call's one-liner, so it reads as words, not code. */}
+              <span
+                className={`min-w-0 max-w-[260px] truncate text-zinc-300${g.created_by === "rehearsal" ? "" : " font-mono"}`}
+                title={g.label || g.tool}
+              >
                 {g.label || g.tool}
               </span>
               {expiry && <span className="text-zinc-500">{expiry}</span>}

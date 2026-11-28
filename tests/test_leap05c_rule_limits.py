@@ -135,6 +135,8 @@ async def test_a_kept_rule_runs_twice_with_no_ask_and_a_third_outside_its_limits
     (grant,) = [p.grants.get(g) for g in kept["grants"]]
     assert (grant.scope_kind, grant.scope_id, grant.tool, grant.args_hash) == ("rule", rule.id, "write_file", "")
     assert grant.created_by == L.GRANT_BY and grant.expires_at is not None
+    # Listed in plain words under "Allowed without asking", never the tool's name.
+    assert grant.label == "Write files (kept after its rehearsal)", grant.label
     words = starts.describe_for(p, rule)["limits_words"]
     assert words.startswith("Writes only in Intake;"), words
     assert "It may write files without asking." in words, words
@@ -167,6 +169,14 @@ async def test_a_kept_rule_runs_twice_with_no_ask_and_a_third_outside_its_limits
     # ledger's own reason.
     spoof = SessionRow(task="x", status=run.status, outcome=O.OUTCOME_NEEDS_YOU, summary=run.summary)
     assert not O.run_ending(spoof).reason.startswith(L.STOP_LEAD)
+    # Nor does a run WITH Limits that needs you for another reason (an ask
+    # nobody answered): only the runtime's own stamp makes it the reason.
+    assert json.loads(run.options_json or "{}").get(L.STOPPED_OPTION) is True
+    unstamped = {k: v for k, v in json.loads(run.options_json).items() if k != L.STOPPED_OPTION}
+    asked = SessionRow(task="x", status=run.status, outcome=O.OUTCOME_NEEDS_YOU, summary=run.summary,
+                       options_json=json.dumps(unstamped))
+    assert L.LIMITS_OPTION in unstamped
+    assert not O.run_ending(asked).reason.startswith(L.STOP_LEAD)
     with session_scope(p.engine) as db:
         (row,) = list(db.exec(select(ToolInvocation).where(ToolInvocation.session_id == run.id)))
     assert row.ok is False and row.output.startswith(LIMITS_LEAD)
@@ -183,6 +193,52 @@ async def test_a_kept_rule_runs_twice_with_no_ask_and_a_third_outside_its_limits
     assert p.reflex.remove(rule.id)
     assert p.grants.get(grant.id).revoked_at is not None
     assert p.grants.list(scope_kind="rule", scope_id=rule.id) == []
+
+
+async def test_a_run_split_into_plan_steps_stops_at_its_limits_with_no_retry_and_no_later_step(
+    tmp_path, monkeypatch, quick_asks,
+):
+    # A bulk-shaped rule ("rename every file that lands in Intake") runs as
+    # plan steps (``decompose.should_decompose``). A write outside its
+    # Limits must end the WHOLE run: the step is not checked or retried (the
+    # model is not asked again) and the later steps never run.
+    from iron_jarvis.agents import decompose as D
+
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    router = app.state.reflex_router
+    rule, intake = await _kept_rule(tmp_path, p)
+    outside = tmp_path / "Elsewhere"
+    outside.mkdir()
+
+    async def three_steps(*a, **kw):
+        return [D.PlanStep(goal=f"Rename file {i}") for i in (1, 2, 3)]
+
+    checks: list[int] = []
+
+    async def no_check(*a, **kw):
+        checks.append(1)
+        return True, "", "none"
+
+    monkeypatch.setattr(D, "should_decompose", lambda *a, **kw: True)
+    monkeypatch.setattr(D, "plan_task", three_steps)
+    monkeypatch.setattr(D, "verify_step", no_check)
+    calls: list[int] = []
+    p.router.stream = _scripted([
+        [_write("o1", str(outside / "x.txt"), "x")],
+        [_write("o2", "after.txt", "after")],  # never reached
+        [_write("o3", "later.txt", "later")],  # never reached
+    ], calls)
+    run = await _fire(p, router, "file-it")
+    assert not (outside / "x.txt").exists()
+    assert not (intake / "after.txt").exists() and not (intake / "later.txt").exists()
+    assert calls == [0], "the model was asked again after the stop (a retry or a later step)"
+    assert checks == [], "the stopped step was checked (and could be retried)"
+    assert run.outcome == O.OUTCOME_NEEDS_YOU, (run.outcome, run.summary)
+    assert run.summary.startswith(L.STOP_LEAD) and "x.txt" in run.summary, run.summary
+    assert O.run_ending(run).reason.startswith(L.STOP_LEAD)
+    stop = L.stop_of(p.reflex.get(rule.id))
+    assert stop and stop["href"] == f"/sessions/{run.id}", stop
 
 
 async def test_keep_it_on_a_rehearsal_of_what_the_rule_no_longer_does_is_refused(tmp_path):
@@ -363,6 +419,31 @@ async def test_a_helpers_step_that_nothing_could_ask_about_is_never_promised(tmp
     assert "without asking" not in starts.describe_for(p, after)["limits_words"]
 
 
+async def test_a_rule_with_no_folder_keeps_its_rehearsals_folder_and_clearing_runs_leaves_it(tmp_path):
+    # A rule with no folder of its own works, after Keep it, in the folder
+    # Iron Jarvis made for its rehearsal. Clearing finished runs ("Clear
+    # completed") must not move that folder to the trash: the rule's next
+    # runs work there.
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    p.permissions._base["write_file"] = "ask"
+    rule = p.reflex.add(name="Note it", source="webhook", match="note-it", action="session",
+                        task_template="Note {text}", agent_name="builder")
+    p.router.stream = _scripted([[_write("n1", "note.txt", "n")]])
+    view = await _rehearse(p, "Note it")
+    await RR.keep(p, view["id"])
+    after = p.reflex.get(rule.id)
+    folder = str(after.workspace_root or "")
+    from iron_jarvis.agents.orchestrator import is_managed_workspace
+
+    assert folder and is_managed_workspace(p.config, folder), folder
+    assert L.decoded(after)["folders"] == [folder]
+    Path(folder, "kept.txt").write_text("k")
+    for sid in RR.sessions_of(p, RR.RehearsalStore(p.engine).get(view["id"])):
+        p.orchestrator.delete_session(sid)
+    assert Path(folder, "kept.txt").read_text() == "k", "the rule's folder went to the trash"
+
+
 async def test_a_rehearsal_carries_no_limits_so_keep_it_again_widens_them(tmp_path):
     app = create_app(str(tmp_path / "home"))
     p = app.state.platform
@@ -401,6 +482,57 @@ async def test_a_deny_floor_tool_gets_no_ok_and_still_asks(tmp_path):
     kept = L.decoded(after)
     assert kept["grants"] == [] and kept["asks"] == ["shell"]
     assert [g for g in p.grants.list(scope_kind="rule", scope_id=rule.id)] == []
+    assert "To run commands it still asks you each time." in starts.describe_for(p, after)["limits_words"]
+
+
+def test_an_ok_for_another_kind_of_step_never_says_it_runs_commands():
+    # Commands never get an OK, so a "run"-kind OK is some other step: the
+    # Limits line and the OK's label say so in plain words.
+    probe = type("_R", (), {"limits_json": json.dumps({"folders": ["C:/Intake"], "kinds": ["write", "run"]})})()
+    said = L.words(probe)
+    assert "It may write files and take the other steps it rehearsed without asking." in said, said
+    assert "run commands" not in said
+    assert L.ok_label("write_file", "write") == "Write files (kept after its rehearsal)"
+    assert "_" not in L.ok_label("todo_add", "run")
+
+
+def test_every_step_that_runs_commands_or_code_keeps_asking():
+    for name in ("shell", "run_code", "code_run", "process_start", "process_write", "repl", "pane_send"):
+        assert L.always_asks(name), name
+    assert not L.always_asks("write_file")
+
+
+async def test_a_step_that_runs_code_gets_no_ok_and_still_asks(tmp_path, monkeypatch):
+    tool = "run_code"
+    args = {"language": "python", "code": "open('C:/elsewhere/out.txt', 'w').write('x')"}
+    # Code a step runs can write anywhere, and the Limits cannot read where:
+    # like the shell, it gets no OK, so "Writes only in ..." stays true and
+    # the Handbook's "running commands still ask every time" too.
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    intake = tmp_path / "Intake"
+    intake.mkdir()
+    p.permissions._base[tool] = "ask"
+    # A low-trust run (the default for a door from outside) keeps code away
+    # entirely; the person may trust these doors fully.
+    p.config.comm_trust = "full"
+    # An agent that holds the tool (a custom agent may; the builder does not).
+    armed = runtime_mod.arm_for_task
+    monkeypatch.setattr(runtime_mod, "arm_for_task",
+                        lambda *a, **kw: [*armed(*a, **kw), tool])
+    rule = p.reflex.add(name="Code it", source="webhook", match="code-it", action="session",
+                        task_template="Code {text}", workspace_root=str(intake), agent_name="builder")
+    p.router.stream = _scripted([[ToolCall(id="c1", name=tool, arguments=args)]])
+    view = await _rehearse(p, "Code it")
+    runs = [w for w in view["would"] if w["kind"] == "run"]
+    assert runs and runs[0]["would"] == "ask", view
+    assert "without asking" not in view["limits"]["words"], view
+    assert "To run commands it still asks you each time." in view["limits"]["words"], view
+    await RR.keep(p, view["id"])
+    after = p.reflex.get(rule.id)
+    kept = L.decoded(after)
+    assert kept["grants"] == [] and kept["asks"] == [tool], kept
+    assert p.grants.list(scope_kind="rule", scope_id=rule.id) == []
     assert "To run commands it still asks you each time." in starts.describe_for(p, after)["limits_words"]
 
 

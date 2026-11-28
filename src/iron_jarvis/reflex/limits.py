@@ -20,8 +20,10 @@ model's words:
   :func:`inherited`).
 * WHAT IT MAY DO WITHOUT ASKING. One rule-scoped standing OK
   (``core/grants``) per tool the rehearsal said would ASK, any arguments,
-  30 days. A deny floor tool (``shell``…) gets none, as the grant store
-  refuses it: it keeps asking, and the Limits line says so. A priced call
+  30 days. A deny floor tool (``shell``…) or any step that runs code
+  (``run_code``…: the folders cannot be read from code, so an OK would let
+  it write anywhere) gets none (:func:`always_asks`): it keeps asking, and
+  the Limits line says so. A priced call
   still asks whatever the OKs say (``runtime._pause_needed``).
 
 A rehearsal's own run carries no Limits (it shows what the rule would do,
@@ -46,6 +48,10 @@ log = get_logger("reflex.limits")
 
 #: The run option a rule's door writes: ``{"rule_id", "folders"}``.
 LIMITS_OPTION = "rule_limits"
+#: The run option the runtime stamps on a run that STOPPED at its Limits
+#: (by code, ``runtime._note_limits_stop``): only then does the run's summary
+#: become its "Needs you" reason (``agents/outcome.run_ending``).
+STOPPED_OPTION = "rule_limits_stopped"
 #: The run option a rule's door writes on a REHEARSAL's run: what the rule
 #: did when it was rehearsed (:func:`shape`), so Keep it never approves a
 #: rehearsal of what the rule no longer does.
@@ -75,11 +81,28 @@ KIND_WORDS = {
     "page": "act on web pages",
 }
 
+#: What an OK of each kind lets the rule do, in the Limits line. A "run"
+#: OK is never a command (:func:`always_asks`): it is another kind of step.
+OK_WORDS = {**KIND_WORDS, "run": "take the other steps it rehearsed"}
+
+
+def ok_label(tool: str, kind: str) -> str:
+    """The plain words an OK Keep it made is listed by ("Write files (kept
+    after its rehearsal)"), never the tool's own name. Pure."""
+    said = KIND_WORDS.get(str(kind), "") if kind != "run" else ""
+    if not said:
+        from ..tools import rehearsal as R
+
+        said = R.effect_of(tool, {}).words
+    said = str(said or tool.replace("_", " ")).strip()
+    return f"{said[:1].upper()}{said[1:]} (kept after its rehearsal)"
+
+
 __all__ = [
     "LIMITS_LEAD", "LIMITS_OPTION", "LIMITS_RULE", "GRANT_BY", "STOP_LEAD",
     "decoded", "approved_from", "keep", "options_for", "scope_for", "inherited",
     "words", "note_stop", "stop_words", "drop_kept_grants", "LIMITS_FIELDS",
-    "SHAPE_OPTION", "shape", "unchanged", "STALE_WORDS",
+    "SHAPE_OPTION", "shape", "unchanged", "STALE_WORDS", "always_asks", "STOPPED_OPTION",
 ]
 
 #: The fields whose change drops the Limits (what the rule does, what starts
@@ -129,6 +152,17 @@ def unchanged(platform: Any, rec: Any, rule: Any) -> bool:
     except Exception:  # noqa: BLE001
         log.warning("limits: the rehearsal %s could not be read", getattr(rec, "id", "?"), exc_info=True)
         return False
+
+
+def always_asks(name: str) -> bool:
+    """Does the step ``name`` keep asking whatever Keep it approved? A deny
+    floor tool, and every step that runs commands or code: where code writes
+    cannot be read from its arguments, so an OK for it would break "Writes
+    only in ...". Pure."""
+    from ..tools.permissions import DENY_FLOOR_TOOLS
+    from ..tools.rehearsal import COMMAND_STEPS
+
+    return name in DENY_FLOOR_TOOLS or name in COMMAND_STEPS
 
 
 def _loads(raw: Any) -> dict[str, Any]:
@@ -192,15 +226,15 @@ def approved_from(platform: Any, rec: Any, rule: Any) -> dict[str, Any]:
     from the rehearsal's ledger rows: ``{"root", "folders", "tools":
     [{"tool", "kind"}], "asks": [tool, ...]}``. ``tools`` are the steps that
     would have asked and get an OK; ``asks`` those that keep asking (a deny
-    floor tool). BLOCKING (a few reads). Never raises (an unreadable ledger
-    approves the folder it works in and nothing else)."""
+    floor tool or a step that runs code, :func:`always_asks`). BLOCKING (a
+    few reads). Never raises (an unreadable ledger approves the folder it
+    works in and nothing else)."""
     from sqlmodel import select
 
     from ..core.db import session_scope
     from ..core.models import Session, ToolInvocation
     from ..deliverables.scope import _targets
     from ..tools import rehearsal as R
-    from ..tools.permissions import DENY_FLOOR_TOOLS
     from ..tools.rehearsal_runs import sessions_of
 
     root_text = str(getattr(rule, "workspace_root", "") or "").strip()
@@ -271,7 +305,7 @@ def approved_from(platform: Any, rec: Any, rule: Any) -> dict[str, Any]:
             tool = platform.registry.get(name) if getattr(platform, "registry", None) else None
             if tool is None:
                 continue
-            if name in DENY_FLOOR_TOOLS:
+            if always_asks(name):
                 out["asks"].append(name)
                 continue
             out["tools"].append({"tool": name, "kind": R.effect_of(name, args, tool).kind})
@@ -310,7 +344,7 @@ def keep(platform: Any, rec: Any, rule_id: str) -> dict[str, Any] | None:
             try:
                 g = grants.create(
                     "rule", rule.id, tool, "",
-                    f"{tool}: any arguments (kept after a rehearsal)",
+                    ok_label(tool, item["kind"]),
                     GRANT_DAYS, created_by=GRANT_BY,
                 )
             except ValueError:
@@ -513,7 +547,7 @@ def words(rule: Any, live_kinds: Iterable[str] | None = None) -> str:
     kinds = list(live_kinds) if live_kinds is not None else list(kept.get("kinds") or [])
     said: list[str] = []
     for k in kinds:
-        w = KIND_WORDS.get(str(k), "")
+        w = OK_WORDS.get(str(k), "")
         if w and w not in said:
             said.append(w)
     if said:
@@ -545,12 +579,10 @@ def offer(platform: Any, rec: Any) -> dict[str, Any] | None:
         approved = approved_from(platform, rec, rule)
         if not approved["folders"]:
             return None
-        from ..tools.permissions import DENY_FLOOR_TOOLS
-
         probe = type("_Probe", (), {})()
         probe.limits_json = json.dumps({
             "folders": approved["folders"],
-            "kinds": [t["kind"] for t in approved["tools"] if t["tool"] not in DENY_FLOOR_TOOLS],
+            "kinds": [t["kind"] for t in approved["tools"] if not always_asks(t["tool"])],
             "asks": approved["asks"],
         })
         return {"folders": approved["folders"], "words": words(probe)}

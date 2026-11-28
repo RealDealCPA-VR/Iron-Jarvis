@@ -159,10 +159,14 @@ the new limits replace the old ones.
 - The folders are read from Iron Jarvis's own record of the rehearsal,
   never from what the model said: the folder the rule works in, plus the
   folder of each file it wrote outside it. A rule with no folder of its own
-  keeps the folder its rehearsal worked in.
-- Running commands, and the other steps that always ask for your OK, still
-  ask every time; the Limits line says so. A step that costs money still
-  asks every time.
+  keeps the folder Iron Jarvis made for its rehearsal, and its **Where it
+  works** line names it. Clearing finished runs leaves that folder where it
+  is, because the rule's next runs work there.
+- Running commands or code, and the other steps that always ask for your
+  OK, still ask every time; the Limits line says so. A step that costs money
+  still asks every time.
+- A run that works through a list of steps stops at the first write outside
+  its limits too: no later step runs.
 - An OK kept this way lasts 30 days. **Remove** takes one away at once, and
   that step asks again from the next run.
 - A helper agent the rule's run hands work to writes only in the same

@@ -1143,6 +1143,7 @@ async def execute_plan(
         output = ""
         retried = False
         retry_reason = ""
+        stopped_words: str | None = None
         for attempt in (0, 1):
             left = _left()
             if attempt == 1 and left is not None and left <= 0:
@@ -1179,6 +1180,15 @@ async def execute_plan(
             output = text if finished else (
                 "(step stopped: mini-loop budget reached before a final answer)"
             )
+            # LEAP 05-c: the step stopped at its rule's kept Limits (a write
+            # outside them was refused by the registry). The WHOLE run stops
+            # here: no check, no retry (the model is not asked again) and no
+            # further step; the run ends "Needs you" (``run_decomposed``).
+            _limits_of = getattr(runtime, "limits_stopped", None)
+            stopped_words = _limits_of(session) if callable(_limits_of) else None
+            if stopped_words:
+                ok, reason, method, output = False, stopped_words, "none", stopped_words
+                break
             if sink is not None:
                 sink.phase("verifying", f"checking step {index + 1}")
             ok, reason, method = await verify_step(
@@ -1245,6 +1255,18 @@ async def execute_plan(
             payload,
             session_id=session.id,
         )
+        if stopped_words:
+            # Leap 05-c: the later steps are not attempted (said so, in the
+            # shape an unattempted step always has).
+            for later in range(index + 1, len(plan)):
+                results.append(StepResult(
+                    index=later, goal=plan[later].goal, ok=False, output="",
+                    reason="not attempted — the run stopped at its limits",
+                    verified="none", attempted=False,
+                ))
+            if on_step is not None:
+                await on_step(results)
+            break
     return results
 
 
@@ -1596,6 +1618,13 @@ async def run_decomposed(
         adaptations.append("step_retry")
     if results_out is not None:
         results_out.extend(results)
+    _limits_of = getattr(runtime, "limits_stopped", None)
+    stopped = _limits_of(session) if callable(_limits_of) else None
+    if stopped:
+        # Leap 05-c: a run that stopped at its rule's kept Limits answers
+        # with the stop's words (composed by code), exactly as the flat
+        # loop does; no model writes it up.
+        return stopped
     if sink is not None:
         sink.phase("assembling", "writing up what happened")
     return await assemble(runtime, run, session, results, llm=synth_llm)

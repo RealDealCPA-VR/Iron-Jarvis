@@ -142,7 +142,7 @@ describe("the rule's row: its OKs with Remove, and a run that stopped at its lim
         },
         standing_grants: [{
           id: "grant_1", scope_kind: "rule", scope_id: "reflex_9", tool: "write_file", args_hash: "",
-          exact: false, label: "write_file: any arguments (kept after a rehearsal)", created_by: "rehearsal",
+          exact: false, label: "Write files (kept after its rehearsal)", created_by: "rehearsal",
           created_at: "2026-11-27T09:00:00Z", expires_at: "2026-12-27T09:00:00Z", revoked_at: null,
           uses: 2, last_used_at: null, live: true,
         }],
@@ -161,7 +161,7 @@ describe("the rule's row: its OKs with Remove, and a run that stopped at its lim
     render(<ReflexPage />);
     const held = await screen.findByTestId("held-oks-File it");
     expect(held.textContent).toContain("Allowed without asking on this rule:");
-    expect(held.textContent).toContain("write_file: any arguments (kept after a rehearsal)");
+    expect(held.textContent).toContain("Write files (kept after its rehearsal)");
     expect(screen.getByTestId("reflex-lines-reflex_9").textContent).toContain(LIMITS_WORDS);
     fireEvent.click(within(held).getByTestId("held-ok-remove-grant_1"));
     fireEvent.click(within(held).getByTestId("held-ok-remove-grant_1"));

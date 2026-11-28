@@ -218,6 +218,9 @@ _SENDS = frozenset({
 _COMMANDS = frozenset({
     "shell", "process_start", "process_write", "run_code", "code_run", "repl", "pane_send",
 })
+#: The steps that run commands or code (public: Keep it on a rule's rehearsal
+#: never gives one an OK, ``reflex/limits.ALWAYS_ASKS``).
+COMMAND_STEPS = _COMMANDS
 _PAGES_PREFIX = ("browser_", "page_")
 _PAGES = frozenset({"web_action"})
 _TARGET_KEYS = ("path", "output", "output_path", "dest", "destination", "file", "filename", "target")

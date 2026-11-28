@@ -601,6 +601,9 @@ export interface StandingGrant {
   args_hash: string;
   /** Redacted one-line description of the arguments. */
   label: string;
+  /** Who made it ("user" on a card; "rehearsal" = Keep it on a rule's
+   *  rehearsal, leap 05-c). Absent on an older daemon. */
+  created_by?: string;
   created_at: string;
   expires_at: string | null;
   revoked_at: string | null;
