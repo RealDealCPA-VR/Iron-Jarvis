@@ -2,6 +2,10 @@
 
 *One paragraph per version, made from the Handbook's own sections. Settings › System › Updates shows the paragraph for the version you are on; the Handbook holds the full story of each change.*
 
+## v1.598.0
+
+**Merge all that passed, in the morning.** The night shift leaves each task's work on its own branch.
+
 ## v1.597.0
 
 **A second model can double-check finished work.** If you have more than one model account on the Several accounts card (Settings › Connections), Iron Jarvis asks you once, under a reply that made or changed a file:
@@ -77,7 +81,3 @@
 ## v1.581.0
 
 **Ask about earlier work by date and by client, and open each piece.** Ask "what did we do for Baker in March?" in any chat and the answer comes from Iron Jarvis's own record of earlier work: "3 pieces of work in March 2026, for Baker".
-
-## v1.580.4
-
-**A step that could not be double-checked says so where you look first.** When Iron Jarvis splits a larger task into steps, it checks each step before moving on.
