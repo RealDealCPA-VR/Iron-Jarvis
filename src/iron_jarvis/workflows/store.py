@@ -29,7 +29,7 @@ from sqlmodel import Field, SQLModel, select
 from ..core.db import dumps, session_scope
 from ..core.ids import utcnow
 from .engine import WorkflowDef, load_workflow
-from .models import WorkflowRecord
+from .models import VERSIONS_MAX, WorkflowRecord, WorkflowVersionRecord
 
 #: v1.505.0 (north-star 5.2): what must go WITH a removed workflow, per
 #: database (the platform registers its grant store here: a saved
@@ -75,8 +75,15 @@ class WorkflowStore:
         steps: list[dict],
         description: str = "",
         project_id: str | None = None,
+        folder: str | None = None,
     ) -> WorkflowRecord:
         """Upsert the workflow named ``name`` with ``steps`` (JSON) + ``description``.
+
+        Release 11 (the intelligence plan): ``folder`` is the folder its tool
+        steps work in (None = KEEP it, "" = none), and a save that changes
+        the steps, the description or the folder of an existing workflow
+        first keeps what it had as an earlier VERSION
+        (:class:`WorkflowVersionRecord`), so :meth:`restore` can put it back.
 
         Inserts a new row, or updates the existing one in place and bumps
         ``updated_at``. Returns the persisted (refreshed) record.
@@ -103,11 +110,16 @@ class WorkflowStore:
             ).first()
             if row is None:
                 row = WorkflowRecord(
-                    name=name, description=description, steps_json=steps_json
+                    name=name, description=description, steps_json=steps_json,
+                    folder=(folder or "").strip(),
                 )
             else:
+                new_folder = (row.folder or "") if folder is None else folder.strip()
+                if (row.steps_json, row.description, row.folder or "") != (steps_json, description, new_folder):
+                    keep_version(db, row)
                 row.description = description
                 row.steps_json = steps_json
+                row.folder = new_folder
                 row.updated_at = utcnow()
             db.add(row)
             if project_id is not None:  # None = caller said nothing = KEEP
@@ -242,6 +254,44 @@ class WorkflowStore:
             db.refresh(row)  # un-expire attrs so the detached record stays usable
             return row
 
+    def versions(self, name: str) -> "list[WorkflowVersionRecord] | None":
+        """The earlier versions of the workflow named ``name``, newest
+        first (release 11); None when there is no such workflow."""
+        with session_scope(self.engine) as db:
+            row = db.exec(select(WorkflowRecord).where(WorkflowRecord.name == name)).first()
+            if row is None:
+                return None
+            got = list(db.exec(
+                select(WorkflowVersionRecord)
+                .where(WorkflowVersionRecord.workflow_id == row.id)
+                .order_by(WorkflowVersionRecord.replaced_at.desc())  # type: ignore[attr-defined]
+            ))
+            for v in got:
+                db.expunge(v)
+            return got
+
+    def version(self, name: str, version_id: str) -> "WorkflowVersionRecord | None":
+        """One earlier version of the workflow named ``name`` (never another
+        workflow's), or None."""
+        for v in self.versions(name) or []:
+            if v.id == version_id:
+                return v
+        return None
+
+    def restore(self, name: str, version_id: str) -> "WorkflowRecord | None":
+        """Put an earlier version back (release 11): its steps, description
+        and folder are saved through :meth:`save`, so what it replaces is kept
+        as a version in turn (a restore can itself be put back). None when
+        the workflow or the version is not there. The caller checks the
+        steps first (``workflows/checks.step_problem``, the one save check)."""
+        v = self.version(name, version_id)
+        if v is None:
+            return None
+        rec = self.get(name)
+        if rec is None:
+            return None
+        return self.save(name, json.loads(v.steps_json or "[]"), v.description, folder=v.folder or "")
+
     def load_def(self, name: str) -> WorkflowDef | None:
         """Return the saved workflow as a runnable :class:`WorkflowDef` — with
         its project pin applied — or None. The ONE place stored-record -> def
@@ -255,6 +305,7 @@ class WorkflowStore:
                 "description": rec.description,
                 "steps": json.loads(rec.steps_json or "[]"),
                 "project_id": self.get_project_id(rec.name),
+                "folder": rec.folder or "",
             }
         )
 
@@ -269,6 +320,8 @@ class WorkflowStore:
             pin_row = db.get(WorkflowPinRecord, name)
             if pin_row is not None:
                 db.delete(pin_row)  # a pin never outlives its def
+            # Release 11: its earlier versions go with it.
+            db.exec(sqla_delete(WorkflowVersionRecord).where(WorkflowVersionRecord.workflow_id == row.id))  # type: ignore[call-overload]
             db.delete(row)
             db.commit()
         hook = _ON_REMOVED.get(self.engine)
@@ -279,6 +332,25 @@ class WorkflowStore:
                 logging.getLogger(__name__).warning(
                     "workflows: the removal hook failed for %r", name, exc_info=True)
         return True
+
+
+def keep_version(db, row: WorkflowRecord) -> None:
+    """Keep what ``row`` holds now as an earlier version (release 11), inside
+    the caller's transaction, and drop the oldest past
+    :data:`~iron_jarvis.workflows.models.VERSIONS_MAX`."""
+    db.add(WorkflowVersionRecord(
+        workflow_id=row.id, steps_json=row.steps_json or "[]", description=row.description or "",
+        folder=row.folder or "",
+    ))
+    db.flush()
+    ids = list(db.exec(
+        select(WorkflowVersionRecord.id)
+        .where(WorkflowVersionRecord.workflow_id == row.id)
+        .order_by(WorkflowVersionRecord.replaced_at.desc(), WorkflowVersionRecord.id.desc())  # type: ignore[attr-defined]
+    ))
+    old = [str(i) for i in ids[VERSIONS_MAX:]]
+    if old:
+        db.exec(sqla_delete(WorkflowVersionRecord).where(WorkflowVersionRecord.id.in_(old)))  # type: ignore[attr-defined,call-overload]
 
 
 #: Run statuses with nothing left to execute. ``waiting`` (parked at a human

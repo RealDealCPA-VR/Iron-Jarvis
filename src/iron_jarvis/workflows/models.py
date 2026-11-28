@@ -133,3 +133,31 @@ class WorkflowRecord(SQLModel, table=True):
     #: Leap 06-b: when the user pressed Keep it on a rehearsal of this
     #: workflow (None = never). Additive column (auto-reconciled).
     rehearsed_at: datetime | None = None
+    #: The intelligence plan, release 11: the FOLDER its tool steps work in
+    #: (a job saved from the steps you did by hand in one folder). "" = none:
+    #: the project pin's folder, else a scratch folder, as before. A project
+    #: pin with a folder wins. Additive column (auto-reconciled).
+    folder: str = ""
+
+
+#: Release 11: the earlier versions one workflow keeps, at most.
+VERSIONS_MAX = 20
+
+
+class WorkflowVersionRecord(SQLModel, table=True):
+    """An EARLIER version of a saved workflow (the intelligence plan, release
+    11): written by :meth:`~iron_jarvis.workflows.store.WorkflowStore.save`
+    just before a save changes the steps, the description or the folder, so
+    the saved steps can be put back. Keyed by the workflow's id (a rename
+    keeps them); removed with the workflow. At most :data:`VERSIONS_MAX` per
+    workflow, the oldest dropped first."""
+
+    __tablename__ = "workflowversion"
+
+    id: str = Field(default_factory=lambda: new_id("wfver"), primary_key=True)
+    workflow_id: str = Field(default="", index=True)
+    steps_json: str = "[]"
+    description: str = ""
+    folder: str = ""
+    #: When the version it holds was replaced.
+    replaced_at: datetime = Field(default_factory=utcnow)

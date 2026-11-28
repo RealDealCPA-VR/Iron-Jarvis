@@ -267,6 +267,19 @@ STEP_RUNS_WORDS = (
 )
 
 
+def own_folder(folder: str) -> "tuple[str | None, str | None]":
+    """``(folder, note)`` for a workflow saved with a folder of its own
+    (release 11): the folder when it is there, else None and the sentence
+    the run record carries. BLOCKING (a disk check)."""
+    root = Path(str(folder or "").strip())
+    if str(root) and root.is_dir():
+        return str(root), None
+    return None, (
+        f"this workflow works in the folder {folder}, which is not there any more, so its steps "
+        "ran in a scratch folder and found none of its files; put the folder back or change the workflow"
+    )
+
+
 class UnknownStepKind(ValueError):
     """A stored step whose ``kind`` this version does not know. Raised by
     :func:`load_workflow` with a sentence that names the step and the kind."""
@@ -332,6 +345,10 @@ class WorkflowDef:
     #: brief/instructions/knowledge. None = project-agnostic — the globally
     #: active project never leaks into a workflow run.
     project_id: str | None = None
+    #: The intelligence plan, release 11: the folder its tool steps work in
+    #: (``WorkflowRecord.folder``). None = the project pin's folder, else a
+    #: scratch folder, as before. A pinned project's folder wins.
+    folder: str | None = None
 
 
 def _agent_type(name: str) -> AgentType:
@@ -429,6 +446,8 @@ def load_workflow(data: dict) -> WorkflowDef:
         description=str(data.get("description", "")),
         # Optional explicit project pin — absent/empty both mean unpinned.
         project_id=(str(data.get("project_id") or "").strip() or None),
+        # Release 11: the folder its tool steps work in; absent = none.
+        folder=(str(data.get("folder") or "").strip() or None),
     )
 
 
@@ -1440,6 +1459,11 @@ class WorkflowEngine:
         workspace_root, folder_note = await asyncio.to_thread(
             self._project_folder, workflow.project_id
         )
+        if not workspace_root and not folder_note and workflow.folder:
+            # Release 11: a workflow saved with a folder works in it (a
+            # pinned project's folder wins). A folder that is gone is said on
+            # the record, and its steps then find nothing to read.
+            workspace_root, folder_note = await asyncio.to_thread(own_folder, workflow.folder)
         # Said ON THE RECORD, before the first step, so a run the user opens
         # mid-way already explains where its files are going — and written
         # UNCONDITIONALLY (v1.231.0, AE16): a resume whose folder is back

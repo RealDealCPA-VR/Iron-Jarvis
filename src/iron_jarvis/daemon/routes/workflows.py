@@ -540,6 +540,54 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such workflow")
         return {"name": name, "references": _workflow_references(d, name)}
 
+    @app.get("/workflows/{name}/versions")
+    def workflow_versions(name: str) -> dict[str, Any]:
+        """The intelligence plan, release 11: the earlier versions of a saved
+        workflow, newest first (each kept when a save changed it). 404 when
+        the workflow does not exist."""
+        from ...workflows.store import WorkflowStore
+
+        got = WorkflowStore(d.platform.engine).versions(name)
+        if got is None:
+            raise HTTPException(status_code=404, detail="no such workflow")
+        out = []
+        for v in got:
+            try:
+                steps = json.loads(v.steps_json or "[]")
+            except (TypeError, ValueError):
+                steps = []
+            out.append({
+                "id": v.id, "replaced_at": v.replaced_at, "description": v.description,
+                "folder": v.folder, "steps": len(steps) if isinstance(steps, list) else 0,
+            })
+        return {"name": name, "versions": out}
+
+    @app.post("/workflows/{name}/versions/{version_id}/restore")
+    def restore_workflow_version(name: str, version_id: str) -> dict[str, Any]:
+        """Release 11: put an earlier version back. Its steps pass the ONE
+        save check every door applies (``workflows/checks.step_problem``,
+        422 in its words); what it replaces is kept as a version in turn.
+        404 for a workflow or a version that is not there."""
+        from ...workflows.store import WorkflowStore
+
+        store = WorkflowStore(d.platform.engine)
+        v = store.version(name, version_id)
+        if v is None:
+            raise HTTPException(status_code=404, detail="no such version of that workflow")
+        try:
+            steps = json.loads(v.steps_json or "[]")
+        except (TypeError, ValueError):
+            steps = None
+        if not isinstance(steps, list):
+            raise HTTPException(status_code=422, detail="That version's steps could not be read.")
+        _validate_step_shapes(steps)
+        rec = store.restore(name, version_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such version of that workflow")
+        out = rec.model_dump()
+        out["project_id"] = store.get_project_id(rec.name)
+        return out
+
     @app.delete("/workflows/{name}")
     def delete_workflow(name: str) -> dict[str, Any]:
         """Delete a saved workflow definition by name (404 when absent). The
