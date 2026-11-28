@@ -73,6 +73,19 @@ async def _off_loop(fn: Any, *args: Any) -> Any:
     return await off_loop_settled(fn, *args)
 
 
+class NoticeDoor:
+    """What :meth:`IntentEngine.approve` answers for a suggestion whose Yes
+    starts nothing (next leaps 03-a): the in-app address the page opens, a
+    new chat in that folder (``/chat?new=1&folder=…``)."""
+
+    __slots__ = ("door",)
+
+    def __init__(self, door: str) -> None:
+        self.door = door
+
+    id = None  # the route reads ``session.id`` for a run; a door has none
+
+
 def _level_rank(level: str) -> int:
     try:
         return AUTONOMY_LEVELS.index(level)
@@ -193,14 +206,31 @@ class IntentEngine:
         task: str,
         risk: str,
         source: str = "deliberation",
+        action_extra: dict | None = None,
+        kind: str = "",
+        subject_key: str = "",
+        folder: str = "",
+        evidence: list | None = None,
+        local_only: bool = False,
     ) -> ProposalRecord:
+        action = {"agent_type": agent_type, "task": task}
+        # 03-a: a suggestion from the record says what a Yes does ("how":
+        # "chat" opens a chat in its folder, "run" starts an agent run there).
+        for key, value in (action_extra or {}).items():
+            if key not in action:
+                action[key] = value
         rec = ProposalRecord(
             goal_id=goal_id,
             title=title[:200],
             rationale=rationale[:2000],
-            action_json=json.dumps({"agent_type": agent_type, "task": task}),
+            action_json=json.dumps(action),
             risk=risk if risk in RISKS else "med",
             source=source,
+            kind=str(kind or "")[:40],
+            subject_key=str(subject_key or "")[:300],
+            folder=str(folder or "")[:1000],
+            evidence_json=json.dumps(list(evidence or [])[:4]),
+            local_only=bool(local_only),
         )
         with session_scope(self.p.engine) as db:
             db.add(rec)
@@ -220,6 +250,12 @@ class IntentEngine:
         goal_id: str | None = None,
         dedupe: bool = True,
         producer: str = "",
+        kind: str = "",
+        subject_key: str = "",
+        folder: str = "",
+        evidence: list | None = None,
+        local_only: bool = False,
+        action_extra: dict | None = None,
     ) -> ProposalRecord | None:
         """Public, thin minting helper for EXTERNAL suggest-only producers.
 
@@ -240,6 +276,15 @@ class IntentEngine:
         noticed changes · Review" — a suggestion that only sat in the backlog
         told nobody. A signal folded into a proposal already waiting
         publishes nothing (the user has not answered the first one yet).
+
+        Next leaps 03-a (``motivation/notices.py``, ``source="notice"``):
+        ``kind``, ``subject_key`` (what it is about), ``folder``,
+        ``evidence`` (``[{text, link, at}]``, at most 4), ``local_only`` and
+        ``action_extra`` (``{"how": "chat" | "run"}``) are stored on the row.
+        With a ``subject_key`` the fold is by that key (the same subject
+        waiting), never by the title, and the fold refreshes the facts too.
+        The daily limit, the answered-subject rule and the kind's switch are
+        the CALLER's (``notices.mint``): this door only stores.
         """
         title = (title or "").strip()
         if not title:
@@ -247,9 +292,14 @@ class IntentEngine:
         try:
             if dedupe:
                 with session_scope(self.p.engine) as db:
+                    same = (
+                        ProposalRecord.subject_key == str(subject_key)[:300]
+                        if subject_key
+                        else ProposalRecord.title == title[:200]
+                    )
                     existing = db.exec(
                         select(ProposalRecord).where(
-                            ProposalRecord.title == title[:200],
+                            same,
                             ProposalRecord.status == "pending",
                             ProposalRecord.source == source,
                         )
@@ -258,8 +308,17 @@ class IntentEngine:
                         # Fold the new signal into the pending proposal instead of
                         # silently dropping it: refresh the rationale to the newest
                         # change so an accumulating watcher never loses an update.
+                        changed = False
                         if rationale and rationale != existing.rationale:
                             existing.rationale = rationale[:2000]
+                            changed = True
+                        if subject_key and evidence is not None:
+                            facts = json.dumps(list(evidence)[:4])
+                            if facts != existing.evidence_json:
+                                existing.evidence_json = facts
+                                existing.title = title[:200]
+                                changed = True
+                        if changed:
                             db.add(existing)
                             db.commit()
                             db.refresh(existing)
@@ -272,6 +331,12 @@ class IntentEngine:
                 task=task,
                 risk=risk,
                 source=source,
+                action_extra=action_extra,
+                kind=kind,
+                subject_key=subject_key,
+                folder=folder,
+                evidence=evidence,
+                local_only=local_only,
             )
         except Exception:  # noqa: BLE001 — a mint failure must not break the caller
             log.exception("add_backlog mint failed for %r", title)
@@ -304,9 +369,14 @@ class IntentEngine:
             "source": rec.source,
             "rationale": (rec.rationale or "")[:300],
         }
+        if getattr(rec, "kind", ""):
+            # 03-a: the bell's quiet row for a suggestion from the record.
+            payload["kind"] = rec.kind
         if producer:
-            # The bell names the watcher by this key ("Your watcher X …").
-            payload["sentinel" if rec.source == "sentinel" else "producer"] = producer[:200]
+            # The bell names the watcher by this key ("Your watcher X …"); a
+            # watcher's suggestion is a "notice" of kind new_files since 03-a.
+            watcher = rec.source == "sentinel" or getattr(rec, "kind", "") == "new_files"
+            payload["sentinel" if watcher else "producer"] = producer[:200]
         try:
             coro = bus.publish(EventType.AUTONOMY_PROPOSED, payload)
         except Exception:  # noqa: BLE001
@@ -653,13 +723,25 @@ class IntentEngine:
         # when self_dev_enabled is off, so approval FAILS CLOSED on that gate rather
         # than silently running a maintainer in a throwaway workspace.
         is_self_dev = agent_type == AgentType.MAINTAINER
+        task = action.get("task", goal.text)
+        workspace_root = None
+        if getattr(proposal, "source", "") == "notice" and action.get("how") == "run":
+            # Next leaps 03-a: a suggestion from the record (files a watcher
+            # saw arrive) runs IN ITS FOLDER, and its task is the owner's own
+            # watcher task (or a fixed sentence written in code) with the
+            # facts fenced as data, never the facts as an instruction.
+            from .notices import run_task
+
+            task = run_task(proposal)
+            workspace_root = (proposal.folder or "").strip() or None
         # ``origin="autonomy"`` (v1.231.0, audit N4/AE17): the TX-01 stamp
         # this door never applied; the runtime's ask allowlist reads it.
         session = await self.orchestrator.create_session(
-            action.get("task", goal.text),
+            task,
             agent_type,
             self_dev=is_self_dev,
             origin="autonomy",
+            **({"workspace_root": workspace_root} if workspace_root else {}),
         )
         # Book the action against the budget NOW (before the run finishes) so a
         # concurrent tick can't double-spend; mark the proposal executed durably.
@@ -790,6 +872,18 @@ class IntentEngine:
             raise KeyError(f"unknown proposal '{proposal_id}'")
         if proposal.status not in ("pending", "approved"):
             raise ValueError(f"proposal is already {proposal.status}")
+        if getattr(proposal, "source", "") == "notice" and proposal.decoded_action().get("how") == "chat":
+            # Next leaps 03-a: a Yes to "pick it up" STARTS NOTHING. It opens
+            # a new chat in that folder (the route answers the door), where
+            # the folder's card and Continue wait for the owner's own press.
+            # So Emergency stop does not refuse it: nothing runs.
+            from .notices import door_for
+
+            door = door_for(proposal)
+            if not await _off_loop(self._set_decided, proposal_id, "approved", ("pending",)):
+                current = self.get_proposal(proposal_id)
+                raise ValueError(f"proposal is already {current.status if current else 'gone'}")
+            return NoticeDoor(door)
         if getattr(self.p.config, "autonomy_kill_switch", False):
             raise PermissionError("autonomy kill switch is engaged")
         if self.orchestrator is None:
@@ -826,12 +920,28 @@ class IntentEngine:
                 await _off_loop(self._reset_proposal_status, proposal_id, "pending")
                 raise
 
+    def _set_decided(self, proposal_id: str, status: str, only_from: tuple[str, ...]) -> bool:
+        """Compare-and-set ``status`` (with ``decided_at``) on a proposal in
+        one of ``only_from``; True iff WE changed it (03-a: two presses of
+        one Yes open one chat)."""
+        with session_scope(self.p.engine) as db:
+            p = db.get(ProposalRecord, proposal_id)
+            if p is None or p.status not in only_from:
+                return False
+            p.status = status
+            p.decided_at = utcnow()
+            db.add(p)
+            db.commit()
+            return True
+
     def reject(self, proposal_id: str) -> ProposalRecord | None:
         with session_scope(self.p.engine) as db:
             rec = db.get(ProposalRecord, proposal_id)
             if rec is None:
                 return None
             rec.status = "rejected"
+            # 03-a: a No is final for that subject (motivation/notices reads it).
+            rec.decided_at = utcnow()
             db.add(rec)
             db.commit()
             db.refresh(rec)

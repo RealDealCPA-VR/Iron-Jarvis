@@ -175,6 +175,11 @@ def _clean_name(raw: Any) -> str:
     return flat
 
 
+#: Next leaps 03-a: the one address a suggestion's Yes may open from chat:
+#: a new chat in a folder (the folder URL-quoted, so no other character).
+_NOTICE_DOOR = re.compile(r"/chat\?new=1&folder=[A-Za-z0-9%._~-]{1,1200}")
+
+
 def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
     """The door a SUCCESSFUL ``tool_name`` call opens, or ``None``.
 
@@ -190,6 +195,17 @@ def door_for(tool_name: str, result: Any) -> dict[str, str] | None:
     browser with access off → "Turn on browser access"; no browser → "Pair
     your browser". A browser that is connected with access on → no door.
     """
+    if tool_name == "suggestion_answer":
+        # Next leaps 03-a: a Yes to "pick it up" opens a new chat in that
+        # folder (``motivation/notices.door_for``); only that one shape of
+        # address, never a tool's text as an address.
+        try:
+            data = getattr(result, "data", None)
+            door = data.get("door") if isinstance(data, dict) else None
+            if isinstance(door, str) and _NOTICE_DOOR.fullmatch(door):
+                return {"href": door, "label": "Open a chat in that folder"}
+        except Exception:  # noqa: BLE001 — no door beats no reply
+            pass
     if tool_name == "browser_get_status":
         try:
             data = getattr(result, "data", None)

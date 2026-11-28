@@ -225,7 +225,10 @@ def test_a_watchers_new_suggestion_publishes_one_event_with_its_name(tmp_path):
     fs["/watch/K-1.pdf"] = 1.0
     [created] = svc.poll_once(intent, scanner=scan)
     [ev] = _proposed(platform)
-    assert ev["source"] == "sentinel" and ev["sentinel"] == "scans"
+    # Next leaps 03-a (moved on purpose): a watcher's suggestion is a
+    # suggestion from the record, kind new_files; the bell still names the
+    # watcher by the same key.
+    assert ev["source"] == "notice" and ev["kind"] == "new_files" and ev["sentinel"] == "scans"
     assert ev["proposal_id"] == created.id and "K-1.pdf" in ev["rationale"]
     # A second change folds into the suggestion still waiting: nothing new.
     fs["/watch/W-2.pdf"] = 2.0

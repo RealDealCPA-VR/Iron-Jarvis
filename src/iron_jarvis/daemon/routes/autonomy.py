@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException
 from typing import Any
 
 from ...core.failures import plain_failure
-from ..schemas import GoalBody, GoalPatch, KillBody, SentinelAdd, SentinelPatch
+from ..schemas import GoalBody, GoalPatch, KillBody, ProposalRejectBody, SentinelAdd, SentinelPatch
 
 
 def register(app: FastAPI, d) -> None:
@@ -93,14 +93,36 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=403, detail=plain_failure("Iron Jarvis is not allowed to run that suggestion.", exc))
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=plain_failure("That suggestion could not be run.", exc))
+        door = getattr(session, "door", None)
+        if isinstance(door, str):
+            # Next leaps 03-a: a Yes that starts nothing opens a new chat in
+            # the suggestion's folder (the page goes there; nothing is sent).
+            return {"status": "opened", "door": door, "session_id": None,
+                    "note": "A new chat opens in that folder. Nothing starts until you send."}
         return {"status": "executed", "session_id": session.id if session else None}
 
     @app.post("/proposals/{proposal_id}/reject")
-    def reject_proposal(proposal_id: str) -> dict[str, Any]:
+    def reject_proposal(proposal_id: str, body: ProposalRejectBody | None = None) -> dict[str, Any]:
         rec = d.platform.intent.reject(proposal_id)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
-        return {"status": rec.status}
+        out: dict[str, Any] = {"status": rec.status}
+        if body is not None and body.stop_kind and rec.source == "notice":
+            # Next leaps 03-a: "Stop suggesting this kind" = this No, that
+            # kind's switch off (the ONE writer: ledger + Undo) and what else
+            # of that kind waits taken off the list. A sync route: the
+            # threadpool, where the writer and the row writes belong.
+            from ...motivation import notices
+            from .settings import config_writer
+
+            key = notices.SETTING_OF.get(rec.kind or "")
+            if key:
+                config_writer(d).apply({key: False}, actor="improvements")
+                notices.withdraw_kind(d.platform, rec.kind)
+                out["stopped_kind"] = rec.kind
+                out["note"] = (f"Iron Jarvis won't suggest {notices.kind_words(rec.kind)} again. "
+                               "Turn them back on in Settings › Automation.")
+        return out
 
     @app.get("/autonomy")
     def autonomy_status() -> dict[str, Any]:

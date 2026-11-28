@@ -85,6 +85,8 @@ def chat_title(it: dict[str, Any]) -> str:
     other turn, and an unsure one, gets the neutral line."""
     title = str(it.get("title") or "")
     extra = it.get("extra") if isinstance(it.get("extra"), dict) else {}
+    if extra.get("walled"):
+        return WALLED_TITLE
     if not extra.get("local_only"):
         return title
     try:
@@ -95,6 +97,35 @@ def chat_title(it: dict[str, Any]) -> str:
     except Exception:  # noqa: BLE001 — unsure: the words stay home (fail closed)
         pass
     return str(extra.get("chat_title") or "a request made in a Local only chat")
+
+
+#: 03-a: what a turn the client wall keeps from a suggestion's folder is told.
+WALLED_TITLE = "a suggestion about work in a client's folder (its words are on the Improvements page)"
+
+
+def wall_noticed(platform: Any, items: list[dict[str, Any]]) -> None:
+    """Next leaps 03-a: a suggestion Iron Jarvis noticed in the owner's work
+    is told to THIS turn's model only where the client wall lets the turn be
+    told about that folder (``wall.may_tell``, as the work block); any other
+    is named neutrally (``extra.walled``). Unsure: neutral (fail closed)."""
+    noticed = [it for it in items if it.get("kind") == "noticed"]
+    if not noticed:
+        return
+    try:
+        from ..workmap.clients import store, wall
+
+        turn = wall.current()
+        cmap = store.load_map(platform.engine)
+        verdicts = [
+            wall.may_tell(turn, cmap, folder=str((it.get("extra") or {}).get("folder") or ""),
+                          title=str(it.get("title") or ""))
+            for it in noticed
+        ]
+    except Exception:  # noqa: BLE001 — unsure: told neutrally
+        verdicts = [False] * len(noticed)
+    for it, ok in zip(noticed, verdicts):
+        if not ok:
+            it["extra"] = {**(it.get("extra") or {}), "walled": True}
 
 
 def _line(n: int, it: dict[str, Any], label: str) -> str:
@@ -118,6 +149,9 @@ def _line(n: int, it: dict[str, Any], label: str) -> str:
             opts.append(f"accept = {word}")
         if dec:
             opts.append(f"decline = {dec.get('label') or 'Decline'}")
+        if isinstance(it.get("stop"), dict):
+            # 03-a: the third answer of a suggestion noticed in the work.
+            opts.append(f"{it['stop'].get('label') or 'Stop suggesting this kind'} = decline with stop_kind true")
         if isinstance((it.get("extra") or {}).get("rehearse"), dict):
             # 19-b: an offered schedule can be rehearsed first (06-a).
             opts.append(f"rehearse first = the rehearse tool with kind offer and name {it.get('id')}")
@@ -132,7 +166,8 @@ class SuggestionListTool(Tool):
         "Improvements page): preferences it noticed, names that may be clients, skill drafts, "
         "changes to an agent's instructions, working habits, lessons from coding sessions, memory "
         "tidy-ups, requests for a tool, offers to run a repeated task by itself on a schedule, things the "
-        "user asked for that Iron Jarvis can't do yet, and "
+        "user asked for that Iron Jarvis can't do yet, things it noticed in the user's work (an open item "
+        "that has waited, work that did not finish, new files a watcher saw), and "
         "things it wants to do on its own. Each line has the "
         "suggestion's id in brackets; answer one with suggestion_answer. Reads only."
     )
@@ -152,6 +187,7 @@ class SuggestionListTool(Tool):
         from .collect import LABELS
 
         items = list(got.get("items") or [])
+        await asyncio.to_thread(wall_noticed, self.platform, items)
         unreadable = [str(u.get("label") or "") for u in got.get("unreadable") or [] if isinstance(u, dict)]
         lines: list[str] = []
         if not items:
@@ -272,13 +308,19 @@ class SuggestionAnswerTool(Tool):
         "shows in brackets (for example \"preference:abc123\"), `answer` is \"accept\" (keep, approve, "
         "yes) or \"decline\" (not this, reject, dismiss). It does exactly what the page's own button "
         "does, and the user approves on a card first. Call suggestion_list first when you do not "
-        "have the id."
+        "have the id. For a suggestion Iron Jarvis noticed in the user's work, `stop_kind` true with "
+        "answer \"decline\" is \"Stop suggesting this kind\": it also turns that kind of suggestion off."
     )
     input_schema = {
         "type": "object",
         "properties": {
             "id": {"type": "string", "description": "The suggestion's id, as suggestion_list shows it."},
             "answer": {"type": "string", "enum": list(ANSWERS)},
+            "stop_kind": {
+                "type": "boolean",
+                "description": "Only with answer decline, on a suggestion noticed in the user's work: "
+                               "also stop suggesting that kind.",
+            },
         },
         "required": ["id", "answer"],
     }
@@ -308,6 +350,13 @@ class SuggestionAnswerTool(Tool):
                 data={"door": HREF},
             )
         press = it.get(answer)
+        if args.get("stop_kind") is True:
+            # Next leaps 03-a: "Stop suggesting this kind" (a No plus that
+            # kind's switch off), only where the item offers it.
+            if answer != "decline" or not isinstance(it.get("stop"), dict):
+                return ToolResult(ok=False, error="Only a suggestion Iron Jarvis noticed in your work can "
+                                                  "stop its kind, with the answer decline.", data={"door": HREF})
+            press = it["stop"]
         if not isinstance(press, dict):
             return ToolResult(
                 ok=False,
@@ -324,6 +373,7 @@ class SuggestionAnswerTool(Tool):
             return ToolResult(ok=False, error="This suggestion's answer has no address chat can use.")
         from ..daemon.routes.improvements import answer_through_route
 
+        await asyncio.to_thread(wall_noticed, self.platform, [it])
         status, detail = await answer_through_route(d, method, path, press.get("body") or {})
         title = chat_title(it) or sid
         if not 200 <= status < 300:
@@ -331,7 +381,12 @@ class SuggestionAnswerTool(Tool):
         word = str(press.get("label") or answer.title())
         note = str(press.get("note") or "")
         out = f"{word}: {title}." + (f" {note}" if note else "")
-        return ToolResult(ok=True, output=out, data={"suggestion": sid, "answer": answer, "title": title})
+        data: dict[str, Any] = {"suggestion": sid, "answer": answer, "title": title}
+        door = str((it.get("extra") or {}).get("door") or "") if answer == "accept" else ""
+        if door:
+            # 03-a: a Yes that starts nothing; the reply's door opens the chat.
+            data["door"] = door
+        return ToolResult(ok=True, output=out, data=data)
 
 
 #: An item's own route, as ``inbox/collect`` builds it: a path of plain
@@ -354,7 +409,9 @@ _SUGGESTION_WORDS = re.compile(
     r"|you\s+(?:made|have|noticed|left))\b"
     r"|\b(?:your|jarvis['’]?s?|the\s+waiting|waiting|pending)\s+(?:suggestions?|proposals?)\b"
     r"|\bimprovements\s+(?:page|inbox|list)\b|\b(?:open|show|check)\s+(?:me\s+)?(?:the\s+)?improvements\b"
-    r"|\bskill\s+drafts?\b",
+    r"|\bskill\s+drafts?\b"
+    # Next leaps 03-a: "what have you noticed in my work?"
+    r"|\bnoticed\s+(?:in|about)\s+(?:my|our)\s+work\b",
     re.IGNORECASE,
 )
 #: "keep the one about my email tone", "decline that one", "accept the

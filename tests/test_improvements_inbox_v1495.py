@@ -176,6 +176,23 @@ def seed_wants(desk, status="pending", agent_type="builder", title="Tidy the dow
     ))
 
 
+def seed_noticed(desk, status="pending", how="chat", kind="open_item", local_only=False,
+                 folder=r"C:\Users\Pat\Clients\Hartleys"):
+    """03-a: a suggestion Iron Jarvis made from its own record of the work."""
+    return _add(desk, ProposalRecord(
+        title="“Check the duplicate invoice” has been open for 9 days in Hartleys. Pick it up?",
+        rationale="An open item in Hartleys has waited 9 days.",
+        action_json=json.dumps({"agent_type": "builder", "task": "", "how": how}),
+        risk="low", source="notice", status=status, kind=kind, subject_key="open:open_000000000001",
+        folder=folder, local_only=local_only,
+        evidence_json=json.dumps([
+            {"text": "From: Bank reconciliation (chat, Nov 18, 2026)", "link": "/chat?thread=t1", "at": ""},
+            {"text": "Open since Nov 18, 2026", "link": "", "at": ""},
+            {"text": "No work in Hartleys since Nov 18, 2026", "link": "", "at": ""},
+        ]),
+    ))
+
+
 def seed_goal(desk, name="Watch the tax rates", **more):
     return _add(desk, GoalContractRecord(name=name, contract_text="Report any change in the rate table.", **more))
 
@@ -280,6 +297,7 @@ def seed_everything(desk):
         "coach": seed_coach(desk),
         "habit": seed_habit(desk), "lesson": seed_lesson(desk), "session_edit": seed_session_edit(desk),
         "memory": seed_memory(desk), "tool": seed_tool(desk), "missing": seed_missing(desk),
+        "noticed": seed_noticed(desk),
         "wants": seed_wants(desk),
         "unasked": seed_goal_with_approved_asks(desk),
     }
@@ -477,6 +495,8 @@ def test_every_home_link_is_the_screen_the_suggestion_lives_on(desk):
         "tool": "/tools",
         # 20-a: a thing you asked for lives on Improvements itself.
         "missing": None,
+        # 03-a: the piece of work the suggestion is about.
+        "noticed": "/chat?thread=t1",
         "wants": "/autonomy",
         "unasked": "/autonomy",
     }
@@ -669,7 +689,7 @@ TABLES = [
     (CapabilityProposalRecord, ["tool"]),
     (CapabilityMiss, ["missing"]),
     (MissGroup, ["missing"]),
-    (ProposalRecord, ["wants"]),
+    (ProposalRecord, ["noticed", "wants"]),
     (GoalContractRecord, ["unasked"]),
     (EventRecord, ["unasked"]),
 ]
@@ -721,7 +741,7 @@ def test_a_build_without_a_service_lists_nothing_for_it(desk, monkeypatch):
     monkeypatch.setattr(desk.platform, "intent", None, raising=False)
     got = _inbox(desk)
     assert got["unreadable"] == []
-    assert {g["kind"] for g in got["groups"]} == {k for k, _l in C.KINDS} - {"coach", "habit", "wants"}
+    assert {g["kind"] for g in got["groups"]} == {k for k, _l in C.KINDS} - {"coach", "habit", "noticed", "wants"}
 
 
 # ---- it only reads ----------------------------------------------------------
@@ -839,6 +859,56 @@ def test_the_inbox_has_no_decision_code_of_its_own():
     assert set(re.findall(r'f"(/[a-z/]+/)\{_seg\((?:pid|rid)\)\}/', src)) == {
         "/build/library/", "/capability/proposals/", "/clients/", "/coach/proposals/", "/memory/preferences/",
         "/memory/review/", "/proposals/", "/skills/proposals/"}
+
+
+# ---- things Iron Jarvis noticed in your work (next leaps 03-a) -----------------
+def test_a_suggestion_from_the_record_has_its_facts_and_three_answers(desk):
+    seed_noticed(desk)
+    it = _only(desk, "noticed")
+    assert C.LABELS["noticed"] == "Things Iron Jarvis noticed in your work"
+    assert it["title"].endswith("has been open for 9 days in Hartleys. Pick it up?")
+    assert it["about"] == "An open item that has waited"
+    assert it["evidence"][0] == "From: Bank reconciliation (chat, Nov 18, 2026)"
+    assert len(it["evidence"]) == 3
+    assert it["home"] == {"href": "/chat?thread=t1", "label": C.OPEN_LABEL}
+    pid = it["ref"]
+    assert it["accept"]["label"] == "Yes" and it["accept"]["path"] == f"/proposals/{pid}/approve"
+    assert it["accept"]["confirm"] is False  # it opens a chat; nothing starts
+    assert it["accept"]["note"] == "Opens a new chat in Clients › Hartleys. Nothing starts until you send."
+    assert it["decline"]["label"] == "No" and it["decline"]["path"] == f"/proposals/{pid}/reject"
+    assert it["decline"]["body"] == {}
+    assert it["stop"] == {
+        "label": "Stop suggesting this kind", "method": "POST", "path": f"/proposals/{pid}/reject",
+        "body": {"stop_kind": True}, "confirm": False, "blocked": "",
+        "note": "Iron Jarvis stops suggesting open items that have waited a while. You can turn them back on "
+                "in Settings › Automation.",
+    }
+    assert it["extra"]["door"].startswith("/chat?new=1&folder=")
+    # The words on the page name the folder, never the whole path.
+    shown = json.dumps([it["title"], it["about"], it["why"], it["evidence"], it["accept"]["note"]])
+    for part in ("C:", "Users", "Pat"):
+        assert part not in shown, part
+    # Things it wants to do on its own no longer list it.
+    assert [i["kind"] for i in _inbox(desk)["items"]] == ["noticed"]
+
+
+def test_a_noticed_run_is_blocked_under_emergency_stop_and_a_chat_is_not(desk):
+    seed_noticed(desk)
+    seed_noticed(desk, how="run", kind="new_files")
+    desk.platform.config.autonomy_kill_switch = True
+    items = [i for i in _inbox(desk)["items"] if i["kind"] == "noticed"]
+    by_how = {i["extra"]["how"]: i for i in items}
+    assert by_how["run"]["accept"]["blocked"] == C.STOPPED_BLOCK and by_how["run"]["accept"]["confirm"] is True
+    assert by_how["chat"]["accept"]["blocked"] == ""
+
+
+def test_stop_through_the_inbox_turns_the_kind_off(desk):
+    seed_noticed(desk)
+    it = _only(desk, "noticed")
+    res = desk.client.post(it["stop"]["path"], json=it["stop"]["body"])
+    assert res.status_code == 200, res.text
+    assert desk.platform.config.notice_open_items is False
+    assert _inbox(desk)["groups"] == []
 
 
 # ---- clients (v1.499.0, vision plan leap 3 Phase 3) ---------------------------

@@ -34,8 +34,15 @@ GOAL_STATUSES: tuple[str, ...] = ("active", "paused", "done", "abandoned")
 # auto-execute low/med-risk actions (high risk ALWAYS needs human approval).
 AUTONOMY_LEVELS: tuple[str, ...] = ("suggest", "act_low", "act_all")
 RISKS: tuple[str, ...] = ("low", "med", "high")
-PROPOSAL_SOURCES: tuple[str, ...] = ("deliberation", "event", "sentinel")
-PROPOSAL_STATUSES: tuple[str, ...] = ("pending", "approved", "rejected", "executed")
+#: Next leaps 03-a: ``"notice"`` is a suggestion Iron Jarvis made from its
+#: OWN record of the owner's work (``motivation/notices.py``): an open item
+#: that has waited, work that did not finish, files a watcher saw arrive.
+PROPOSAL_SOURCES: tuple[str, ...] = ("deliberation", "event", "sentinel", "notice")
+#: ``"withdrawn"`` (03-a): a waiting suggestion that is no longer true (the
+#: item was closed, the work was picked up again, its source is gone), taken
+#: off the list by Iron Jarvis. Not an answer: the subject may be suggested
+#: again if it becomes true again.
+PROPOSAL_STATUSES: tuple[str, ...] = ("pending", "approved", "rejected", "executed", "withdrawn")
 
 
 class GoalRecord(SQLModel, table=True):
@@ -72,6 +79,36 @@ class ProposalRecord(SQLModel, table=True):
     session_id: str | None = None  # set once executed
     tokens: int = 0  # tokens the executed session actually spent
     created_at: datetime = Field(default_factory=utcnow)
+    # --- next leaps 03-a: suggestions from the owner's own record ---------
+    # Additive columns (an existing database gets them from the reconciler,
+    # ``core.db``); every older row keeps the defaults, so nothing it showed
+    # changes. Written only by ``motivation/notices.py`` through
+    # ``IntentEngine.add_backlog``.
+    #: ``open_item`` | ``stalled_work`` | ``new_files`` ("" for every other row).
+    kind: str = Field(default="", index=True)
+    #: What it is about: ``open:<item id>``, ``stalled:<work entry id>``,
+    #: ``files:<folder key>#<batch>``. A subject that was ever ANSWERED is
+    #: never suggested again (a No is final for that subject).
+    subject_key: str = Field(default="", index=True)
+    #: The folder it is about, as the owner reads it ("" = none).
+    folder: str = ""
+    #: The facts it is based on: ``[{"text", "link", "at"}]``, at most 4,
+    #: every line masked and scanned when written.
+    evidence_json: str = "[]"
+    #: The work it is about was Local only (or kept home).
+    local_only: bool = False
+    #: When it rode under a chat reply (03-b); None = not yet.
+    shown_at: datetime | None = None
+    #: When the owner answered it (Yes, No, Stop) or Iron Jarvis withdrew it.
+    decided_at: datetime | None = None
+
+    def decoded_evidence(self) -> list[dict]:
+        """``evidence_json`` as a list of ``{text, link, at}`` (bad rows: [])."""
+        try:
+            data = json.loads(self.evidence_json or "[]")
+        except (TypeError, ValueError):
+            return []
+        return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
 
     def decoded_action(self) -> dict:
         """Parse ``action_json`` into a dict (``agent_type`` + ``task``)."""

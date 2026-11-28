@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { api, get, post, put, ApiError } from "@/lib/api";
 import { OFFER_DISMISS_PREFIX, offerKey as goalOfferKey } from "@/lib/goalOffers";
+import { doorNav, noticeDoor } from "@/lib/improvements";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -362,10 +363,14 @@ export default function AutonomyPage() {
   async function approve(p: Proposal) {
     flash(null);
     try {
-      await post(`/proposals/${encodeURIComponent(p.id)}/approve`);
+      const answer = await post<unknown>(`/proposals/${encodeURIComponent(p.id)}/approve`);
       flash(`Approved "${p.title}".`);
       proposals.reload();
       status.reload();
+      // Next leaps 03-a: a suggestion from your record whose Yes starts
+      // nothing opens a new chat in its folder.
+      const door = noticeDoor(answer);
+      if (door) doorNav.go(door);
     } catch (err) {
       flash(null, errText(err));
     }

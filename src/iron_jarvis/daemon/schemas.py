@@ -2322,6 +2322,15 @@ class KillBody(BaseModel):
     enabled: bool = True  # engage (True) or release (False) the global kill switch
 
 
+class ProposalRejectBody(BaseModel):
+    """``POST /proposals/{id}/reject`` (next leaps 03-a): ``stop_kind`` = the
+    answer "Stop suggesting this kind" on a suggestion from the record: the
+    No, plus that kind's switch turned off (through the settings writer,
+    with Undo). No body = a plain No, as before."""
+
+    stop_kind: bool = False
+
+
 class RemoteAgentCreate(BaseModel):
     """Register a remote agent the user runs elsewhere (§11/§12)."""
 

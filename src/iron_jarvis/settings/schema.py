@@ -911,6 +911,37 @@ SETTINGS: tuple[SettingDef, ...] = (
       tier="ask", section="Watchers", aliases=("sentinels", "watchers", "folder watchers (sentinels)")),
     S("sentinels_tick_seconds", "Watch every (seconds)", "automation", "number",
       "How often the watchers check.", tier="ask", section="Watchers", check=_range(10, 86400)),
+    # Next leaps 03-a (build-out plan R3.1, idea 03; D-03.1): suggestions
+    # from Iron Jarvis's own record (motivation/notices). On from the start,
+    # at most 3 a day: no model, nothing sent, nothing started. "Stop
+    # suggesting this kind" on a suggestion turns its kind's row off here.
+    S("notice_work", "Suggestions about your work", "automation", "bool",
+      "Every few hours Iron Jarvis looks at its own record of your work and suggests what you may "
+      "want to pick up: an open item that has waited, work that did not finish, new files a watcher "
+      "saw. Each suggestion shows the facts it is based on and waits on Improvements, with a quiet "
+      "row in the bell. It calls no model, sends nothing anywhere and starts nothing until you say "
+      "yes. Off: no suggestions about your work, and the ones waiting are taken off the list.",
+      tier="allow", section="Suggestions about your work",
+      aliases=("work suggestions", "noticed in your work", "things iron jarvis noticed")),
+    S("notice_open_items", "Suggest open items that have waited", "automation", "bool",
+      "Suggest picking up an open item in a folder that has been open for 5 days or more, when there "
+      "has been no work in that folder for 3 days.",
+      tier="allow", section="Suggestions about your work",
+      aliases=("open item suggestions",)),
+    S("notice_stalled_work", "Suggest work that did not finish", "automation", "bool",
+      "Suggest looking again at work that failed, needs you or partly failed, when nothing newer "
+      "happened in its folder for 2 days (work up to 30 days old).",
+      tier="allow", section="Suggestions about your work",
+      aliases=("failed work suggestions", "unfinished work suggestions")),
+    S("notice_new_files", "Suggest work for new files a watcher saw", "automation", "bool",
+      "When one of your folder watchers sees new or changed files, suggest the work it was set up "
+      "for, with the file names beside it. Off: watchers still watch, and nothing is suggested.",
+      tier="allow", section="Suggestions about your work",
+      aliases=("watcher suggestions", "new file suggestions")),
+    S("notice_max_per_day", "Suggestions about your work: most in a day", "automation", "number",
+      "The most new suggestions about your work in any 24 hours (0 to 10). 0 makes none.",
+      tier="allow", section="Suggestions about your work", check=_range(0, 10),
+      aliases=("suggestion limit", "suggestions a day")),
     S("skill_learning_enabled", "Learn new skills from my work", "automation", "bool",
       "Propose reusable skills from finished work (you approve each).", tier="ask", section="Skills"),
     S("skill_learning_auto_approve", "Approve learned skills automatically", "automation", "bool",

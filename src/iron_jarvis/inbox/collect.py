@@ -84,6 +84,13 @@ KIND_CLIENT = "client"
 #: the model runs elsewhere, on its own pacing).
 KIND_MEANING = "meaning_search"
 KIND_WANTS = "wants"
+#: Next leaps 03-a: a suggestion Iron Jarvis made from its OWN record of the
+#: owner's work (``motivation/notices``: ``ProposalRecord`` source
+#: ``notice``): an open item that has waited, work that did not finish, new
+#: files a watcher saw. Answered through the proposal routes, with a third
+#: answer, Stop suggesting this kind (``stop``: the reject route with
+#: ``stop_kind``).
+KIND_NOTICED = "noticed"
 KIND_UNASKED = "unasked"
 #: Next leaps 20-a: something the owner asked for, twice or more in 30 days,
 #: that Iron Jarvis had no feature for (``capability_search/misses``).
@@ -106,6 +113,7 @@ KINDS: tuple[tuple[str, str], ...] = (
     (KIND_MEMORY, "Memory tidy-up"),
     (KIND_TOOL, "Requests for a tool"),
     (KIND_MISSING, "Things you asked for that Iron Jarvis can't do yet"),
+    (KIND_NOTICED, "Things Iron Jarvis noticed in your work"),
     (KIND_WANTS, "Things Iron Jarvis wants to do"),
     (KIND_UNASKED, "Offers to stop asking"),
 )
@@ -186,9 +194,9 @@ def item(kind: str, ref: str, *, title: str, about: str = "", why: str = "",
          evidence: list[str] | None = None, created_at: Any = None,
          detail: dict[str, Any] | None = None, accept: dict[str, Any] | None = None,
          decline: dict[str, Any] | None = None, home: str = "",
-         extra: dict[str, Any] | None = None) -> dict[str, Any]:
+         extra: dict[str, Any] | None = None, stop: dict[str, Any] | None = None) -> dict[str, Any]:
     lines = [_one_line(e, LINE_CHARS) for e in (evidence or []) if str(e or "").strip()]
-    return {
+    out = {
         "id": f"{kind}:{ref}",
         "kind": kind,
         "ref": str(ref),
@@ -203,6 +211,10 @@ def item(kind: str, ref: str, *, title: str, about: str = "", why: str = "",
         "home": {"href": home, "label": OPEN_LABEL} if home else None,
         "extra": extra or {},
     }
+    if stop is not None:
+        # 03-a: the third answer (only a suggestion noticed in the work has it).
+        out["stop"] = stop
+    return out
 
 
 def _seg(value: Any) -> str:
@@ -709,6 +721,61 @@ def wants_item(row: Any, *, stopped: bool = False, self_dev_on: bool = True) -> 
     )
 
 
+#: Next leaps 03-a: what a suggestion noticed in the work says about itself.
+NOTICED_ABOUT = {
+    "open_item": "An open item that has waited",
+    "stalled_work": "Work that did not finish",
+    "new_files": "New files a watcher saw",
+}
+NOTICED_YES = "Yes"
+NOTICED_NO = "No"
+NOTICED_STOP = "Stop suggesting this kind"
+NOTICED_NO_NOTE = "Iron Jarvis won't suggest this again."
+NOTICED_LOCAL_TITLE = "a suggestion about Local only work (its words are on the Improvements page)"
+
+
+def noticed_item(row: Any, *, stopped: bool = False) -> dict[str, Any]:
+    """A suggestion from the owner's own record (next leaps 03-a): its facts
+    as evidence, Yes / No / Stop suggesting this kind, each the proposal's
+    OWN route. A Yes that opens a chat starts nothing, so Emergency stop does
+    not block it; a Yes that starts a run is blocked under Emergency stop and
+    takes two presses."""
+    from ..motivation import notices as N
+
+    pid = str(getattr(row, "id", "") or "")
+    kind = str(getattr(row, "kind", "") or "")
+    act = _loads(getattr(row, "action_json", "{}"), {})
+    how = str(act.get("how") or N.HOW_CHAT)
+    facts = row.decoded_evidence() if hasattr(row, "decoded_evidence") else []
+    folder = str(getattr(row, "folder", "") or "")
+    where = folder_label(folder) or "that folder"
+    if how == N.HOW_RUN:
+        accept = action(NOTICED_YES, f"/proposals/{_seg(pid)}/approve", confirm=True,
+                        note=f"Starts an agent run in {where} now, with these facts as its record.",
+                        blocked=STOPPED_BLOCK if stopped else "")
+        door = ""
+    else:
+        accept = action(NOTICED_YES, f"/proposals/{_seg(pid)}/approve",
+                        note=f"Opens a new chat in {where}. Nothing starts until you send.")
+        door = N.door_for(row)
+    link = next((str(f.get("link") or "") for f in facts if str(f.get("link") or "").startswith("/")), "")
+    return item(
+        KIND_NOTICED, pid, title=str(getattr(row, "title", "") or "Something Iron Jarvis noticed"),
+        about=NOTICED_ABOUT.get(kind, ""),
+        why="" if kind == N.KIND_FILES else str(getattr(row, "rationale", "") or ""),
+        evidence=[str(f.get("text") or "") for f in facts],
+        created_at=getattr(row, "created_at", None),
+        accept=accept,
+        decline=action(NOTICED_NO, f"/proposals/{_seg(pid)}/reject", note=NOTICED_NO_NOTE),
+        stop=action(NOTICED_STOP, f"/proposals/{_seg(pid)}/reject", body={"stop_kind": True},
+                    note=f"Iron Jarvis stops suggesting {N.kind_words(kind)}. You can turn them back on "
+                         "in Settings › Automation."),
+        home=link,
+        extra={"notice_kind": kind, "folder": folder, "how": how, "door": door,
+               "local_only": bool(getattr(row, "local_only", False)), "chat_title": NOTICED_LOCAL_TITLE},
+    )
+
+
 #: Next leaps 20-a: what a missing item says (the owner's words are shown
 #: only here, D-20.1). 20-a review: what each KIND of ask's record shows,
 #: one sentence each, never "found none" over a lookup that listed lines.
@@ -973,9 +1040,21 @@ def _wants(d: Any) -> Read:
     config = getattr(d.platform, "config", None)
     stopped = bool(getattr(config, "autonomy_kill_switch", False))
     self_dev = bool(getattr(config, "self_dev_enabled", False))
-    rows, total = _pending(d.platform.engine, R, R.status == "pending")
+    # 03-a: a suggestion from the record is its own kind (``_noticed``).
+    rows, total = _pending(d.platform.engine, R, R.status == "pending", R.source != "notice")
     build = lambda r: wants_item(r, stopped=stopped, self_dev_on=self_dev)  # noqa: E731
     return Read({KIND_WANTS: (_built(rows, build, "wants"), total)})
+
+
+def _noticed(d: Any) -> Read:
+    """03-a: the suggestions Iron Jarvis made from its own record that wait."""
+    from ..motivation.models import ProposalRecord as R
+
+    if getattr(d.platform, "intent", None) is None:
+        return Read()
+    stopped = bool(getattr(getattr(d.platform, "config", None), "autonomy_kill_switch", False))
+    rows, total = _pending(d.platform.engine, R, R.status == "pending", R.source == "notice")
+    return Read({KIND_NOTICED: (_built(rows, lambda r: noticed_item(r, stopped=stopped), "noticed"), total)})
 
 
 class _GrantsOnce:
@@ -1067,6 +1146,7 @@ SOURCES: tuple[tuple[tuple[str, ...], Source], ...] = (
     ((KIND_MEMORY,), _memory),
     ((KIND_TOOL,), _tools),
     ((KIND_MISSING,), _missing),
+    ((KIND_NOTICED,), _noticed),
     ((KIND_WANTS,), _wants),
     ((KIND_UNASKED,), _unasked),
 )
@@ -1165,6 +1245,6 @@ __all__ = [
     "DETAIL_CHARS", "GOALS_MAX", "KINDS", "LABELS", "OPEN_LABEL", "PER_KIND", "RESULTS_KIND", "SOURCES", "Read",
     "action", "change_results",
     "client_item", "client_view", "coach_item", "collect", "detail_diff", "detail_text", "folder_label", "item",
-    "library_item", "memory_effect", "missing_item", "missing_why", "night_reasons", "offer_item",
+    "library_item", "memory_effect", "missing_item", "missing_why", "night_reasons", "noticed_item", "offer_item",
     "memory_item", "preference_item", "skill_item", "tool_item", "unasked_item", "wants_item",
 ]

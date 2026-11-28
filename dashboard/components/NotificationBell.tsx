@@ -105,6 +105,9 @@ import { announceBuildCodeLink, buildCodeHref, toolLabel } from "@/lib/buildApp"
 
 /** v1.355.0 (G32): what a failed pack does NOT take down, said on its row. */
 export const PACK_STILL_WORKS = "Chat and your other tools keep working.";
+/** Next leaps 03-a: the bell's quiet row for a suggestion from your own
+ *  record (its body is the suggestion's own title). */
+export const NOTICED_ROW_TITLE = "Iron Jarvis noticed something in your work · Review";
 
 /** The pack row's body: its own fix (when the daemon gave one) and then what
  *  keeps working. A fix with no closing mark gets a full stop first. */
@@ -839,6 +842,24 @@ export function toActivity(e: IJEvent): ActivityItem | null {
     // folded into a suggestion already waiting publishes nothing). QUIET: a
     // suggestion is not a failure — no badge, no desktop ping, no phone.
     // Only a watcher's: the pulse's own proposals keep their old behaviour.
+    // Next leaps 03-a: a suggestion from your own record (source "notice":
+    // an open item that waited, work that did not finish, a watcher's new
+    // files) is the same QUIET row, opening Improvements, where its Yes, No
+    // and "Stop suggesting this kind" are. At most notice_max_per_day (3) a
+    // day: the daemon makes no more than that.
+    if (p.source === "notice") {
+      const name = typeof p.sentinel === "string" ? p.sentinel.trim() : "";
+      const title = typeof p.title === "string" ? p.title.trim() : "";
+      return {
+        id: e.id,
+        ts: e.ts,
+        href: "/improvements",
+        icon: name ? Eye : Lightbulb,
+        title: name ? `Your watcher ${name} noticed changes · Review` : NOTICED_ROW_TITLE,
+        body: title.length > 140 ? `${title.slice(0, 139)}…` : title,
+        quiet: true,
+      };
+    }
     if (p.source !== "sentinel") return null;
     const name = typeof p.sentinel === "string" ? p.sentinel.trim() : "";
     const why = typeof p.rationale === "string" ? p.rationale.trim() : "";

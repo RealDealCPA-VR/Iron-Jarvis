@@ -152,6 +152,10 @@ _HOT_INDEXES = (
     # watcher names the rule it starts.
     ("ix_reflexrule_chat_thread_id", "reflexrule", "chat_thread_id"),
     ("ix_sentinelrecord_rule_id", "sentinelrecord", "rule_id"),
+    # Next leaps 03-a: a suggestion from the owner's own record is looked up
+    # by its kind and by what it is about (motivation/notices).
+    ("ix_proposalrecord_kind", "proposalrecord", "kind"),
+    ("ix_proposalrecord_subject_key", "proposalrecord", "subject_key"),
 )
 
 

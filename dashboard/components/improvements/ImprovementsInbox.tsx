@@ -62,6 +62,8 @@ import {
   acceptedWords,
   answerNote,
   decodeInbox,
+  doorNav,
+  noticeDoor,
   decodeNightReview,
   groupsToShow,
   nightOfferWords,
@@ -200,19 +202,22 @@ function ImprovementCard({
   onChanged,
 }: {
   item: ImprovementItem;
-  onDecided: (item: ImprovementItem, accepted: boolean, said: string) => void;
+  onDecided: (item: ImprovementItem, accepted: boolean, said: string, stopped?: boolean) => void;
   /** The route says this suggestion is gone or already answered. */
   onChanged: (words: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function press(action: ImprovementAction, accepted: boolean) {
+  async function press(action: ImprovementAction, accepted: boolean, stopped = false) {
     setBusy(true);
     setError(null);
     try {
       const answer = await post<unknown>(action.path, action.body);
-      onDecided(item, accepted, answerNote(answer));
+      onDecided(item, accepted, answerNote(answer), stopped);
+      // 03-a: a Yes that starts nothing opens a new chat in that folder.
+      const door = accepted ? noticeDoor(answer) : "";
+      if (door) doorNav.go(door);
     } catch (e) {
       // The suggestion's own route refused: its sentence, as it said it.
       const words = e instanceof Error && e.message ? e.message : DID_NOT_WORK;
@@ -304,6 +309,16 @@ function ImprovementCard({
             className={DECLINE_CLASS}
             busy={busy}
             onPress={() => void press(item.decline!, false)}
+          />
+        ) : null}
+        {item.stop ? (
+          // 03-a: the third answer, as quiet as No.
+          <PressButton
+            action={item.stop}
+            testId="improvement-stop"
+            className={DECLINE_CLASS}
+            busy={busy}
+            onPress={() => void press(item.stop!, false, true)}
           />
         ) : null}
         {rehearse ? (
@@ -472,10 +487,11 @@ export function ImprovementsInbox() {
   }, [newest, load]);
 
   const decided = useCallback(
-    (item: ImprovementItem, accepted: boolean, said: string) => {
+    (item: ImprovementItem, accepted: boolean, said: string, stopped?: boolean) => {
       setGone((prev) => new Set(prev).add(item.id));
-      // The route's own note is for an accept; a decline is just taken off.
-      setNote(accepted ? said || acceptedWords(item.kind) : TAKEN_OFF);
+      // The route's own note is for an accept (and for 03-a's Stop, which
+      // says what it turned off); a decline is just taken off.
+      setNote(accepted ? said || acceptedWords(item.kind) : stopped ? said || TAKEN_OFF : TAKEN_OFF);
       void load();
     },
     [load],

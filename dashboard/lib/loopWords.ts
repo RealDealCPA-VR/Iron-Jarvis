@@ -172,6 +172,12 @@ const ROWS: Readonly<Record<string, Row>> = {
     problem: "Names in your folders aren't being looked at for clients",
     href: "/clients",
   },
+  // Next leaps 03-a: the pass that leaves suggestions from your own record.
+  work_notices: {
+    label: "Suggestions about your work",
+    problem: "Your work isn't being looked at for suggestions",
+    href: "/improvements",
+  },
   dispatcher: { label: "Queued tasks", problem: "Queued tasks aren't starting", href: TEAM },
   autonomy: { label: "Autonomy", problem: "Work Jarvis plans on its own isn't being checked", href: "/autonomy" },
   sentinels: { label: "Watchers", problem: "Your watchers aren't checking", href: "/sentinels" },

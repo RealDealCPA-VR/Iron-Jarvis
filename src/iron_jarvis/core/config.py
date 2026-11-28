@@ -787,6 +787,20 @@ class Config(BaseModel):
     #: "stop this kind" answer). Off: the suggestions still wait in
     #: Improvements; nothing rings.
     night_review_notice: bool = True
+    #: Next leaps 03-a (build-out plan R3.1, idea 03; D-03.1 on from the
+    #: start): SUGGESTIONS ABOUT YOUR WORK (``motivation/notices``). Every 4
+    #: hours, with no model, Iron Jarvis looks at its own record (open items
+    #: that have waited, work that did not finish) and leaves at most
+    #: ``notice_max_per_day`` suggestions a day on Improvements and as a
+    #: quiet bell row. It starts nothing. ``notice_work`` is the master
+    #: switch; each kind has its own (the answer "Stop suggesting this kind"
+    #: turns one off).
+    notice_work: bool = True
+    notice_open_items: bool = True
+    notice_stalled_work: bool = True
+    notice_new_files: bool = True
+    #: New suggestions about your work in any 24 hours (0 to 10; D-03.1: 3).
+    notice_max_per_day: int = 3
     #: The intelligence plan, 5b: a SECOND MODEL double-checks finished work
     #: (``checks/second``). ``None`` = NOT ANSWERED: a person with more than
     #: one model account is offered it ONCE, on a card under a reply that made
@@ -1545,6 +1559,16 @@ class Config(BaseModel):
         # answer; anything else is "not answered yet" (the offer shows, and
         # nothing is spent).
         return v if isinstance(v, bool) else None
+
+    @field_validator("notice_max_per_day", mode="before")
+    @classmethod
+    def _clean_notice_max_per_day(cls, v: Any) -> int:
+        # 03-a: bounded 0 to 10; anything that is not a whole number is the
+        # default (3). The settings writer refuses a value out of range in
+        # words first (the schema row's check).
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return 3
+        return max(0, min(10, int(v)))
 
     @field_validator("night_review_requests", mode="before")
     @classmethod

@@ -129,6 +129,30 @@ job waiting for an answer — one quiet line appears above the chat box, with
 
 ---
 
+## Iron Jarvis notices things about your work (v1.599.0)
+
+A few times a day Iron Jarvis looks at its own record of your work and may suggest something you probably want to pick up. You do not have to set anything up. It looks for:
+
+- **an open item that has waited**: something still open in a folder for 5 days or more, when there has been no work in that folder for 3 days;
+- **work that did not finish**: a chat, coding session or agent run that failed, needs you or partly failed, with nothing newer in its folder for 2 days (up to 30 days back);
+- **new files a watcher saw**: when one of your folder watchers sees new or changed files.
+
+Each suggestion waits on Improvements under **Things Iron Jarvis noticed in your work**, with the facts it is based on underneath (which piece of work, when, which files), and a quiet row in the bell:
+
+> “Check the duplicate invoice” has been open for 9 days in Hartleys. Pick it up?
+
+You answer with one of three presses:
+
+- **Yes**: for an open item or unfinished work, a new chat opens in that folder, with the folder's card and **Continue** waiting. Nothing starts until you send. For a watcher's files, the agent run you set the watcher up for starts in that folder.
+- **No**: that one is never suggested again.
+- **Stop suggesting this kind**: no more suggestions of that kind (the others still come). Settings › Automation › Suggestions about your work turns any kind back on.
+
+At most 3 new suggestions a day (change it in **Suggestions about your work: most in a day**, 0 to 10). A suggestion that stops being true (the item was closed, the work was picked up again, the chat was deleted) is taken off the list by itself. It calls no model, sends nothing anywhere and acts on nothing until you say yes; while Emergency stop is on it does not look at all. A folder you told Iron Jarvis to forget, and archived work, are never suggested.
+
+From chat: "what have you noticed in my work?" lists them (and you can answer one there), and "turn off suggestions about my work" or "turn off open item suggestions" changes the settings, with Undo.
+
+---
+
 ## Merge all that passed, in the morning (v1.598.0)
 
 The night shift leaves each task's work on its own branch. In the morning,

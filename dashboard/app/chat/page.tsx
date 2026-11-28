@@ -5747,6 +5747,11 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
       // v1.500.0: the sidebar's "Archived chats" (on every page but Chat)
       // lands here with the list showing the Archived view.
       const archived = params.get("archived") === "1";
+      // Next leaps 03-a: a suggestion's Yes ("Pick it up?") lands here as
+      // `?new=1&folder=<path>`: a fresh chat in that folder, set through the
+      // folder chip's own pick (its check and its file tools). It NEVER sends:
+      // the folder's card and Continue wait for the owner's own press.
+      const folderParam = (params.get("folder") || "").trim().slice(0, 1000);
       if (archived) {
         setArchivedView(true);
         void refreshArchived();
@@ -5762,6 +5767,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         composer.setText(ask);
         inputRef.current?.focus();
       }
+      if (folderParam && !thread) pickChatFolder(folderParam);
       // v1.506.0 (north-star 6.5, D11): the desktop's hotkey quick window
       // lands here as `?new=1&quick=1`. Its words wait in the desktop's main
       // process, never in the URL; taken once and sent through the latest
@@ -5788,7 +5794,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
           const file = takeMainWindowFile(thread);
           if (file) openPlaceRef.current(file);
         });
-      } else if (!ask && !skill && !wantPersona && !fresh && !about && !quick) {
+      } else if (!ask && !skill && !wantPersona && !fresh && !about && !quick && !folderParam) {
         // v1.311.0: no landing params — reopen the conversation this window
         // had open (a ?thread= link wins and becomes the remembered one; an
         // ask/skill/persona landing is the start of something new). Only
@@ -5796,7 +5802,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         const open = readOpenThread();
         if (open && open.project === wantedProjectId()) void openThread(open.id, { restore: true });
       }
-      if (ask || skill || thread || wantPersona || fresh || openModels || about || archived || quick) {
+      if (ask || skill || thread || wantPersona || fresh || openModels || about || archived || quick || folderParam) {
         // Strip the params so a refresh doesn't resurrect stale state over
         // whatever the user has done since.
         const url = new URL(window.location.href);
@@ -5808,6 +5814,7 @@ function ChatConversation({ surfaceHidden = false }: { surfaceHidden?: boolean }
         url.searchParams.delete("model");
         url.searchParams.delete("about");
         url.searchParams.delete("archived");
+        url.searchParams.delete("folder");
         url.searchParams.delete(QUICK_ASK_PARAM);
         window.history.replaceState(null, "", url.toString());
       }

@@ -618,9 +618,22 @@ class SentinelService:
 
     @staticmethod
     def _propose(intent, rec: SentinelRecord, changed: list[dict]):
-        """Mint the SUGGEST-ONLY backlog proposal for a fired sentinel."""
+        """Mint the SUGGEST-ONLY backlog proposal for a fired sentinel.
+
+        Next leaps 03-a: through ``motivation/notices.mint_watcher``, as a
+        suggestion from the record (``source="notice"``, kind ``new_files``):
+        its facts are the file names and "since when", it counts toward the
+        day's limit for suggestions about your work, and "Stop suggesting
+        this kind" (or the kind's switch) stops it. A Yes runs in the
+        watched folder. Only an intent without a platform (a test double)
+        takes the older backlog door below."""
         if intent is None:
             return None
+        platform = getattr(intent, "p", None)
+        if platform is not None and getattr(platform, "engine", None) is not None:
+            from ..motivation.notices import mint_watcher
+
+            return mint_watcher(platform, rec, changed, intent=intent)
         sample = ", ".join(c["path"] for c in changed[:5])
         more = "" if len(changed) <= 5 else f" (+{len(changed) - 5} more)"
         # STABLE title (no count) so every change for this sentinel folds into ONE

@@ -48,6 +48,9 @@ export interface ImprovementItem {
   detail: ImprovementDetail | null;
   accept: ImprovementAction | null;
   decline: ImprovementAction | null;
+  /** Next leaps 03-a: the third answer of a suggestion Iron Jarvis noticed in
+   *  your work, "Stop suggesting this kind" (its reject route, `stop_kind`). */
+  stop?: ImprovementAction | null;
   home: { href: string; label: string } | null;
   extra: Record<string, unknown>;
 }
@@ -123,6 +126,9 @@ const ACCEPTED_WORDS: Record<string, string> = {
   missing: "Kept on this PC as a note for the next version. Nothing was sent anywhere.",
   // Next leaps 19-b (the route's own note, which names the schedule, wins).
   schedule_offer: "The schedule was made.",
+  // Next leaps 03-a: a watcher's files (a run); a Yes that opens a chat
+  // says so in the route's own note, which wins.
+  noticed: "Started. It is running now.",
 };
 
 export function acceptedWords(kind: string): string {
@@ -216,6 +222,26 @@ export function offerRehearsalId(item: ImprovementItem): string {
   return /^[A-Za-z0-9_-]+$/.test(id) ? id : "";
 }
 
+/**
+ * Next leaps 03-a: a Yes to "pick it up" starts nothing; its route answers
+ * the door to open, a NEW chat in that folder (`/chat?new=1&folder=…`, the
+ * folder URL-quoted). Only that one shape is ever opened ("" otherwise).
+ */
+const NOTICE_DOOR = /^\/chat\?new=1&folder=[A-Za-z0-9%._~-]{1,1200}$/;
+
+export function noticeDoor(answer: unknown): string {
+  const r = record(answer);
+  const door = r && typeof r.door === "string" ? r.door : "";
+  return NOTICE_DOOR.test(door) ? door : "";
+}
+
+/** How the page goes to a door (a seam a test replaces). */
+export const doorNav = {
+  go(href: string): void {
+    window.location.assign(href);
+  },
+};
+
 export function isDecisionPath(path: string): boolean {
   return DECISION_PATHS.some((rx) => rx.test(path));
 }
@@ -296,6 +322,7 @@ function decodeItem(raw: unknown): ImprovementItem | null {
     detail: decodeDetail(r.detail),
     accept: decodeAction(r.accept),
     decline: decodeAction(r.decline),
+    stop: decodeAction(r.stop),
     home: decodeHome(r.home),
     extra: record(r.extra) ?? {},
   };

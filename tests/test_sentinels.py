@@ -96,7 +96,8 @@ def test_file_sentinel_fires_one_suggest_only_proposal(platform):
     props = intent.list_proposals(status="pending")
     assert len(props) == 1
     p = props[0]
-    assert p.source == "sentinel"
+    # Next leaps 03-a (moved on purpose): a suggestion from the record.
+    assert p.source == "notice" and p.kind == "new_files"
     assert p.status == "pending"  # never auto-executed
     assert p.session_id is None  # NOT a session
     assert p.decoded_action()["task"] == "review the changed notes"
@@ -364,3 +365,48 @@ def test_change_while_proposal_pending_is_not_lost(platform):
     pending = intent.list_proposals(status="pending")
     assert len(pending) == 1  # stable title -> still one proposal
     assert "b.md" in pending[0].rationale  # ...refreshed to the newest change
+
+
+# -- next leaps 03-a: a watcher's suggestion carries facts and counts ---------
+def test_a_watchers_suggestion_carries_facts_and_counts_toward_the_days_limit(platform):
+    """The names of the new files and "since when" are its facts (never a
+    path on the page), a Yes runs in the watched folder, and it counts toward
+    "Suggestions about your work: most in a day" like any other."""
+    from iron_jarvis.motivation import notices
+
+    svc, intent = platform.sentinels, platform.intent
+    svc.add("intake", path="/clients/hartleys/intake", task="file the new statements")
+    fs: dict[str, float] = {}
+    scan = _scanner(fs)
+    svc.poll_once(intent, scanner=scan)  # baseline
+    fs["/clients/hartleys/intake/March statement.pdf"] = 1.0
+    fs["/clients/hartleys/intake/April statement.pdf"] = 1.0
+    [p] = svc.poll_once(intent, scanner=scan)
+    assert p.title == "Your watcher intake saw 2 new or changed files in intake"
+    facts = [f["text"] for f in p.decoded_evidence()]
+    assert facts[0].startswith("New or changed: ") and "March statement.pdf" in facts[0]
+    assert facts[1].startswith("Since ")
+    assert facts[2] == "Watched folder: intake"
+    assert p.decoded_action()["how"] == "run" and p.folder == "/clients/hartleys/intake"
+    # A later change while it waits folds into it and keeps the first "since".
+    fs["/clients/hartleys/intake/May statement.pdf"] = 1.0
+    svc.poll_once(intent, scanner=scan)
+    [again] = intent.list_proposals(status="pending")
+    assert again.id == p.id and "3 new or changed files" in again.title
+    assert [f for f in again.decoded_evidence() if f.get("role") == "since"][0]["at"] ==         [f for f in p.decoded_evidence() if f.get("role") == "since"][0]["at"]
+    assert notices.made_today(platform.engine) == 1
+    # Counted: with the day's limit reached, the next watcher suggests nothing.
+    intent.reject(p.id)
+    platform.config.notice_max_per_day = 1
+    svc.set_enabled("intake", False)
+    svc.add("second", path="/clients/smith/intake")
+    fs2: dict[str, float] = {}
+    svc.poll_once(intent, scanner=_scanner(fs2))
+    fs2["/clients/smith/intake/a.pdf"] = 1.0
+    assert svc.poll_once(intent, scanner=_scanner(fs2)) == []
+    # Its kind's switch stops it too.
+    platform.config.notice_max_per_day = 10
+    platform.config.notice_new_files = False
+    fs2["/clients/smith/intake/b.pdf"] = 1.0
+    assert svc.poll_once(intent, scanner=_scanner(fs2)) == []
+

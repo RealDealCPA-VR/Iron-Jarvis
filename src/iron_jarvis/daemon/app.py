@@ -2514,6 +2514,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
             )
         )
 
+        # SUGGESTIONS FROM YOUR OWN RECORD (next leaps 03-a, build-out plan
+        # R3.1): every 4 hours (the first pass 10 minutes after start), with
+        # no model, Iron Jarvis withdraws waiting suggestions that are no
+        # longer true and leaves at most notice_max_per_day new ones (open
+        # items that waited, work that did not finish) on Improvements, with
+        # a quiet bell row. No pass under Emergency stop; off the loop; time
+        # from an injected clock and sleep. Each pass reports ITS OWN outcome
+        # on loop_health["work_notices"]; switched off pops the row.
+        from ..motivation.notices import notices_loop as _notices_loop
+
+        bg_tasks["work_notices"] = asyncio.create_task(
+            _notices_loop(
+                platform,
+                clock=time.monotonic,
+                sleep=asyncio.sleep,
+                on_tick=lambda ok, exc: _tick("work_notices", ok, exc),
+                on_off=lambda: loop_health.pop("work_notices", None),
+            )
+        )
+
         # SHARE MY PROFILE WITH BUILD (v1.306.0): when a switch is on, bring
         # its block up to date — on a timer THREAD (poke returns at once), so
         # boot never waits on a file write.
@@ -4336,6 +4356,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "rationale": p.rationale, "action": p.decoded_action(), "risk": p.risk,
             "source": p.source, "status": p.status, "session_id": p.session_id,
             "tokens": p.tokens, "created_at": p.created_at.isoformat(),
+            # Next leaps 03-a: a suggestion from the record says its kind.
+            "kind": getattr(p, "kind", "") or "",
         }
 
     def _persist_config(keys: list[str]) -> None:
