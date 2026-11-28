@@ -36,10 +36,22 @@ Three steps, each its own function:
   of the chats was Local only; ``skills/learning`` re-reads the chats, sends
   them masked, scanned and fenced, and HOLDS a draft that names a client.
 
-AGENT RUNS are not units in 19-a: one run is still enough for the run lane
-(``skills/learning``), and the three-times bar reaches agent runs in the
-intelligence plan's release 10. A run a chat handed its task to is part of
-that chat's task here (its reply is the chat's).
+AGENT RUNS (the intelligence plan, release 10): one run is no longer
+enough for a new skill. :func:`run_units` makes a unit of each run the OWNER
+asked for as a task of its own (:func:`asked_for`: untagged, ``user…`` or
+``project…``), that ended well and did the run lane's bar of work; never a
+run a chat handed its task to (``chat…``: that chat's task is already a
+unit, so the work counts ONCE), a mission's (``job…``), an unattended door's
+(a schedule, a workflow, a rule, the phone, another computer: nobody asked
+just then), or a run another run started (``AgentRun.parent_id``). Runs are
+grouped only with runs, by the same rule, and become ONE candidate with
+``source="run"``; the night review writes it the same way, on the newest
+run's model and account.
+
+Release 10 also CHECKS every draft's final text when it is written
+(``skills/draft_check``, at ``SkillLearningEngine._checked_mint``): masked,
+scanned, no client named (else held), and :func:`checked_line` is said only
+when no figure and no name from the work is in it.
 
 Nothing here raises into the night review: :func:`detect` answers 0 when a
 store cannot be read (fail closed: no candidate on a guess).
@@ -216,7 +228,9 @@ def groups(units: Iterable[Unit], *, tz: "tzinfo | None" = None) -> list[Group]:
             other = pool[j]
             if seed.start - other.start > WINDOW_DAYS * 86400:
                 break  # oldest last: none further back can be in the window
-            if j in taken or other.owner != seed.owner:
+            # Release 10: a group is all chats or all runs (each is read
+            # again, and drafted from, by its own source's rules).
+            if j in taken or other.owner != seed.owner or other.source != seed.source:
                 continue
             if similarity(words[i], words[j]) >= SAME_TASK and _work_matches(seed, other):
                 members.append(other)
@@ -347,7 +361,8 @@ def evidence_of(group: Group, *, words: bool = True) -> dict[str, Any]:
     the candidate, which a deleted chat takes them from. Pure."""
     def _unit(u: Unit) -> dict[str, Any]:
         row: dict[str, Any] = {
-            "thread": u.ref, "start": u.start, "end": u.end if math.isfinite(u.end) else None,
+            # Release 10: a run's task is found again by its run's id.
+            ("run" if u.source == RUN else "thread"): u.ref, "start": u.start, "end": u.end if math.isfinite(u.end) else None,
             "at": _iso(u.start), "provider": u.provider, "model": u.model,
             "account": u.account, "local_only": bool(u.local_only),
         }
@@ -417,6 +432,21 @@ def times_line(evidence: dict[str, Any]) -> str:
         return ""
     when = days_words(evidence.get("days") or [])
     return f"You asked for this {n} times, on {when}." if when else f"You asked for this {n} times."
+
+
+#: Release 10: said only of a draft whose final text passed every check
+#: (``skills/draft_check``: masked, scanned, no client named) AND holds no
+#: client name in any case, no contact detail and no figure of the work it
+#: was written from. Never "no names": a person's name in lower case cannot
+#: be found in general (the release-10 review).
+CHECKED_LINE = "No client names, contact details or figures from your work are in it."
+
+
+def checked_line(evidence: dict[str, Any]) -> str:
+    """:data:`CHECKED_LINE` when the draft's evidence says its text was found
+    clean when it was written (``checked`` is True, and nothing else); ""
+    otherwise."""
+    return CHECKED_LINE if isinstance(evidence, dict) and evidence.get("checked") is True else ""
 
 
 def tools_line(evidence: dict[str, Any]) -> str:
@@ -782,6 +812,243 @@ def _with_owner(u: Unit, owner: str) -> Unit:
     return replace(u, owner=owner)
 
 
+# --------------------------------------------------------------------------- #
+# agent runs (the intelligence plan, release 10; BLOCKING)
+# --------------------------------------------------------------------------- #
+RUN = "run"
+#: Agent runs read at most (the newest started in the window).
+RUN_SESSIONS_MAX = 2000
+#: The run lane's own bar for work worth a skill (``skills/learning``):
+#: this many calls that ran, of at least two different tools.
+RUN_MIN_CALLS = 3
+RUN_MIN_TOOLS = 2
+#: Ids per ``IN (...)`` read.
+_CHUNK = 400
+
+
+def asked_for(origin: Any) -> bool:
+    """Was a run of ``origin`` one the OWNER asked for as a task of its own?
+    Untagged (the Sessions page, Spotlight, a custom agent's Run, ``ij run``,
+    a rerun of one of those), ``user…``, ``project…`` (a project's task) and
+    ``assignment…`` (a queued task) MAY be: only when the owner queued it
+    (:func:`_owner_queued`); never a self-development run, tagged or not
+    (``_run_ok``). NOT counted: ``chat…`` (a chat handed its task over: that task is
+    already counted as the chat's own, once), ``job…`` (a mission's
+    coordinator and helpers: the owner asked for the mission, not this
+    run), and every unattended door (a schedule, a workflow, a rule, a
+    watcher, a goal, the phone, another computer, autonomy, self-development:
+    nobody asked for that run just then). Pure."""
+    text = str(origin or "").strip().lower()
+    return not text or text.startswith(("user", "project", "assignment"))
+
+
+#: Who queued a task (``AssignmentRecord.source``) when it was the OWNER:
+#: the assignments route ("user") or a project's page ("project"). Never an
+#: agent's ``assign_work`` ("agent:<session>"), "api", or anything unknown.
+OWNER_QUEUED = frozenset({"user", "project"})
+_ASSIGNMENT = "assignment:"
+#: How many retries back a queued task is followed to the one first queued.
+_RETRY_HOPS = 10
+
+
+def _owner_queued(engine: Any, sessions: list[Any]) -> set[str]:
+    """The ids of the runs among ``sessions`` started from a queued task
+    (origin ``assignment:<id>``) that the OWNER queued (:data:`OWNER_QUEUED`;
+    a retry is judged by the task it retries). A task with no record of who
+    queued it is not the owner's. BLOCKING; RAISES when unreadable."""
+    from sqlmodel import select
+
+    from ..assignments.models import AssignmentRecord
+    from ..core.db import session_scope
+
+    asked = {str(x.id): str(x.origin or "")[len(_ASSIGNMENT):] for x in sessions
+             if str(getattr(x, "origin", "") or "").startswith(_ASSIGNMENT)}
+    if not asked:
+        return set()
+    source: dict[str, str] = {}
+    want = set(asked.values())
+    with session_scope(engine) as db:
+        for _ in range(_RETRY_HOPS + 1):
+            want -= set(source)
+            if not want:
+                break
+            ids = sorted(want)
+            for i in range(0, len(ids), _CHUNK):
+                for aid, src in db.exec(
+                    select(AssignmentRecord.id, AssignmentRecord.source)
+                    .where(AssignmentRecord.id.in_(ids[i:i + _CHUNK]))  # type: ignore[attr-defined]
+                ):
+                    source[str(aid)] = str(src or "")
+            want = {src[len("retry:"):] for src in source.values() if src.startswith("retry:")}
+
+    def _first(aid: str) -> str:
+        for _ in range(_RETRY_HOPS + 1):
+            src = source.get(aid, "")
+            if not src.startswith("retry:"):
+                return src
+            aid = src[len("retry:"):]
+        return ""
+
+    return {sid for sid, aid in asked.items() if _first(aid) in OWNER_QUEUED}
+
+
+def _owners_runs(engine: Any, sessions: list[Any]) -> list[Any]:
+    """``sessions`` less the queued tasks the owner did not queue.
+    BLOCKING; RAISES."""
+    mine = _owner_queued(engine, sessions)
+    return [x for x in sessions
+            if not str(getattr(x, "origin", "") or "").startswith(_ASSIGNMENT) or str(x.id) in mine]
+
+
+def _run_ok(sess: Any) -> bool:
+    from ..core.models import AgentType
+
+    if getattr(sess, "agent_type", None) in (AgentType.MAINTAINER, AgentType.MAINTAINER.value):
+        return False  # self-development, tagged or not: about the app, not the owner's work
+    status = getattr(getattr(sess, "status", None), "value", str(getattr(sess, "status", "") or ""))
+    if status != "completed" or not str(getattr(sess, "task", "") or "").strip():
+        return False
+    # The honest verdict (v1.227.0): a run that left failures or waited on
+    # the owner did not end well. An older row has none.
+    return str(getattr(sess, "outcome", None) or "completed") == "completed"
+
+
+def _run_unit(sess: Any, rows: list[Any], cmap: Any = None) -> "tuple[Unit, list[str]] | None":
+    """One finished run as a unit, or None when its work is under the run
+    lane's bar. ``rows``: its own tool rows, oldest first."""
+    from ..agents.orchestrator import session_local_only
+    from ..core.trust import TRUST_LOW, normalize_trust
+    from ..scheduling.knobs import session_options
+
+    ran = [r for r in rows if bool(getattr(r, "ok", False)) and not getattr(r, "rehearsed", False)]
+    tools, kinds_in, kinds_out, paths = _tools_of(ran)
+    if len(ran) < RUN_MIN_CALLS or len(tools) < RUN_MIN_TOOLS:
+        return None
+    created = getattr(sess, "created_at", None)
+    if not isinstance(created, datetime):
+        return None
+    try:
+        account = " ".join(str(session_options(sess).get("account") or "").split())
+    except Exception:  # noqa: BLE001
+        account = ""
+    words = " ".join(str(sess.task or "").split())
+    owner = ""
+    if cmap is not None:
+        owner = _owner_key(cmap, str(getattr(sess, "workspace_path", "") or ""), words, paths)
+    start = _epoch_of(created)
+    return Unit(
+        source=RUN, ref=str(sess.id), start=start, words=words, tools=tools,
+        kinds_in=frozenset(kinds_in), kinds_out=frozenset(kinds_out),
+        provider=str(getattr(sess, "provider", "") or ""), model=str(getattr(sess, "model", "") or ""),
+        account=account, local_only=bool(session_local_only(sess)),
+        low_trust=normalize_trust(getattr(sess, "trust", "")) == TRUST_LOW, owner=owner,
+    ), paths
+
+
+def _runs_read(engine: Any, sessions: list[Any]) -> tuple[set[str], dict[str, list[Any]]]:
+    """``(children, tool rows by run)`` of these runs: a run that was handed
+    its task by another (``AgentRun.parent_id``) is a child; its parent's
+    task is the one that was asked for. BLOCKING; RAISES."""
+    from sqlalchemy import literal_column
+    from sqlmodel import select
+
+    from ..core.db import session_scope
+    from ..core.models import AgentRun, ToolInvocation
+
+    ids = [str(s.id) for s in sessions]
+    children: set[str] = set()
+    tools: dict[str, list[Any]] = {}
+    read = 0
+    with session_scope(engine) as db:
+        for i in range(0, len(ids), _CHUNK):
+            part = ids[i:i + _CHUNK]
+            children.update(str(s) for s in db.exec(
+                select(AgentRun.session_id).where(
+                    AgentRun.session_id.in_(part), AgentRun.parent_id.is_not(None),  # type: ignore[attr-defined,union-attr]
+                )
+            ))
+            if read >= TOOL_ROWS_MAX:
+                continue
+            got = list(db.exec(
+                select(ToolInvocation).where(ToolInvocation.session_id.in_(part))  # type: ignore[attr-defined]
+                .order_by(ToolInvocation.created_at.asc(), literal_column("toolinvocation.rowid").asc())
+                .limit(TOOL_ROWS_MAX - read)
+            ))
+            for row in got:
+                db.expunge(row)
+                tools.setdefault(str(row.session_id), []).append(row)
+            read += len(got)
+    return children, tools
+
+
+def run_units(engine: Any, since: datetime, *, cmap: Any = None) -> list[Unit]:
+    """The runs the OWNER asked for (:func:`asked_for`) since ``since`` that
+    ended well (completed, no failures, nobody waited on) and did the run
+    lane's bar of work, as units; a child run (handed its task by another
+    run) is left out. BLOCKING, bounded (:data:`RUN_SESSIONS_MAX` runs,
+    :data:`TOOL_ROWS_MAX` tool rows); RAISES when the records cannot be read."""
+    from sqlmodel import select
+
+    from ..core.db import session_scope
+    from ..core.models import Session
+
+    lo = _naive(since)
+    with session_scope(engine) as db:
+        rows = list(db.exec(
+            select(Session).where(Session.created_at >= lo)
+            .order_by(Session.created_at.desc()).limit(RUN_SESSIONS_MAX)  # type: ignore[attr-defined]
+        ))
+        for row in rows:
+            db.expunge(row)
+    picked = [s for s in rows if asked_for(getattr(s, "origin", None)) and _run_ok(s)]
+    if not picked:
+        return []
+    picked = _owners_runs(engine, picked)
+    children, tools = _runs_read(engine, picked)
+    out: list[Unit] = []
+    for sess in picked:
+        if str(sess.id) in children:
+            continue
+        got = _run_unit(sess, tools.get(str(sess.id), []), cmap)
+        if got is not None:
+            out.append(got[0])
+    return out
+
+
+def reread_runs(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[Any]]] | None":
+    """Each run the evidence names, read AGAIN: ``(unit, its tool rows)``; a
+    run that is gone, no longer ended well or is now under the bar is left
+    out. None when the records cannot be read. BLOCKING; never raises."""
+    try:
+        from sqlmodel import select
+
+        from ..core.db import session_scope
+        from ..core.models import Session
+
+        wanted = [str(u.get("run") or "") for u in (evidence.get("units") or [])
+                  if isinstance(u, dict) and u.get("run")]
+        if not wanted:
+            return []
+        with session_scope(engine) as db:
+            rows = {str(s.id): s for s in db.exec(select(Session).where(Session.id.in_(wanted)))}  # type: ignore[attr-defined]
+            for s in rows.values():
+                db.expunge(s)
+        live = _owners_runs(engine, [rows[i] for i in wanted
+                                     if i in rows and _run_ok(rows[i]) and asked_for(rows[i].origin)])
+        children, tools = _runs_read(engine, live)
+        out: list[tuple[Unit, list[Any]]] = []
+        for sess in live:
+            if str(sess.id) in children:
+                continue
+            got = _run_unit(sess, tools.get(str(sess.id), []))
+            if got is not None:
+                out.append((got[0], tools.get(str(sess.id), [])))
+        return out
+    except Exception:  # noqa: BLE001 — unreadable: the caller holds the draft
+        log.debug("repeats: the runs of a draft could not be read again", exc_info=True)
+        return None
+
+
 def reread(engine: Any, evidence: dict[str, Any]) -> "list[tuple[Unit, list[dict]]] | None":
     """Each task the evidence names, read AGAIN from its chat and the ledger:
     ``(unit, its lines)``; a task whose chat is gone or no longer holds it is
@@ -859,11 +1126,21 @@ def _known(engine: Any) -> _Known:
     with session_scope(engine) as db:
         saved = [str(t or "") for t in db.exec(select(SavedPromptRecord.task))]
         payloads = [str(p or "") for p in db.exec(select(ScheduledTaskRecord.payload_json))]
-        cands = list(db.exec(select(C.signature, C.evidence_json).where(C.source == SOURCE_CHAT)))
-        rejected_sigs = {str(sig or "") for sig in db.exec(
-            select(P.signature).where(P.source == SOURCE_CHAT, P.status == "rejected")
-        )}
+        # Release 10: every repeat candidate (chats or runs: it carries its
+        # evidence), and every rejected draft.
+        cands = list(db.exec(select(C.signature, C.evidence_json).where(
+            C.evidence_json.is_not(None), C.evidence_json != "",  # type: ignore[union-attr]
+        )))
+        rejected = [(str(sig or ""), str(src or "")) for sig, src in db.exec(
+            select(P.signature, P.source).where(P.status == "rejected")
+        )]
+    rejected_sigs = {sig for sig, _src in rejected}
     out = _Known(saved=[task_tokens(t) for t in saved])
+    # A run's draft the owner rejected before release 10 keeps the task's
+    # words in its own signature (``create::<the task>``).
+    for sig, src in rejected:
+        if src != SOURCE_CHAT and sig.startswith("create::"):
+            out.rejected.append(task_tokens(sig[len("create::"):]))
     for raw in payloads:
         try:
             payload = json.loads(raw or "{}")
@@ -877,10 +1154,15 @@ def _known(engine: Any) -> _Known:
         for u in load_evidence(text).get("units") or []:
             if not isinstance(u, dict):
                 continue
-            out.held.add((str(u.get("thread") or ""), float(u.get("start") or 0.0)))
+            out.held.add((_ref_of(u), float(u.get("start") or 0.0)))
             if rejected and u.get("words"):
                 out.rejected.append(task_tokens(str(u["words"])))
     return out
+
+
+def _ref_of(u: dict[str, Any]) -> str:
+    """A unit's chat id or run id, as its evidence keeps it."""
+    return str(u.get("thread") or u.get("run") or "")
 
 
 def _covered_by_saved(known: _Known, words: str) -> bool:
@@ -909,23 +1191,41 @@ def drop_thread(db: Any, thread_id: str) -> int:
     no longer holds three tasks on three days and was still waiting or held
     is dismissed. A draft keeps no words, so nothing else holds them. How
     many candidates changed. RAISES (the delete then fails whole)."""
+    from ..skills.learning_models import SOURCE_CHAT
+
+    return _drop(db, SOURCE_CHAT, "thread", thread_id)
+
+
+def drop_run(db: Any, session_id: str) -> int:
+    """Release 10: a run was DELETED (``Orchestrator.delete_session``, in
+    its own transaction): :func:`drop_thread`'s rule for run candidates."""
+    from ..skills.learning_models import SOURCE_RUN
+
+    return _drop(db, SOURCE_RUN, "run", session_id)
+
+
+def _drop(db: Any, source: str, key: str, ref: str) -> int:
     from sqlmodel import select
 
-    from ..skills.learning_models import HELD, SOURCE_CHAT, SkillCandidateRecord as C
+    from ..skills.learning_models import HELD, SkillCandidateRecord as C
 
-    tid = str(thread_id or "")
+    tid = str(ref or "")
+    if not tid:
+        return 0
     changed = 0
-    for cand in list(db.exec(select(C).where(C.source == SOURCE_CHAT))):
+    for cand in list(db.exec(select(C).where(
+        C.source == source, C.evidence_json.is_not(None), C.evidence_json != "",  # type: ignore[union-attr]
+    ))):
         evidence = load_evidence(cand.evidence_json)
         units = [u for u in evidence.get("units") or [] if isinstance(u, dict)]
-        keep = [u for u in units if str(u.get("thread") or "") != tid]
+        keep = [u for u in units if str(u.get(key) or "") != tid]
         if len(keep) == len(units):
             continue
         days = sorted({day_of(float(u.get("start") or 0.0)).isoformat() for u in keep})
         evidence.update(units=keep, days=days)
         cand.evidence_json = json.dumps(evidence)
         newest = keep[0] if keep else {}
-        cand.session_id = str(newest.get("thread") or "")
+        cand.session_id = str(newest.get(key) or "")
         cand.task = str(newest.get("words") or "")[:4000]
         if cand.status in ("pending", HELD) and (len(keep) < MIN_UNITS or len(days) < MIN_DAYS):
             cand.status = "dismissed"
@@ -956,11 +1256,11 @@ def _home_if_here(platform: Any, u: Unit) -> Unit:
     return replace(u, local_only=True) if here else u
 
 
-def _signature(words: str) -> str:
+def _signature(words: str, source: str = CHAT) -> str:
     import re
 
     normalized = re.sub(r"[^a-z0-9]+", " ", (words or "").lower()).strip()
-    return f"chat::{normalized[:200]}"
+    return f"{source}::{normalized[:200]}"
 
 
 def detect(platform: Any, *, now: "datetime | None" = None) -> int:
@@ -973,7 +1273,7 @@ def detect(platform: Any, *, now: "datetime | None" = None) -> int:
     engine = platform.engine
     try:
         from ..core.db import session_scope
-        from ..skills.learning_models import SOURCE_CHAT, SkillCandidateRecord
+        from ..skills.learning_models import SOURCE_CHAT, SOURCE_RUN, SkillCandidateRecord
         from ..workmap.clients import store as client_store
 
         moment = now or datetime.now(timezone.utc)
@@ -981,21 +1281,34 @@ def detect(platform: Any, *, now: "datetime | None" = None) -> int:
             moment = moment.replace(tzinfo=timezone.utc)
         since = moment - timedelta(days=WINDOW_DAYS)
         cmap = client_store.load_map(engine)  # RAISES when unreadable: fail closed
-        found = groups([_home_if_here(platform, u) for u in units(engine, since, cmap=cmap)])
+        # Release 10: the runs the owner asked for are units too (grouped
+        # only with runs: ``groups``).
+        found = groups([_home_if_here(platform, u) for u in
+                        units(engine, since, cmap=cmap) + run_units(engine, since, cmap=cmap)])
         known = _known(engine) if found else _Known()
+        from ..templates import SAME_TASK, similarity, task_tokens
+
         added = 0
+        minted: list[frozenset] = []
         for group in found:
             if added >= MINT_MAX:
                 break
             words = group.newest.words
             if _covered_by_saved(known, words) or _held_before(known, group):
                 continue
+            # Release 10: the same kind of task found both in chats and in
+            # runs makes ONE draft (the newer group's, ``groups`` order).
+            mine = task_tokens(words)
+            if any(similarity(mine, other) >= SAME_TASK for other in minted):
+                continue
             if learning._matches_existing_skill(words):
                 continue
+            minted.append(mine)
+            source = SOURCE_RUN if group.newest.source == RUN else SOURCE_CHAT
             with session_scope(engine) as db:
                 db.add(SkillCandidateRecord(
                     session_id=group.newest.ref, task=_masked(words)[:4000], kind="create",
-                    signature=_signature(words), source=SOURCE_CHAT,
+                    signature=_signature(words, source), source=source,
                     evidence_json=json.dumps(evidence_of(group)),
                 ))
                 db.commit()
@@ -1007,7 +1320,8 @@ def detect(platform: Any, *, now: "datetime | None" = None) -> int:
 
 
 __all__ = [
-    "MIN_DAYS", "MIN_UNITS", "THREADS_MAX", "UNKNOWN_OWNER", "WINDOW_DAYS", "Group", "Rhythm", "Unit", "chat_units",
-    "clock_words", "day_of", "days_words", "detect", "drop_thread", "eligible", "evidence_of", "group_of", "groups",
-    "load_evidence", "matches", "ordinal", "reread", "rhythm", "times_line", "tools_line", "units",
+    "CHECKED_LINE", "Group", "MIN_DAYS", "MIN_UNITS", "RUN", "Rhythm", "THREADS_MAX", "UNKNOWN_OWNER", "Unit",
+    "WINDOW_DAYS", "asked_for", "chat_units", "checked_line", "clock_words", "day_of", "days_words", "detect",
+    "drop_run", "drop_thread", "eligible", "evidence_of", "group_of", "groups", "load_evidence", "matches",
+    "ordinal", "reread", "reread_runs", "rhythm", "run_units", "times_line", "tools_line", "units",
 ]

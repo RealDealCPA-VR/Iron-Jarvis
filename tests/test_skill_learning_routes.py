@@ -232,20 +232,33 @@ def test_distill_on_mock_default_refuses_honestly(client):
 
 
 def test_distill_with_real_adapter_reports_distilled_count(client):
+    """"Distill now" writes an improvement to a skill the owner has. A new
+    skill noted from ONE run (before the intelligence plan's release 10) is
+    ended without a request: a new skill now comes only from the same kind
+    of task on three days, in the night review."""
+    from iron_jarvis.skills.loader import save_skill
+
     p = client.app.state.platform
+    save_skill(p.config.home / "skills", "invoice-chaser", "Chase overdue invoices.",
+               "1. Find overdue invoices.\n2. Draft a polite nudge.")
+    p.skills.repopulate(p.config.home, None)
+    with session_scope(p.engine) as db:
+        db.add(SkillCandidateRecord(session_id="ses_1", task="chase the invoices", kind="refine",
+                                    skill_name="invoice-chaser", signature="refine::invoice-chaser"))
+        db.commit()
     _seed_candidate(p)
-    fake = _use_real_adapter(client, _skill_md())
+    fake = _use_real_adapter(client, _skill_md("invoice-chaser"))
     r = client.post("/skills/learning/distill")
     assert r.status_code == 200
     out = r.json()
     assert out["distilled"] == 1  # the UI reads exactly this key
-    assert out["reviewed"] == 1 and out["dismissed"] == 0
+    assert out["reviewed"] == 1 and out["dismissed"] == 1
     assert len(out["proposals"]) == 1
-    assert fake.calls  # the model was genuinely consulted
+    assert len(fake.calls) == 1  # the model was genuinely consulted, once
     rows = client.get("/skills/proposals").json()["proposals"]
-    assert rows[0]["skill_name"] == "vendor-ledger-reconciliation"
+    assert rows[0]["skill_name"] == "invoice-chaser" and rows[0]["kind"] == "refine"
     assert rows[0]["status"] == "pending"  # suggest-only — nothing on disk yet
-    assert p.skills.get("vendor-ledger-reconciliation") is None
+    assert "Pull the vendor ledger" not in p.skills.get("invoice-chaser").instructions
 
 
 def test_distill_with_nothing_queued_is_a_clean_zero(client):
