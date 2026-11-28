@@ -20,10 +20,12 @@ model's words:
   :func:`inherited`).
 * WHAT IT MAY DO WITHOUT ASKING. One rule-scoped standing OK
   (``core/grants``) per tool the rehearsal said would ASK, any arguments,
-  30 days. A deny floor tool (``shell``…) or any step that runs code
-  (``run_code``…: the folders cannot be read from code, so an OK would let
-  it write anywhere) gets none (:func:`always_asks`): it keeps asking, and
-  the Limits line says so. A priced call
+  30 days. A deny floor tool (``shell``…, or an app's tool by its key
+  ``mcp_call``), any step that runs code (``run_code``…: the folders cannot
+  be read from code, so an OK would let it write anywhere) and a file step
+  whose target cannot be read (``download_manage``…) get none
+  (:func:`always_asks`): they keep asking, and the Limits line says so. A
+  helper's stop stops the run that started it (:func:`child_stop`). A priced call
   still asks whatever the OKs say (``runtime._pause_needed``).
 
 A rehearsal's own run carries no Limits (it shows what the rule would do,
@@ -52,6 +54,10 @@ LIMITS_OPTION = "rule_limits"
 #: (by code, ``runtime._note_limits_stop``): only then does the run's summary
 #: become its "Needs you" reason (``agents/outcome.run_ending``).
 STOPPED_OPTION = "rule_limits_stopped"
+#: The run option beside it: the registry's refusal that stopped the run
+#: (code's words), so the run that started a helper stops with the same
+#: words (:func:`child_stop`).
+REFUSAL_OPTION = "rule_limits_refusal"
 #: The run option a rule's door writes on a REHEARSAL's run: what the rule
 #: did when it was rehearsed (:func:`shape`), so Keep it never approves a
 #: rehearsal of what the rule no longer does.
@@ -103,6 +109,7 @@ __all__ = [
     "decoded", "approved_from", "keep", "options_for", "scope_for", "inherited",
     "words", "note_stop", "stop_words", "drop_kept_grants", "LIMITS_FIELDS",
     "SHAPE_OPTION", "shape", "unchanged", "STALE_WORDS", "always_asks", "STOPPED_OPTION",
+    "REFUSAL_OPTION", "child_stop", "unread_file_step",
 ]
 
 #: The fields whose change drops the Limits (what the rule does, what starts
@@ -154,15 +161,46 @@ def unchanged(platform: Any, rec: Any, rule: Any) -> bool:
         return False
 
 
-def always_asks(name: str) -> bool:
+#: The file steps whose target the Limits read (``deliverables.scope._targets``
+#: reads ``apply_patch``'s patch, beside ``WRITE_ARGS``).
+_READ_ELSEWHERE = frozenset({"apply_patch"})
+
+
+def unread_file_step(name: str) -> bool:
+    """Is ``name`` a step that writes, changes, moves or removes FILES whose
+    target the Limits cannot read from its arguments (``download_manage``
+    moves a download to any folder, ``excel_live_edit`` edits any open
+    workbook)? Its writes are never refused at the Limits, so an OK for it
+    would break "Writes only in ...". Pure."""
+    from ..deliverables.scope import WRITE_ARGS
+    from ..tools import rehearsal as R
+
+    if name in WRITE_ARGS or name in _READ_ELSEWHERE:
+        return False
+    effect = R.effect_of(name, {})
+    return effect.noun == "file" and effect.kind in ("write", "change", "move", "remove")
+
+
+def always_asks(name: str, tool: Any = None) -> bool:
     """Does the step ``name`` keep asking whatever Keep it approved? A deny
-    floor tool, and every step that runs commands or code: where code writes
-    cannot be read from its arguments, so an OK for it would break "Writes
-    only in ...". Pure."""
+    floor tool (by its name OR its permission key: an app's tool,
+    ``mcp__<app>__<tool>``, has the key ``mcp_call``, and a standing OK for
+    any arguments is never honoured on the floor, ``GrantStore.match``),
+    every step that runs commands or code, and every file step whose target
+    cannot be read (:func:`unread_file_step`): where those write cannot be
+    read from their arguments, so an OK would break "Writes only in ...".
+    ``tool``: the registered tool, when known. Pure."""
     from ..tools.permissions import DENY_FLOOR_TOOLS
     from ..tools.rehearsal import COMMAND_STEPS
 
-    return name in DENY_FLOOR_TOOLS or name in COMMAND_STEPS
+    if name in DENY_FLOOR_TOOLS or name in COMMAND_STEPS or unread_file_step(name):
+        return True
+    key = ""
+    try:
+        key = str(tool.perm_key() or "") if tool is not None else ""
+    except Exception:  # noqa: BLE001 — unknown key: the narrower direction
+        return True
+    return bool(key) and key in DENY_FLOOR_TOOLS
 
 
 def _loads(raw: Any) -> dict[str, Any]:
@@ -305,7 +343,7 @@ def approved_from(platform: Any, rec: Any, rule: Any) -> dict[str, Any]:
             tool = platform.registry.get(name) if getattr(platform, "registry", None) else None
             if tool is None:
                 continue
-            if always_asks(name):
+            if always_asks(name, tool):
                 out["asks"].append(name)
                 continue
             out["tools"].append({"tool": name, "kind": R.effect_of(name, args, tool).kind})
@@ -464,6 +502,33 @@ def inherited(options: dict[str, Any]) -> None:
         log.warning("limits: a helper's run could not inherit them", exc_info=True)
 
 
+def child_stop(child: Any) -> dict[str, Any] | None:
+    """A helper's run that STOPPED at its rule's Limits (its own options carry
+    the Limits and the runtime's stamp, ``runtime._note_limits_stop``):
+    ``{"outside_limits": True, "rule_id", "refusal"}`` for the hand-off's
+    result, so the run that started it stops too (``runtime._limits_stop_of``)
+    and its ledger row begins with the refusal (``agents/outcome`` counts it:
+    that run ends "Needs you"). None for every other helper. Pure; never
+    raises."""
+    try:
+        from ..scheduling.knobs import session_options
+
+        opts = session_options(child)
+        opt = _option_of(opts)
+        if opt is None or opts.get(STOPPED_OPTION) is not True:
+            return None
+        refusal = " ".join(str(opts.get(REFUSAL_OPTION) or "").split())
+        if not refusal.startswith(LIMITS_LEAD):
+            refusal = (
+                f"{LIMITS_LEAD} Nothing was written. A helper of this rule's run would write "
+                "outside the folders it may write in. Stop here: the run ends and the person "
+                "decides whether to widen its limits."
+            )
+        return {"outside_limits": True, "rule_id": opt["rule_id"], "refusal": refusal}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def stop_words(error: str, folders: Iterable[str] = ()) -> str:
     """The stopped run's summary (and the row's words), from the registry's
     refusal: which file it would have written and where it may write."""
@@ -582,7 +647,7 @@ def offer(platform: Any, rec: Any) -> dict[str, Any] | None:
         probe = type("_Probe", (), {})()
         probe.limits_json = json.dumps({
             "folders": approved["folders"],
-            "kinds": [t["kind"] for t in approved["tools"] if not always_asks(t["tool"])],
+            "kinds": [t["kind"] for t in approved["tools"]],
             "asks": approved["asks"],
         })
         return {"folders": approved["folders"], "words": words(probe)}

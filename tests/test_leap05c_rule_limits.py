@@ -332,9 +332,34 @@ async def test_a_helper_writes_only_where_the_rules_run_may(tmp_path, quick_asks
     outside = tmp_path / "Elsewhere"
     outside.mkdir()
     target = outside / "helper.txt"
-    p.router.stream = _delegating(str(target), [_write("h2", "scratch.txt", "own folder")])
+    calls: list[int] = []
+    p.router.stream = _scripted([
+        [ToolCall(id="d1", name="delegate",
+                  arguments={"agent_type": "builder", "task": f"Write {target} saying hi."})],
+        [_write("h1", str(target), "hi"), _write("h2", "scratch.txt", "own folder")],
+        # Never reached: the helper's stop stops the run that started it.
+        [ToolCall(id="d2", name="delegate",
+                  arguments={"agent_type": "builder", "task": "Write y.txt saying hi."})],
+        [_write("h3", str(intake / "y.txt"), "y")],
+    ], calls)
     run = await _fire(p, router, "sort-it")
     assert not target.exists(), "a helper wrote outside the rule's limits"
+    # The helper's stop carries to the run that started it: its model is not
+    # asked again, no second helper runs, and the run ends "Needs you" for
+    # that reason (not "Part failed", not an unanswered ask).
+    assert calls == [0, 1], f"the run went on after its helper stopped: {calls}"
+    assert not (intake / "y.txt").exists(), "a second helper ran after the stop"
+    assert run.outcome == O.OUTCOME_NEEDS_YOU, (run.outcome, run.summary)
+    assert run.summary.startswith(L.STOP_LEAD) and "helper.txt" in run.summary, run.summary
+    ending = O.run_ending(run)
+    assert ending.words == "Needs you" and ending.reason.startswith(L.STOP_LEAD), ending
+    with session_scope(p.engine) as db:
+        (hand_off,) = list(db.exec(select(ToolInvocation).where(
+            ToolInvocation.session_id == run.id, ToolInvocation.tool == "delegate")))
+    assert hand_off.ok is False and hand_off.output.startswith(LIMITS_LEAD), hand_off.output[:200]
+    assert "nobody answered" not in hand_off.output
+    stop = L.stop_of(p.reflex.get(rule.id))
+    assert stop and stop["href"] == f"/sessions/{run.id}" and "helper.txt" in stop["words"], stop
     with session_scope(p.engine) as db:
         rows = list(db.exec(select(ToolInvocation).where(ToolInvocation.tool == "write_file")))
         refused = [r for r in rows if r.output.startswith(LIMITS_LEAD)]
@@ -534,6 +559,75 @@ async def test_a_step_that_runs_code_gets_no_ok_and_still_asks(tmp_path, monkeyp
     assert kept["grants"] == [] and kept["asks"] == [tool], kept
     assert p.grants.list(scope_kind="rule", scope_id=rule.id) == []
     assert "To run commands it still asks you each time." in starts.describe_for(p, after)["limits_words"]
+
+
+def _app_tool():
+    """An app's tool (``mcp__<app>__<tool>``): its permission key is the
+    shared ``mcp_call``, which is on the deny floor."""
+    from iron_jarvis.tools.base import Tool, ToolResult
+
+    class FakeAppTool(Tool):
+        name = "mcp__fakeapp__create_item"
+        description = "Create an item in the fake app."
+        input_schema = {"type": "object", "properties": {"title": {"type": "string"}}}
+        permission_key = "mcp_call"
+
+        async def execute(self, args, ctx):
+            return ToolResult(ok=True, output="made")
+
+    return FakeAppTool()
+
+
+@pytest.mark.parametrize("tool, args, still", [
+    # An app's tool: a standing OK for any arguments is never honoured on its
+    # deny floor key, so promising "without asking" would be untrue.
+    ("mcp__fakeapp__create_item", {"title": "x"}, "To use your apps it still asks you each time."),
+    # File steps whose target the Limits cannot read: their writes are never
+    # refused at the Limits, so an OK would let them write anywhere.
+    ("download_manage", {"download": "dl_1", "action": "move", "to": "C:/Elsewhere"},
+     "To move or rename files it still asks you each time."),
+    ("excel_live_edit", {"workbook": "Book1.xlsx", "ops": [{"op": "set", "range": "A1", "value": "1"}]},
+     "To change files it still asks you each time."),
+])
+async def test_a_step_an_ok_could_not_keep_inside_the_limits_gets_none_and_still_asks(
+    tmp_path, monkeypatch, tool, args, still,
+):
+    app = create_app(str(tmp_path / "home"))
+    p = app.state.platform
+    intake = tmp_path / "Intake"
+    intake.mkdir()
+    if tool.startswith("mcp__"):
+        p.registry.register(_app_tool(), mcp=True)
+    registered = p.registry.get(tool)
+    assert registered is not None, f"{tool} is not registered"
+    p.permissions._base[registered.perm_key()] = "ask"
+    p.permissions._base[tool] = "ask"
+    p.config.comm_trust = "full"
+    armed = runtime_mod.arm_for_task
+    monkeypatch.setattr(runtime_mod, "arm_for_task",
+                        lambda *a, **kw: [*armed(*a, **kw), tool])
+    rule = p.reflex.add(name="Do it", source="webhook", match="do-it", action="session",
+                        task_template="Do {text}", workspace_root=str(intake), agent_name="builder")
+    p.router.stream = _scripted([[ToolCall(id="t1", name=tool, arguments=args)]])
+    view = await _rehearse(p, "Do it")
+    assert [w for w in view["would"] if w["would"] == "ask"], view
+    assert "without asking" not in view["limits"]["words"], view
+    assert still in view["limits"]["words"], view
+    await RR.keep(p, view["id"])
+    after = p.reflex.get(rule.id)
+    kept = L.decoded(after)
+    assert kept["grants"] == [] and kept["asks"] == [tool], kept
+    assert p.grants.list(scope_kind="rule", scope_id=rule.id) == []
+    said = starts.describe_for(p, after)["limits_words"]
+    assert still in said and "without asking" not in said, said
+
+
+def test_steps_whose_target_the_limits_cannot_read_keep_asking():
+    for name in ("download_manage", "excel_live_edit"):
+        assert L.always_asks(name), name
+    for name in ("write_file", "edit_file", "rename_file", "apply_patch", "todo_add"):
+        assert not L.always_asks(name), name
+    assert L.always_asks("mcp__fakeapp__create_item", _app_tool())
 
 
 def test_the_registrys_check_inside_and_outside_the_limits(tmp_path):

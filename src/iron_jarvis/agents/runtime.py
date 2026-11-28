@@ -106,15 +106,20 @@ def _rule_limits_scope(session: object, workspace: object, config: object = None
     (``orchestrator.is_managed_workspace``; when that cannot be told, it
     does not count: the narrower direction). Both readers are pure and never
     raise, so a run that carries Limits always gets its scope."""
-    from ..reflex.limits import scope_for
+    from ..reflex.limits import LIMITS_OPTION, scope_for
     from ..scheduling.knobs import session_options
+
+    options = session_options(session)
+    if not isinstance(options.get(LIMITS_OPTION), dict):
+        # Every run without Limits: no scope, and no disk work on the loop.
+        return None
     from .orchestrator import is_managed_workspace
 
     try:
         own = bool(config is not None and workspace and is_managed_workspace(config, workspace))
     except Exception:  # noqa: BLE001
         own = False
-    return scope_for(session_options(session), workspace, own_folder=own)
+    return scope_for(options, workspace, own_folder=own)
 
 
 def _limits_stop_of(results: object) -> "tuple[str, str] | None":
@@ -2498,6 +2503,9 @@ class AgentRuntime:
 
             stamped = _opts(session)
             stamped[_limits.STOPPED_OPTION] = True
+            # The registry's own refusal, so the run that started this one
+            # (a helper's parent) stops with it (``limits.child_stop``).
+            stamped[_limits.REFUSAL_OPTION] = " ".join(str(refusal or "").split())[:1500]
             session.options_json = json.dumps(stamped)
         except Exception:  # noqa: BLE001 — the reason then falls back to the ledger's
             logging.getLogger("iron_jarvis.agents.runtime").warning(

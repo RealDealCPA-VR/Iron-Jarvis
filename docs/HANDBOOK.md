@@ -162,15 +162,17 @@ the new limits replace the old ones.
   keeps the folder Iron Jarvis made for its rehearsal, and its **Where it
   works** line names it. Clearing finished runs leaves that folder where it
   is, because the rule's next runs work there.
-- Running commands or code, and the other steps that always ask for your
-  OK, still ask every time; the Limits line says so. A step that costs money
+- Running commands or code, using your apps, moving downloads, editing a
+  workbook open in Excel, and the other steps that always ask for your OK,
+  still ask every time; the Limits line says so. A step that costs money
   still asks every time.
 - A run that works through a list of steps stops at the first write outside
   its limits too: no later step runs.
 - An OK kept this way lasts 30 days. **Remove** takes one away at once, and
   that step asks again from the next run.
 - A helper agent the rule's run hands work to writes only in the same
-  folders (and in its own work folder).
+  folders (and in its own work folder). When a helper reaches outside them,
+  the whole run stops there and needs you, with the same reason.
 - Changing what the rule does, what starts it or where it works drops its
   limits and the OKs Keep it made (an **Always for this rule** you gave on a
   card stays): rehearse it again to keep new ones. Renaming it, or changing

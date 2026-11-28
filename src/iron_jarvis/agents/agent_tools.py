@@ -318,6 +318,7 @@ class SpawnAgentTool(Tool):
             DelegateTool,
             _local_only_now,
             delegation_handle,
+            limits_stop_data,
             publish_delegation_completed,
             publish_delegation_started,
             settled_hand_off,
@@ -886,6 +887,8 @@ class SpawnAgentTool(Tool):
                     "workspace": child_session.workspace_path,
                     # v1.395.0: the role asked for, and why this member took it.
                     **({"role": _team_role, "reason": _route.reason} if _route is not None else {}),
+                    # Leap 05-c: the worker stopped at its rule's Limits.
+                    **limits_stop_data(child_session),
                 },
             )
 

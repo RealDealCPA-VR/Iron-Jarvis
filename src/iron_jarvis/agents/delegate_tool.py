@@ -176,6 +176,14 @@ def settled_hand_off(child_session: Any, run: Any, handle: str) -> tuple[bool, s
     from .outcome import run_ending
 
     try:
+        stopped = limits_stop_data(child_session)
+        if stopped:
+            # Leap 05-c: the worker STOPPED at its rule's kept Limits. The
+            # lead reads the registry's refusal (code's words), and its own
+            # run stops on it too (the result's data, ``runtime``).
+            settled = str(getattr(child_session, "summary", "") or "").strip() or str(run.result or "")
+            report = _with_handle(settled, handle)
+            return False, report, getattr(child_session, "outcome", None), stopped["refusal"]
         ending = run_ending(
             getattr(child_session, "status", None), getattr(child_session, "outcome", None)
         )
@@ -191,6 +199,20 @@ def settled_hand_off(child_session: Any, run: Any, handle: str) -> tuple[bool, s
         ok = getattr(run, "state", None) is AgentState.COMPLETED
         report = _with_handle(run.result, handle)
         return ok, report, None, "" if ok else (run.result or "subagent failed")
+
+
+def limits_stop_data(child_session: Any) -> dict[str, Any]:
+    """Leap 05-c: ``{"outside_limits": True, "rule_id", "refusal"}`` when the
+    worker's run stopped at its rule's kept Limits
+    (``reflex/limits.child_stop``), else ``{}``. ``delegate`` and
+    ``spawn_agent`` put it on their result's data, so the run that handed the
+    work out stops there too (``runtime._limits_stop_of``). Never raises."""
+    try:
+        from ..reflex.limits import child_stop
+
+        return child_stop(child_session) or {}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 async def publish_delegation_started(
@@ -1114,6 +1136,8 @@ class DelegateTool(Tool):
                     # v1.401.0: and WHO took it, on which model (the finish
                     # check's team review names its reviewer from these).
                     **_routed_member(_route, rec, provider, model),
+                    # Leap 05-c: the worker stopped at its rule's Limits.
+                    **limits_stop_data(child_session),
                 },
             )
 
