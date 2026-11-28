@@ -750,7 +750,13 @@ def test_the_registrys_check_inside_and_outside_the_limits(tmp_path):
     assert write_refusal("write_file", {"path": "sub/sort.py"}, root, scope) == "", "a script inside is fine"
     words = write_refusal("write_file", {"path": str(tmp_path / "x.txt")}, root, scope)
     assert words.startswith(LIMITS_LEAD) and "x.txt" in words
-    assert write_refusal("shell", {"command": f"copy a.txt {tmp_path / 'y.txt'}"}, root, scope).startswith(LIMITS_LEAD)
+    # A command is read for the files it names, on every platform: a redirect
+    # to an absolute path, and a copy to a folder outside (written relative,
+    # since the copy reader takes a leading "/" for a Windows switch).
+    outside = tmp_path / "y.txt"
+    assert write_refusal("shell", {"command": f'echo hi > "{outside}"'}, root, scope).startswith(LIMITS_LEAD)
+    assert write_refusal("shell", {"command": "copy a.txt ../y.txt"}, root, scope).startswith(LIMITS_LEAD)
+    assert write_refusal("shell", {"command": "copy a.txt sub/y.txt"}, root, scope) == ""
     # No option, or one without a rule: no scope (every other run unchanged).
     assert L.scope_for({}, root) is None
     assert L.scope_for({L.LIMITS_OPTION: {"folders": [str(root)]}}, root) is None
